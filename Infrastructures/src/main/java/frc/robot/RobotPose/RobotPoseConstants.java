@@ -20,4 +20,8 @@ public class RobotPoseConstants {
 
     public static final Matrix<N3, N1> COLLISION_ODOMETRY_STD = VecBuilder.fill(0.15, 0.15, 0);
     public static final double TIME_AFTER_COLLISION_FOR_RESET_STD = 0.3;
+
+    public static final double TIME_BUFFER_FOR_QUEST_UPDATE = 0.3;
+    
+    public static final double TIME_BUFFER_FOR_VISION_UPDATE = 0.5;
 }

@@ -10,6 +10,8 @@ import static frc.robot.RobotPose.RobotPoseConstants.DEFAULT_QUEST_STD;
 import static frc.robot.RobotPose.RobotPoseConstants.DEFAULT_VISION_STD;
 import static frc.robot.RobotPose.RobotPoseConstants.G_FOR_COLLISION;
 import static frc.robot.RobotPose.RobotPoseConstants.TIME_AFTER_COLLISION_FOR_RESET_STD;
+import static frc.robot.RobotPose.RobotPoseConstants.TIME_BUFFER_FOR_QUEST_UPDATE;
+import static frc.robot.RobotPose.RobotPoseConstants.TIME_BUFFER_FOR_VISION_UPDATE;
 
 import java.util.function.Supplier;
 
@@ -108,7 +110,7 @@ public class RobotPose {
     }
 
     private boolean shouldUpdateQuest() {
-        return useQuest && quest.isConnected() && quest.isTracking() && hasUpdatedQuestPose;
+        return useQuest && quest.isConnected() && quest.isTracking() && hasUpdatedQuestPose && Math.abs(Timer.getFPGATimestamp() - quest.getTimestamp()) < TIME_BUFFER_FOR_QUEST_UPDATE;
     }
 
     private boolean isColliding() {
@@ -137,9 +139,9 @@ public class RobotPose {
         poseEstimator.setVisionMeasurementStdDevs(visionSTD);
         for (TagCamera camera : aprilTagCameras) {
             camera.periodic();
-            if (camera.isSeeTag()) {
+            if (camera.isSeeTag() && camera.getLatency() < TIME_BUFFER_FOR_VISION_UPDATE) {
                 poseEstimator.addVisionMeasurement(camera.getPose(odometryDataSupplier.get().gyroAngle()),
-                        Timer.getFPGATimestamp() - 0.05);
+                        Timer.getFPGATimestamp() - camera.getLatency());
             }
         }
 
