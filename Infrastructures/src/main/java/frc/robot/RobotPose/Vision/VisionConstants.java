@@ -4,11 +4,22 @@
 
 package frc.robot.RobotPose.Vision;
 
+import edu.wpi.first.apriltag.AprilTagFieldLayout;
+import edu.wpi.first.apriltag.AprilTagFields;
+import edu.wpi.first.math.geometry.Transform3d;
 import edu.wpi.first.math.geometry.Translation3d;
 
 /** Add your docs here. */
 public class VisionConstants {
-    public record Camera(String name,Translation3d robotToCamPosition, double pitchInRadians, double yawInRadians, double rollInRadinas) {
+    public record Camera(String name, Translation3d robotToCamPosition, double pitchInRadians, double yawInRadians,
+            double rollInRadinas) {
     }
 
+    public static final AprilTagFields APRIL_TAG_FIELD = AprilTagFields.k2026RebuiltAndymark;
+
+    public static final Transform3d ROBOT_TO_QUEST = new Transform3d();
+
+    public static final TagCamera[] APRIL_TAG_CAMERAS = {
+            new TagCamera(new Camera("test", Translation3d.kZero, Math.toRadians(25), 0, 0))
+    };
 }
