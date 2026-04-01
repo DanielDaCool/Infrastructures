@@ -4,6 +4,8 @@
 
 package frc.robot.RobotPose.Vision;
 
+import edu.wpi.first.apriltag.AprilTagFieldLayout;
+import edu.wpi.first.apriltag.AprilTagFields;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Translation2d;
@@ -24,6 +26,10 @@ public class TagCamera {
     public TagCamera(Camera camera) {
         this.camera = camera;
         this.table = NetworkTableInstance.getDefault().getTable(camera.name());
+    }
+
+    public void periodic() {
+        updateValues();
     }
 
     private void updateValues() {
@@ -50,20 +56,27 @@ public class TagCamera {
     }
 
     private Translation2d getOriginToRobot(Rotation2d gyroAngle) {
-        Translation3d tagPosition = getTagPosition(tagID); // need to add function
+        Translation3d tagPosition = getTagPosition((int) tagID); 
         double deltaHeight = tagPosition.getZ() - camera.robotToCamPosition().getZ();
 
         return tagPosition.toTranslation2d().minus(getRobotToTag(gyroAngle, deltaHeight));
 
     }
 
-    private boolean isSeeTag() {
+
+    public boolean isSeeTag() {
         return table.getEntry("tv").getDouble(0.0) > 0.1;
     }
 
+    
+
+    private Translation3d getTagPosition(int tagID) {
+        return AprilTagFieldLayout.loadField(VisionConstants.APRIL_TAG_FIELD).getTagPose(tagID).get()
+                .getTranslation();
+    }
+
     public Pose2d getPose(Rotation2d gyroAngle) {
-        if (!isSeeTag())
-            return Pose2d.kZero;
+        if (!isSeeTag()) return Pose2d.kZero;
 
         return new Pose2d(getOriginToRobot(gyroAngle), gyroAngle);
 
