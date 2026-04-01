@@ -39,12 +39,8 @@ public class DemaciaOdometry {
         this.pose = Pose2d.kZero;
 
     }
-
-    public static void initialize(SwerveModulePosition[] initialModulePositions) {
-        instance = new DemaciaOdometry(initialModulePositions);
-    }
-
-    public static synchronized DemaciaOdometry getInstance() {
+    public static synchronized DemaciaOdometry getInstance(SwerveModulePosition[] initialModulePositions) {
+        if(instance == null) instance = new DemaciaOdometry(initialModulePositions);
         return instance;
     }
 
