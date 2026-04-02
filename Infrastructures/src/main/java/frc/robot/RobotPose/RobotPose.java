@@ -118,7 +118,7 @@ public class RobotPose {
         return Math.abs(accelerometer.getX()) >= G_FOR_COLLISION || Math.abs(accelerometer.getY()) >= G_FOR_COLLISION;
     }
 
-    public void peridioc() {
+    public void periodic() {
         if (useQuest && quest.isConnected() && quest.isTracking())
             quest.periodic();
 
@@ -135,12 +135,13 @@ public class RobotPose {
             afterCollisionTimer.reset();
 
         }
-        poseEstimator.addOdometryObservation(odometryDataSupplier.get());
+        // poseEstimator.addOdometryObservation(odometryDataSupplier.get());
 
         poseEstimator.setVisionMeasurementStdDevs(visionSTD);
         for (TagCamera camera : aprilTagCameras) {
             camera.periodic();
-            if (camera.isSeeTag() && camera.getLatency() < TIME_BUFFER_FOR_VISION_UPDATE) {
+
+            if (camera.isSeeTag()){// && camera.getLatency() < TIME_BUFFER_FOR_VISION_UPDATE) {
 
         
                 poseEstimator.addVisionMeasurement(camera.getPose(odometryDataSupplier.get().gyroAngle()),

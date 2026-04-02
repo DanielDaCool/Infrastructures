@@ -20,6 +20,6 @@ public class VisionConstants {
     public static final Transform3d ROBOT_TO_QUEST = new Transform3d();
 
     public static final TagCamera[] APRIL_TAG_CAMERAS = {
-            new TagCamera(new Camera("hub", new Translation3d(0.27,-0.20,0.345), Math.toRadians(19), Math.toRadians(2), 0))
+            new TagCamera(new Camera("limelight-hub", new Translation3d(0.27,-0.20,0.355), Math.toRadians(18.5), Math.toRadians(2), 0))
     };
 }

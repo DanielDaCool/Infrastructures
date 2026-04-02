@@ -20,14 +20,18 @@ public class Robot extends TimedRobot {
 
   public Robot() {
     m_robotContainer = new RobotContainer();
-    OdometryData t = new OdometryData(0, Rotation2d.kZero, new SwerveModulePosition[4]);
+    SwerveModulePosition[] k = new SwerveModulePosition[4];
+    for(int i = 0; i < 4; i++){
+      k[i] = new SwerveModulePosition();
+    }
+    OdometryData t = new OdometryData(0, Rotation2d.kZero, k);
     RobotPose.initialize(()-> t,VisionConstants.APRIL_TAG_CAMERAS); // just need to add an odometry data supplier (using a chassis instance)
   }
 
   @Override
   public void robotPeriodic() {
     CommandScheduler.getInstance().run();
-    RobotPose.getInstance().peridioc();
+    RobotPose.getInstance().periodic();
   }
 
   @Override
