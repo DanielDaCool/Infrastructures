@@ -4,10 +4,13 @@
 
 package frc.robot;
 
+import edu.wpi.first.math.geometry.Rotation2d;
+import edu.wpi.first.math.kinematics.SwerveModulePosition;
 import edu.wpi.first.wpilibj.TimedRobot;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.CommandScheduler;
 import frc.robot.RobotPose.RobotPose;
+import frc.robot.RobotPose.DemaciaPoseEstimator.OdometryData;
 import frc.robot.RobotPose.Vision.VisionConstants;
 
 public class Robot extends TimedRobot {
@@ -17,7 +20,8 @@ public class Robot extends TimedRobot {
 
   public Robot() {
     m_robotContainer = new RobotContainer();
-    RobotPose.initialize(VisionConstants.APRIL_TAG_CAMERAS); // just need to add an odometry data supplier (using a chassis instance)
+    OdometryData t = new OdometryData(0, Rotation2d.kZero, new SwerveModulePosition[4]);
+    RobotPose.initialize(()-> t,VisionConstants.APRIL_TAG_CAMERAS); // just need to add an odometry data supplier (using a chassis instance)
   }
 
   @Override

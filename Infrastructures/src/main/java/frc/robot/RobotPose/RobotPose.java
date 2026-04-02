@@ -110,7 +110,8 @@ public class RobotPose {
     }
 
     private boolean shouldUpdateQuest() {
-        return useQuest && quest.isConnected() && quest.isTracking() && hasUpdatedQuestPose && Math.abs(Timer.getFPGATimestamp() - quest.getTimestamp()) < TIME_BUFFER_FOR_QUEST_UPDATE;
+        return useQuest && quest.isConnected() && quest.isTracking() && hasUpdatedQuestPose
+                && Math.abs(Timer.getFPGATimestamp() - quest.getTimestamp()) < TIME_BUFFER_FOR_QUEST_UPDATE;
     }
 
     private boolean isColliding() {
@@ -140,6 +141,8 @@ public class RobotPose {
         for (TagCamera camera : aprilTagCameras) {
             camera.periodic();
             if (camera.isSeeTag() && camera.getLatency() < TIME_BUFFER_FOR_VISION_UPDATE) {
+
+        
                 poseEstimator.addVisionMeasurement(camera.getPose(odometryDataSupplier.get().gyroAngle()),
                         Timer.getFPGATimestamp() - camera.getLatency());
             }

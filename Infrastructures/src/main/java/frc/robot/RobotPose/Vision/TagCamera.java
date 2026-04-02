@@ -21,6 +21,7 @@ public class TagCamera {
 
     private double camToTagYaw;
     private double camToTagPitch;
+
     private double tagID;
     private double latency;
 
@@ -35,9 +36,10 @@ public class TagCamera {
     }
 
     private void updateValues() {
-        camToTagPitch = table.getEntry("ty").getDouble(0.0);
-        camToTagYaw = table.getEntry("tx").getDouble(0.0);
+        camToTagPitch = Math.toRadians(table.getEntry("ty").getDouble(0.0));
+        camToTagYaw = Math.toRadians(table.getEntry("tx").getDouble(0.0));
         tagID = table.getEntry("tid").getDouble(0.0);
+
         // need to take into account camera roll;
 
         latency = table.getEntry("tl").getDouble(0.0);
@@ -46,11 +48,16 @@ public class TagCamera {
 
     private double calculateCameraToTagDistance(double deltaHeight) {
         double alpha = camera.pitchInRadians() + camToTagPitch;
-        return Math.abs(deltaHeight / Math.tan(alpha));
+        double distance = Math.abs(deltaHeight / Math.tan(alpha)) / Math.cos((camToTagYaw + camera.yawInRadians()));
+
+        System.out.println("Distance: " + distance);
+
+        return distance;    
     }
 
     private Translation2d getCameraToTag(double deltaHeight) {
-        return new Translation2d(calculateCameraToTagDistance(deltaHeight), camToTagYaw);
+        return new Translation2d(calculateCameraToTagDistance(deltaHeight),
+                new Rotation2d(camToTagYaw + camera.yawInRadians()));
     }
 
     private Translation2d getRobotToTag(Rotation2d gyroAngle, double deltaHeight) {
@@ -66,9 +73,10 @@ public class TagCamera {
 
     }
 
-    public double getLatency(){
+    public double getLatency() {
         return latency;
     }
+
     public boolean isSeeTag() {
         return table.getEntry("tv").getDouble(0.0) > 0.1;
     }

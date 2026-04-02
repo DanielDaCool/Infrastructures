@@ -60,7 +60,7 @@ public class DemaciaOdometry {
         double arcLength = Math.abs(currentPosition.distanceMeters - lastPosition.distanceMeters);
         double deltaAngle = currentPosition.angle.getRadians() - lastPosition.angle.getRadians();
         if (Math.abs(Math.toDegrees(deltaAngle)) < 1E-6)
-            return new Translation2d(arcLength, currentPosition.angle); // cade for almost straight line
+            return new Translation2d(arcLength, currentPosition.angle); // case for almost straight line
 
         double centralAngle = deltaAngle;
         double radius = arcLength / centralAngle;
