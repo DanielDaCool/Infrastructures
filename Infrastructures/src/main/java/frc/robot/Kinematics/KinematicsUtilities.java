@@ -41,6 +41,12 @@ public class KinematicsUtilities {
                 && Math.abs(speeds.omegaRadiansPerSecond) <= limit;
     }
 
+    public static ChassisAccel getAccelFromDelta(ChassisSpeeds wantedSpeeds, ChassisSpeeds currentSpeeds) {
+        return new ChassisAccel((wantedSpeeds.vxMetersPerSecond - currentSpeeds.vyMetersPerSecond) / CYCLE_DT,
+                (wantedSpeeds.vyMetersPerSecond - currentSpeeds.vyMetersPerSecond) / CYCLE_DT,
+                (wantedSpeeds.omegaRadiansPerSecond - currentSpeeds.omegaRadiansPerSecond) / CYCLE_DT);
+    }
+
     public static class Limits {
 
         private static ChassisSpeeds chassisFromRest(double currentV, double wantedV, ChassisSpeeds wantedSpeeds) {

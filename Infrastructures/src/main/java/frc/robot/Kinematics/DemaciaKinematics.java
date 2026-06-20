@@ -4,6 +4,7 @@
 
 package frc.robot.Kinematics;
 
+import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Translation2d;
@@ -19,9 +20,11 @@ public class DemaciaKinematics {
     private Pose2d startRobotPosition;
     private Translation2d[] modulePositionOnTheRobot;
     private SwerveModuleState[] lastStates = new SwerveModuleState[4];
+    private ChassisSpeeds lastWantedSpeeds;
 
     public DemaciaKinematics(Translation2d... modulePositionOnTheRobot) {
         this.startRobotPosition = Pose2d.kZero;
+        lastWantedSpeeds = new ChassisSpeeds();
         this.modulePositionOnTheRobot = modulePositionOnTheRobot;
         for (int i = 0; i < 4; i++) {
             swerveStates[i] = new SwerveModuleState();
@@ -29,8 +32,6 @@ public class DemaciaKinematics {
         }
 
     }
-
-
 
     public ChassisSpeeds toChassisSpeeds(SwerveModuleState[] swerveStates, double omegaFromGyro) {
         double sumVx = 0;
@@ -52,26 +53,59 @@ public class DemaciaKinematics {
         }
         return new ChassisSpeeds(sumVx / 4.0, sumVy / 4.0, omegaFromGyro);
     }
- 
-    public SwerveModuleState[] toSwerveModuleStates(ChassisSpeeds wantedSpeeds) {
 
+
+    public SwerveModuleState[] toSwerveModuleStatesWithAccel(ChassisSpeeds wantedSpeeds){
+        return toSwerveModuleStatesWithAccel(wantedSpeeds, KinematicsUtilities.getAccelFromDelta(wantedSpeeds, lastWantedSpeeds));
+
+    }
+    public SwerveModuleState[] toSwerveModuleStatesWithAccel(ChassisSpeeds wantedSpeeds, ChassisAccel wantedAccel) {
         double omega = wantedSpeeds.omegaRadiansPerSecond;
 
         for (int i = 0; i < 4; i++) {
             double moduleAngleFromCenter = modulePositionOnTheRobot[i].getAngle().getRadians();
-            double moduleCurrentAngle = startRobotPosition.getRotation().getRadians();
-            Translation2d velocityVector = new Translation2d(
-                    wantedSpeeds.vxMetersPerSecond + omega * modulePositionOnTheRobot[i].getNorm()
-                            * Math.sin(moduleCurrentAngle + omega * 0.02 + moduleAngleFromCenter),
-                    wantedSpeeds.vyMetersPerSecond - omega * modulePositionOnTheRobot[i].getNorm()
-                            * Math.cos(moduleCurrentAngle + omega * 0.02 + moduleAngleFromCenter));
-            swerveStates[i] = new SwerveModuleState(velocityVector.getNorm(), new Rotation2d(
-                    KinematicsUtilities.getAngleFromVector(velocityVector.getX(), velocityVector.getY())));
+
+            double wantedModuleVx = wantedSpeeds.vxMetersPerSecond + (wantedAccel.accelX() * CYCLE_DT)
+                    - (modulePositionOnTheRobot[i].getNorm() * (omega + wantedAccel.accelOmega() * CYCLE_DT)
+                            * Math.sin((omega * CYCLE_DT)
+                                    + (0.5 * wantedAccel.accelOmega() * CYCLE_DT * CYCLE_DT
+                                            + moduleAngleFromCenter)));
+
+            double wantedModuleVy = wantedSpeeds.vyMetersPerSecond + (wantedAccel.accelY() * CYCLE_DT)
+                    + (modulePositionOnTheRobot[i].getNorm() * (omega + wantedAccel.accelOmega() * CYCLE_DT)
+                            * Math.cos((omega * CYCLE_DT)
+                                    + (0.5 * wantedAccel.accelOmega() * CYCLE_DT * CYCLE_DT
+                                            + moduleAngleFromCenter)));
+
+            swerveStates[i] = new SwerveModuleState(Math.hypot(wantedModuleVx, wantedModuleVy),
+                    new Rotation2d(wantedModuleVx, wantedModuleVy));
         }
 
+        lastWantedSpeeds = wantedSpeeds;
         swerveStates = factorModuleVelocities(swerveStates);
         return swerveStates;
+
     }
+
+    // public SwerveModuleState[] toSwerveModuleStates(ChassisSpeeds wantedSpeeds) {
+
+    //     double omega = wantedSpeeds.omegaRadiansPerSecond;
+
+    //     for (int i = 0; i < 4; i++) {
+    //         double moduleAngleFromCenter = modulePositionOnTheRobot[i].getAngle().getRadians();
+    //         double moduleCurrentAngle = startRobotPosition.getRotation().getRadians();
+    //         Translation2d velocityVector = new Translation2d(
+    //                 wantedSpeeds.vxMetersPerSecond + omega * modulePositionOnTheRobot[i].getNorm()
+    //                         * Math.sin(moduleCurrentAngle + omega * 0.02 + moduleAngleFromCenter),
+    //                 wantedSpeeds.vyMetersPerSecond - omega * modulePositionOnTheRobot[i].getNorm()
+    //                         * Math.cos(moduleCurrentAngle + omega * 0.02 + moduleAngleFromCenter));
+    //         swerveStates[i] = new SwerveModuleState(velocityVector.getNorm(), new Rotation2d(
+    //                 KinematicsUtilities.getAngleFromVector(velocityVector.getX(), velocityVector.getY())));
+    //     }
+
+    //     swerveStates = factorModuleVelocities(swerveStates);
+    //     return swerveStates;
+    // }
 
     private SwerveModuleState[] factorModuleVelocities(SwerveModuleState[] swerveStates) {
         double maxVelocityCalculated = 0;
