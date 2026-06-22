@@ -119,8 +119,7 @@ public class RobotPose {
     }
 
     public void periodic() {
-        if (useQuest && quest.isConnected() && quest.isTracking())
-            quest.periodic();
+        quest.periodic();
 
         if (isColliding() && !hasStartedCollisionTimer) {
             hasStartedCollisionTimer = true;
@@ -135,15 +134,14 @@ public class RobotPose {
             afterCollisionTimer.reset();
 
         }
-        // poseEstimator.addOdometryObservation(odometryDataSupplier.get());
+        poseEstimator.addOdometryObservation(odometryDataSupplier.get());
 
         poseEstimator.setVisionMeasurementStdDevs(visionSTD);
         for (TagCamera camera : aprilTagCameras) {
             camera.periodic();
 
-            if (camera.isSeeTag()){// && camera.getLatency() < TIME_BUFFER_FOR_VISION_UPDATE) {
+            if (camera.isSeeTag()) {// && camera.getLatency() < TIME_BUFFER_FOR_VISION_UPDATE) {
 
-        
                 poseEstimator.addVisionMeasurement(camera.getPose(odometryDataSupplier.get().gyroAngle()),
                         Timer.getFPGATimestamp() - camera.getLatency());
             }

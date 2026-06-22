@@ -33,7 +33,7 @@ public class DemaciaOdometry {
 
         lastModulePositions = initialModulePositions;
         for (int i = 0; i < lastModulePositions.length; i++) {
-            modulesWeights[i] = (double) (1 / initialModulePositions.length);
+            modulesWeights[i] = 1.0 / initialModulePositions.length;
             moduleDisplacements[i] = Translation2d.kZero;
         }
         this.pose = Pose2d.kZero;
@@ -57,7 +57,7 @@ public class DemaciaOdometry {
 
     private Translation2d calculateModuleDisplacement(SwerveModulePosition lastPosition,
             SwerveModulePosition currentPosition) {
-        double arcLength = Math.abs(currentPosition.distanceMeters - lastPosition.distanceMeters);
+        double arcLength = currentPosition.distanceMeters - lastPosition.distanceMeters;
         double deltaAngle = currentPosition.angle.getRadians() - lastPosition.angle.getRadians();
         if (Math.abs(Math.toDegrees(deltaAngle)) < 1E-6)
             return new Translation2d(arcLength, currentPosition.angle); // case for almost straight line
