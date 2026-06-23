@@ -4,16 +4,11 @@
 
 package frc.robot.RobotPose;
 
-import java.util.Arrays;
-
 import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Translation2d;
-import edu.wpi.first.math.kinematics.SwerveDriveOdometry;
 import edu.wpi.first.math.kinematics.SwerveModulePosition;
-import edu.wpi.first.wpilibj.BuiltInAccelerometer;
-import static frc.robot.RobotPose.RobotPoseConstants.*;
 
 /** Add your docs here. */
 public class DemaciaOdometry {
@@ -39,8 +34,10 @@ public class DemaciaOdometry {
         this.pose = Pose2d.kZero;
 
     }
+
     public static synchronized DemaciaOdometry getInstance(SwerveModulePosition[] initialModulePositions) {
-        if(instance == null) instance = new DemaciaOdometry(initialModulePositions);
+        if (instance == null)
+            instance = new DemaciaOdometry(initialModulePositions);
         return instance;
     }
 
@@ -49,16 +46,20 @@ public class DemaciaOdometry {
             moduleDisplacements[i] = calculateModuleDisplacement(lastModulePositions[i], modulePositions[i]);
         }
 
-        Translation2d robotDisplacement = calculateRobotDisplacement(moduleDisplacements);
-        pose = new Pose2d(pose.getTranslation().plus(robotDisplacement), gyroAngle);
+        Translation2d robotDisplacementFieldRelative = (calculateRobotDisplacement(moduleDisplacements))
+                .rotateBy(gyroAngle);
+        pose = new Pose2d(pose.getTranslation().plus(robotDisplacementFieldRelative), gyroAngle);
 
-        lastModulePositions = modulePositions;
+        for (int i = 0; i < lastModulePositions.length; i++) {
+            lastModulePositions[i] = modulePositions[i].copy();
+        }
     }
 
     private Translation2d calculateModuleDisplacement(SwerveModulePosition lastPosition,
             SwerveModulePosition currentPosition) {
         double arcLength = currentPosition.distanceMeters - lastPosition.distanceMeters;
-        double deltaAngle = currentPosition.angle.getRadians() - lastPosition.angle.getRadians();
+        double deltaAngle = MathUtil.angleModulus(currentPosition.angle.getRadians() - lastPosition.angle.getRadians());
+
         if (Math.abs(Math.toDegrees(deltaAngle)) < 1E-6)
             return new Translation2d(arcLength, currentPosition.angle); // case for almost straight line
 

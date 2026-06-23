@@ -4,7 +4,6 @@
 
 package frc.robot.RobotPose.Vision;
 
-import edu.wpi.first.apriltag.AprilTagFieldLayout;
 import edu.wpi.first.apriltag.AprilTagFields;
 import edu.wpi.first.math.geometry.Transform3d;
 import edu.wpi.first.math.geometry.Translation3d;
@@ -12,7 +11,7 @@ import edu.wpi.first.math.geometry.Translation3d;
 /** Add your docs here. */
 public class VisionConstants {
     public record Camera(String name, Translation3d robotToCamPosition, double pitchInRadians, double yawInRadians,
-            double rollInRadinas) {
+            double rollInRadians) {
     }
 
     public static final AprilTagFields APRIL_TAG_FIELD = AprilTagFields.k2026RebuiltAndymark;

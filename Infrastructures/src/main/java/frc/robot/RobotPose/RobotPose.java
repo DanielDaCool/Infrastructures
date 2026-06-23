@@ -11,17 +11,11 @@ import static frc.robot.RobotPose.RobotPoseConstants.DEFAULT_VISION_STD;
 import static frc.robot.RobotPose.RobotPoseConstants.G_FOR_COLLISION;
 import static frc.robot.RobotPose.RobotPoseConstants.TIME_AFTER_COLLISION_FOR_RESET_STD;
 import static frc.robot.RobotPose.RobotPoseConstants.TIME_BUFFER_FOR_QUEST_UPDATE;
-import static frc.robot.RobotPose.RobotPoseConstants.TIME_BUFFER_FOR_VISION_UPDATE;
-
 import java.util.function.Supplier;
-
-import org.opencv.core.RotatedRect;
 
 import edu.wpi.first.math.Matrix;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Pose3d;
-import edu.wpi.first.math.geometry.Rotation2d;
-import edu.wpi.first.math.kinematics.Odometry;
 import edu.wpi.first.math.kinematics.SwerveModulePosition;
 import edu.wpi.first.math.numbers.N1;
 import edu.wpi.first.math.numbers.N3;
@@ -79,14 +73,18 @@ public class RobotPose {
 
     }
 
-    public static void initialize(Supplier<OdometryData> odometryDataSupplier,
+    public static synchronized void initialize(Supplier<OdometryData> odometryDataSupplier,
             TagCamera... aprilTagCameras) {
 
         initialize(odometryDataSupplier, true, aprilTagCameras);
     }
 
-    public static void initialize(Supplier<OdometryData> odometryDataSupplier, boolean useQuest,
+    public static synchronized void initialize(Supplier<OdometryData> odometryDataSupplier, boolean useQuest,
             TagCamera... aprilTagCameras) {
+
+        if (instance != null) {
+            throw new IllegalStateException("RobotPose already initialized");
+        }
         SwerveModulePosition[] kZeroPositions = new SwerveModulePosition[4];
         for (int i = 0; i < kZeroPositions.length; i++) {
             kZeroPositions[i] = new SwerveModulePosition();
@@ -121,6 +119,8 @@ public class RobotPose {
     public void periodic() {
         quest.periodic();
 
+        OdometryData odometryData = odometryDataSupplier.get();
+
         if (isColliding() && !hasStartedCollisionTimer) {
             hasStartedCollisionTimer = true;
             afterCollisionTimer.start();
@@ -134,7 +134,7 @@ public class RobotPose {
             afterCollisionTimer.reset();
 
         }
-        poseEstimator.addOdometryObservation(odometryDataSupplier.get());
+        poseEstimator.addOdometryObservation(odometryData);
 
         poseEstimator.setVisionMeasurementStdDevs(visionSTD);
         for (TagCamera camera : aprilTagCameras) {
@@ -142,7 +142,7 @@ public class RobotPose {
 
             if (camera.isSeeTag()) {// && camera.getLatency() < TIME_BUFFER_FOR_VISION_UPDATE) {
 
-                poseEstimator.addVisionMeasurement(camera.getPose(odometryDataSupplier.get().gyroAngle()),
+                poseEstimator.addVisionMeasurement(camera.getPose(odometryData.gyroAngle()),
                         Timer.getFPGATimestamp() - camera.getLatency());
             }
         }

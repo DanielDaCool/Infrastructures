@@ -5,7 +5,6 @@
 package frc.robot.RobotPose.Vision;
 
 import edu.wpi.first.apriltag.AprilTagFieldLayout;
-import edu.wpi.first.apriltag.AprilTagFields;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Translation2d;
@@ -14,7 +13,6 @@ import edu.wpi.first.networktables.NetworkTable;
 import edu.wpi.first.networktables.NetworkTableInstance;
 import frc.robot.RobotPose.Vision.VisionConstants.Camera;
 
-/** Add your docs here. */
 public class TagCamera {
     private Camera camera;
     private NetworkTable table;
@@ -24,10 +22,13 @@ public class TagCamera {
 
     private double tagID;
     private double latency;
+    private final AprilTagFieldLayout FIELD_LAYOUT;
 
     public TagCamera(Camera camera) {
         this.camera = camera;
         this.table = NetworkTableInstance.getDefault().getTable(camera.name());
+        this.FIELD_LAYOUT = AprilTagFieldLayout.loadField(VisionConstants.APRIL_TAG_FIELD);
+        ;
         updateValues();
     }
 
@@ -35,18 +36,16 @@ public class TagCamera {
         updateValues();
     }
 
-
     public String getName() {
         return camera.name();
     }
+
     private void updateValues() {
         camToTagPitch = Math.toRadians(table.getEntry("ty").getDouble(0.0));
         camToTagYaw = Math.toRadians(-table.getEntry("tx").getDouble(0.0));
         tagID = table.getEntry("tid").getDouble(0.0);
 
-        // need to take into account camera roll;
-
-        latency = table.getEntry("tl").getDouble(0.0);
+        latency = table.getEntry("tl").getDouble(0.0) + table.getEntry("cl").getDouble(0.0);
 
     }
 
@@ -54,9 +53,9 @@ public class TagCamera {
         double alpha = camera.pitchInRadians() + camToTagPitch;
         double distance = Math.abs(deltaHeight / Math.tan(alpha)) / Math.cos((camToTagYaw));
 
-        System.out.println("Distance: " + distance);
+    
 
-        return distance;    
+        return distance;
     }
 
     private Translation2d getCameraToTag(double deltaHeight) {
@@ -66,12 +65,11 @@ public class TagCamera {
 
     private Translation2d getRobotToTag(Rotation2d gyroAngle, double deltaHeight) {
         Translation2d cameraToTag = getCameraToTag(deltaHeight);
-        return camera.robotToCamPosition().toTranslation2d().plus(cameraToTag.rotateBy(gyroAngle));
+        return camera.robotToCamPosition().toTranslation2d().plus(cameraToTag).rotateBy(gyroAngle);
     }
 
     private Translation2d getOriginToRobot(Rotation2d gyroAngle) {
         Translation3d tagPosition = getTagPosition((int) tagID);
-        System.out.println("Tag Pose: " + tagPosition);
         double deltaHeight = tagPosition.getZ() - camera.robotToCamPosition().getZ();
 
         return tagPosition.toTranslation2d().minus(getRobotToTag(gyroAngle, deltaHeight));
@@ -83,13 +81,17 @@ public class TagCamera {
     }
 
     public boolean isSeeTag() {
-       return table.getEntry("tv").getDouble(0.0) > 0.1;
+        return table.getEntry("tv").getDouble(0.0) > 0.5;
     }
 
     private Translation3d getTagPosition(int tagID) {
-        if(tagID < 1 || tagID > 32) return Translation3d.kZero; // invalid tag ID, return zero translation
-        return AprilTagFieldLayout.loadField(VisionConstants.APRIL_TAG_FIELD).getTagPose(tagID).get()
-                .getTranslation();
+
+        var tagTranslation = FIELD_LAYOUT.getTagPose(tagID);
+        if (tagTranslation.isEmpty())
+            return Translation3d.kZero;
+
+        return tagTranslation.get().getTranslation();
+
     }
 
     public Pose2d getPose(Rotation2d gyroAngle) {
