@@ -42,7 +42,7 @@ public class KinematicsUtilities {
     }
 
     public static ChassisAccel getAccelFromDelta(ChassisSpeeds wantedSpeeds, ChassisSpeeds currentSpeeds) {
-        return new ChassisAccel((wantedSpeeds.vxMetersPerSecond - currentSpeeds.vyMetersPerSecond) / CYCLE_DT,
+        return new ChassisAccel((wantedSpeeds.vxMetersPerSecond - currentSpeeds.vxMetersPerSecond) / CYCLE_DT,
                 (wantedSpeeds.vyMetersPerSecond - currentSpeeds.vyMetersPerSecond) / CYCLE_DT,
                 (wantedSpeeds.omegaRadiansPerSecond - currentSpeeds.omegaRadiansPerSecond) / CYCLE_DT);
     }
