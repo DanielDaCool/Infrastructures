@@ -2,7 +2,7 @@
 // Open Source Software; you can modify and/or share it under the terms of
 // the WPILib BSD license file in the root directory of this project.
 
-package frc.robot.RobotPose;
+package frc.robot.RobotPose.Estimation;
 
 import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.math.geometry.Pose2d;
@@ -15,12 +15,11 @@ public class DemaciaOdometry {
 
     private Pose2d pose;
     private SwerveModulePosition[] lastModulePositions;
-    private static DemaciaOdometry instance;
     private Translation2d[] moduleDisplacements;
 
     private double[] modulesWeights;
 
-    private DemaciaOdometry(SwerveModulePosition[] initialModulePositions) {
+    public DemaciaOdometry(SwerveModulePosition[] initialModulePositions) {
         this.lastModulePositions = new SwerveModulePosition[initialModulePositions.length];
         this.modulesWeights = new double[initialModulePositions.length];
 
@@ -33,12 +32,6 @@ public class DemaciaOdometry {
         }
         this.pose = Pose2d.kZero;
 
-    }
-
-    public static synchronized DemaciaOdometry getInstance(SwerveModulePosition[] initialModulePositions) {
-        if (instance == null)
-            instance = new DemaciaOdometry(initialModulePositions);
-        return instance;
     }
 
     public void updateOdometry(Rotation2d gyroAngle, SwerveModulePosition[] modulePositions) {

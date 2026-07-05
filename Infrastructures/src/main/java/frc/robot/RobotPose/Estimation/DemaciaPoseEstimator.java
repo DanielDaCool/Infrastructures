@@ -1,4 +1,4 @@
-package frc.robot.RobotPose;
+package frc.robot.RobotPose.Estimation;
 
 import java.util.NavigableMap;
 import java.util.Optional;
@@ -16,6 +16,7 @@ import edu.wpi.first.math.interpolation.TimeInterpolatableBuffer;
 import edu.wpi.first.math.kinematics.SwerveModulePosition;
 import edu.wpi.first.math.numbers.N1;
 import edu.wpi.first.math.numbers.N3;
+import edu.wpi.first.wpilibj.Timer;
 
 /** Add your docs here. */
 public class DemaciaPoseEstimator {
@@ -31,7 +32,7 @@ public class DemaciaPoseEstimator {
 
     public DemaciaPoseEstimator(SwerveModulePosition[] initialPositions, Matrix<N3, N1> stateSTD,
             Matrix<N3, N1> visionSTD) {
-        this.odometry = DemaciaOdometry.getInstance(initialPositions);
+        this.odometry = new DemaciaOdometry(initialPositions);
 
         estimatedPose = odometry.getOdometryPose();
         setStateStd(stateSTD);
@@ -126,7 +127,8 @@ public class DemaciaPoseEstimator {
         visionUpdates.headMap(newestNeededVisionUpdateTimestamp, false).clear();
     }
 
-    public synchronized void addVisionMeasurement(Pose2d visionRobotPose, double timestamp) {
+    public void addVisionMeasurement(Pose2d visionRobotPose) {
+        double timestamp = Timer.getFPGATimestamp();
 
         // Step 0: If this measurement is old enough to be outside the pose buffer's
         // timespan, skip.
@@ -187,10 +189,10 @@ public class DemaciaPoseEstimator {
         estimatedPose = visionUpdate.compensate(odometry.getOdometryPose());
     }
 
-    public synchronized void addOdometryObservation(OdometryData odometryCalculation) {
+    public void addOdometryObservation(OdometryData odometryCalculation) {
         odometry.updateOdometry(odometryCalculation.gyroAngle(), odometryCalculation.swerveModules());
         Pose2d odometryEstimation = odometry.getOdometryPose();
-        odometryBuffer.addSample(odometryCalculation.timeStamp(), odometryEstimation);
+        odometryBuffer.addSample(Timer.getFPGATimestamp(), odometryEstimation);
         if (visionUpdates.isEmpty()) {
             estimatedPose = odometryEstimation;
         } else {
@@ -200,22 +202,22 @@ public class DemaciaPoseEstimator {
 
     }
 
-    public synchronized Pose2d getEstimatedPose() {
+    public Pose2d getEstimatedPose() {
         return estimatedPose;
     }
 
-    public synchronized void resetPose() {
+    public void resetPose() {
         resetPose(new Pose2d());
     }
 
-    public synchronized void resetPose(Pose2d pose) {
+    public void resetPose(Pose2d pose) {
         odometry.resetPose(pose);
         odometryBuffer.clear();
         visionUpdates.clear();
         estimatedPose = odometry.getOdometryPose();
     }
 
-    public record OdometryData(double timeStamp, Rotation2d gyroAngle, SwerveModulePosition[] swerveModules) {
+    public record OdometryData(Rotation2d gyroAngle, SwerveModulePosition[] swerveModules) {
     }
 
     private static final class VisionUpdate {
