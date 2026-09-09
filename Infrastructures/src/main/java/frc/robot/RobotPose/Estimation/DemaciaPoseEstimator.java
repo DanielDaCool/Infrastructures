@@ -1,209 +1,118 @@
 package frc.robot.RobotPose.Estimation;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.NavigableMap;
-import java.util.Optional;
 import java.util.TreeMap;
 
-import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.math.Matrix;
 import edu.wpi.first.math.Nat;
-import edu.wpi.first.math.VecBuilder;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
-import edu.wpi.first.math.geometry.Transform2d;
-import edu.wpi.first.math.geometry.Translation2d;
-import edu.wpi.first.math.interpolation.TimeInterpolatableBuffer;
+import edu.wpi.first.math.geometry.Twist2d;
 import edu.wpi.first.math.kinematics.SwerveModulePosition;
 import edu.wpi.first.math.numbers.N1;
 import edu.wpi.first.math.numbers.N3;
 import edu.wpi.first.wpilibj.Timer;
 
-/** Add your docs here. */
+/**
+ * Pose estimator using the twist-sequence + splice + full-replay mechanism
+ * (matching the approach used by Mechanical-Advantage's (6328) PoseEstimator.java because WPILib's class has an acknowledged limitation
+ * where multiple vision corrections do not compound - each corrects against raw odometry
+ * rather than the previously-corrected estimate). 
+ */
 public class DemaciaPoseEstimator {
 
-    private DemaciaOdometry odometry;
-    private Matrix<N3, N1> m_q = new Matrix<>(Nat.N3(), Nat.N1());
-    private Matrix<N3, N3> m_visionK = new Matrix<>(Nat.N3(), Nat.N3());
-    private final double kBufferDuration = 1.5;
-    private NavigableMap<Double, VisionUpdate> visionUpdates = new TreeMap<>();
-    private Pose2d estimatedPose;
-
-    private final TimeInterpolatableBuffer<Pose2d> odometryBuffer;
-
-    public DemaciaPoseEstimator(SwerveModulePosition[] initialPositions, Matrix<N3, N1> stateSTD,
-            Matrix<N3, N1> visionSTD) {
-        this.odometry = new DemaciaOdometry(initialPositions);
-
-        estimatedPose = odometry.getOdometryPose();
-        setStateStd(stateSTD);
-        setVisionMeasurementStdDevs(visionSTD);
-        this.odometryBuffer = TimeInterpolatableBuffer.createBuffer(kBufferDuration);
-
-    }
-
-    public void setStateStd(Matrix<N3, N1> stateSTD) {
-
-        for (int i = 0; i < 3; ++i) {
-            m_q.set(i, 0, stateSTD.get(i, 0) * stateSTD.get(i, 0));
-        }
-    }
-
-    public final void setVisionMeasurementStdDevs(Matrix<N3, N1> visionMeasurementStdDevs) {
-        var r = new double[3];
-        for (int i = 0; i < 3; ++i) {
-            r[i] = visionMeasurementStdDevs.get(i, 0) * visionMeasurementStdDevs.get(i, 0);
-        }
-
-        // Solve for closed form Kalman gain for continuous Kalman filter with A = 0
-        // and C = I. See wpimath/algorithms.md.
-        for (int row = 0; row < 3; ++row) {
-            if (m_q.get(row, 0) == 0.0) {
-                m_visionK.set(row, row, 0.0);
-            } else {
-                m_visionK.set(
-                        row, row, m_q.get(row, 0) / (m_q.get(row, 0) + Math.sqrt(m_q.get(row, 0) * r[row])));
-            }
-        }
-    }
-
     /**
-     * Return the pose at a given timestamp, if the buffer is not empty.
-     *
-     * @param timestampSeconds The pose's timestamp in seconds.
-     * @return The pose at the given timestamp (or Optional.empty() if the buffer is
-     *         empty).
+     * How long a twist/vision-correction entry is kept in the active update map before
+     * being folded into basePose.
      */
-    public Optional<Pose2d> sampleAt(double timestampSeconds) {
-        // Step 0: If there are no odometry updates to sample, skip.
-        if (odometryBuffer.getInternalBuffer().isEmpty()) {
-            return Optional.empty();
-        }
+    public static final double HISTORY_LENGTH_SECONDS = 1.5;
 
-        // Step 1: Make sure timestamp matches the sample from the odometry pose buffer.
-        // (When sampling,
-        // the buffer will always use a timestamp between the first and last timestamps)
-        double oldestOdometryTimestamp = odometryBuffer.getInternalBuffer().firstKey();
-        double newestOdometryTimestamp = odometryBuffer.getInternalBuffer().lastKey();
-        timestampSeconds = MathUtil.clamp(timestampSeconds, oldestOdometryTimestamp, newestOdometryTimestamp);
+    private final DemaciaOdometry odometry;
 
-        // Step 2: If there are no applicable vision updates, use the odometry-only
-        // information.
-        if (visionUpdates.isEmpty() || timestampSeconds < visionUpdates.firstKey()) {
-            return odometryBuffer.getSample(timestampSeconds);
-        }
+    /** Per-axis (x meters, y meters, theta radians) squared state std devs, used as the "q" term in the per-axis gain formula below. */
+    private final double[] stateVarianceByAxis = new double[3];
 
-        // Step 3: Get the latest vision update from before or at the timestamp to
-        // sample at.
-        double floorTimestamp = visionUpdates.floorKey(timestampSeconds);
-        var visionUpdate = visionUpdates.get(floorTimestamp);
+    private Pose2d initialPose = new Pose2d();
+    private Pose2d latestPose = new Pose2d();
+    private final NavigableMap<Double, PoseUpdate> updates = new TreeMap<>();
 
-        // Step 4: Get the pose measured by odometry at the time of the sample.
-        var odometryEstimate = odometryBuffer.getSample(timestampSeconds);
-
-        // Step 5: Apply the vision compensation to the odometry pose.
-        return odometryEstimate.map(odometryPose -> visionUpdate.compensate(odometryPose));
+    public DemaciaPoseEstimator(SwerveModulePosition[] initialPositions, Matrix<N3, N1> stateSTD) {
+        this.odometry = new DemaciaOdometry(initialPositions);
+        setStateStd(stateSTD);
+        this.latestPose = this.initialPose;
     }
 
-    /** Removes stale vision updates that won't affect sampling. */
-    private void cleanUpVisionUpdates() {
-        // Step 0: If there are no odometry samples, skip.
-        if (odometryBuffer.getInternalBuffer().isEmpty()) {
-            return;
+    public final void setStateStd(Matrix<N3, N1> stateSTD) {
+        for (int i = 0; i < 3; ++i) {
+            stateVarianceByAxis[i] = stateSTD.get(i, 0) * stateSTD.get(i, 0);
         }
-
-        // Step 1: Find the oldest timestamp that needs a vision update.
-        double oldestOdometryTimestamp = odometryBuffer.getInternalBuffer().firstKey();
-
-        // Step 2: If there are no vision updates before that timestamp, skip.
-        if (visionUpdates.isEmpty() || oldestOdometryTimestamp < visionUpdates.firstKey()) {
-            return;
-        }
-
-        // Step 3: Find the newest vision update timestamp before or at the oldest
-        // timestamp.
-        double newestNeededVisionUpdateTimestamp = visionUpdates.floorKey(oldestOdometryTimestamp);
-
-        // Step 4: Remove all entries strictly before the newest timestamp we need.
-        visionUpdates.headMap(newestNeededVisionUpdateTimestamp, false).clear();
     }
 
-    public void addVisionMeasurement(Pose2d visionRobotPose) {
+    public void addOdometryData(OdometryData odometryData) {
         double timestamp = Timer.getFPGATimestamp();
-
-        // Step 0: If this measurement is old enough to be outside the pose buffer's
-        // timespan, skip.
-        if (odometryBuffer.getInternalBuffer().isEmpty()
-                || odometryBuffer.getInternalBuffer().lastKey() - kBufferDuration > timestamp) {
-            return;
-        }
-
-        // Step 1: Clean up any old entries
-        cleanUpVisionUpdates();
-
-        // Step 2: Get the pose measured by odometry at the moment the vision
-        // measurement was made.
-        var odometrySample = odometryBuffer.getSample(timestamp);
-
-        if (odometrySample.isEmpty()) {
-            return;
-        }
-
-        // Step 3: Get the vision-compensated pose estimate at the moment the vision
-        // measurement was
-        // made.
-        var visionSample = sampleAt(timestamp);
-
-        if (visionSample.isEmpty()) {
-            return;
-        }
-
-        // Step 4: Measure the transform between the old pose estimate and the vision
-        // pose.
-        var transform = visionRobotPose.minus(visionSample.get());
-
-        // Step 5: We should not trust the transform entirely, so instead we scale this
-        // transform by a
-        // Kalman
-        // gain matrix representing how much we trust vision measurements compared to
-        // our current pose.
-        var k_times_transform = m_visionK.times(
-                VecBuilder.fill(
-                        transform.getX(), transform.getY(), transform.getRotation().getRadians()));
-
-        // Step 6: Convert back to Transform2d.
-        var scaledTransform = new Transform2d(
-                k_times_transform.get(0, 0),
-                k_times_transform.get(1, 0),
-                Rotation2d.fromRadians(k_times_transform.get(2, 0)));
-
-        // Step 7: Calculate and record the vision update.
-        var visionUpdate = new VisionUpdate(visionSample.get().plus(scaledTransform), odometrySample.get());
-        visionUpdates.put(timestamp, visionUpdate);
-
-        // Step 8: Remove later vision measurements. (Matches previous behavior)
-        visionUpdates.tailMap(timestamp, false).entrySet().clear();
-
-        // Step 9: Update latest pose estimate. Since we cleared all updates after this
-        // vision update,
-        // it's guaranteed to be the latest vision update.
-        estimatedPose = visionUpdate.compensate(odometry.getOdometryPose());
+        Twist2d twist = odometry.updateOdometry(odometryData.gyroAngle(), odometryData.swerveModules());
+        updates.put(timestamp, new PoseUpdate(twist, new ArrayList<>()));
+        update();
     }
 
-    public void addOdometryObservation(OdometryData odometryCalculation) {
-        odometry.updateOdometry(odometryCalculation.gyroAngle(), odometryCalculation.swerveModules());
-        Pose2d odometryEstimation = odometry.getOdometryPose();
-        odometryBuffer.addSample(Timer.getFPGATimestamp(), odometryEstimation);
-        if (visionUpdates.isEmpty()) {
-            estimatedPose = odometryEstimation;
-        } else {
-            var visionUpdate = visionUpdates.get(visionUpdates.lastKey());
-            estimatedPose = visionUpdate.compensate(odometryEstimation);
+    public void addVisionMeasurement(Pose2d visionRobotPose, double timestampSeconds, Matrix<N3, N1> stdDevs) {
+        VisionUpdate visionUpdate = new VisionUpdate(visionRobotPose, stdDevs);
+
+        if (updates.containsKey(timestampSeconds)) {
+            updates.get(timestampSeconds).visionUpdates.add(visionUpdate);
+            update();
+            return;
         }
 
+        var prevEntry = updates.floorEntry(timestampSeconds);
+        var nextEntry = updates.ceilingEntry(timestampSeconds);
+
+        if (prevEntry == null || nextEntry == null) {
+            // No bracketing "next" entry (or no "prev" entry, e.g. timestamp predates
+            // everything currently tracked) - silently drop, per explicit decision.
+            return;
+        }
+
+        double prevKey = prevEntry.getKey();
+        double nextKey = nextEntry.getKey();
+        PoseUpdate nextUpdate = nextEntry.getValue();
+
+        double frac0 = (timestampSeconds - prevKey) / (nextKey - prevKey);
+        double frac1 = (nextKey - timestampSeconds) / (nextKey - prevKey);
+
+        Twist2d twist0 = new Twist2d(nextUpdate.twist.dx * frac0, nextUpdate.twist.dy * frac0,
+                nextUpdate.twist.dtheta * frac0);
+        Twist2d twist1 = new Twist2d(nextUpdate.twist.dx * frac1, nextUpdate.twist.dy * frac1,
+                nextUpdate.twist.dtheta * frac1);
+
+        List<VisionUpdate> newEntryVisionUpdates = new ArrayList<>();
+        newEntryVisionUpdates.add(visionUpdate);
+
+        updates.put(timestampSeconds, new PoseUpdate(twist0, newEntryVisionUpdates));
+        updates.put(nextKey, new PoseUpdate(twist1, nextUpdate.visionUpdates));
+
+        update();
+    }
+
+    private void update() {
+        double now = Timer.getFPGATimestamp();
+
+        while (updates.size() > 1 && updates.firstKey() < now - HISTORY_LENGTH_SECONDS) {
+            var oldestEntry = updates.pollFirstEntry();
+            initialPose = oldestEntry.getValue().apply(initialPose, stateVarianceByAxis);
+        }
+
+        Pose2d pose = initialPose;
+        for (PoseUpdate poseUpdate : updates.values()) {
+            pose = poseUpdate.apply(pose, stateVarianceByAxis);
+        }
+        latestPose = pose;
     }
 
     public Pose2d getEstimatedPose() {
-        return estimatedPose;
+        return latestPose;
     }
 
     public void resetPose() {
@@ -212,44 +121,55 @@ public class DemaciaPoseEstimator {
 
     public void resetPose(Pose2d pose) {
         odometry.resetPose(pose);
-        odometryBuffer.clear();
-        visionUpdates.clear();
-        estimatedPose = odometry.getOdometryPose();
+        updates.clear();
+        initialPose = pose;
+        latestPose = pose;
     }
+
 
     public record OdometryData(Rotation2d gyroAngle, SwerveModulePosition[] swerveModules) {
     }
 
     private static final class VisionUpdate {
-        // The vision-compensated pose estimate.
-        private final Pose2d visionPose;
+        private final Pose2d pose;
+        private final Matrix<N3, N1> stdDevs;
+        private VisionUpdate(Pose2d pose, Matrix<N3, N1> stdDevs) {
+            this.pose = pose;
+            this.stdDevs = stdDevs;
+        }
+    }
 
-        // The pose estimated based solely on odometry.
-        private final Pose2d odometryPose;
-
-        /**
-         * Constructs a vision update record with the specified parameters.
-         *
-         * @param visionPose   The vision-compensated pose estimate.
-         * @param odometryPose The pose estimate based solely on odometry.
-         */
-        private VisionUpdate(Pose2d visionPose, Pose2d odometryPose) {
-            this.visionPose = visionPose;
-            this.odometryPose = odometryPose;
+    private static final class PoseUpdate {
+        private final Twist2d twist;
+        private final List<VisionUpdate> visionUpdates;
+        private PoseUpdate(Twist2d twist, List<VisionUpdate> visionUpdates) {
+            this.twist = twist;
+            this.visionUpdates = visionUpdates;
         }
 
-        /**
-         * Returns the vision-compensated version of the pose. Specifically, changes the
-         * pose from being
-         * relative to this record's odometry pose to being relative to this record's
-         * vision pose.
-         *
-         * @param pose The pose to compensate.
-         * @return The compensated pose.
-         */
-        public Pose2d compensate(Pose2d pose) {
-            var delta = pose.minus(this.odometryPose);
-            return this.visionPose.plus(delta);
+        private Pose2d apply(Pose2d lastPose, double[] stateVarianceByAxis) {
+            Pose2d pose = lastPose.exp(twist);
+            for (VisionUpdate visionUpdate : visionUpdates) {
+                double[] measurementVarianceByAxis = new double[3];
+                Matrix<N3, N1> stdDevs = visionUpdate.stdDevs;
+                for (int i = 0; i < 3; i++) {
+                    measurementVarianceByAxis[i] = stdDevs.get(i, 0) * stdDevs.get(i, 0);
+                }
+                double[] kalmanGainByAxis = new double[3];
+                for (int row = 0; row < 3; row++) {
+                    if (stateVarianceByAxis[row] == 0.0) {
+                        kalmanGainByAxis[row] = 0.0;
+                    } else {
+                        kalmanGainByAxis[row] = stateVarianceByAxis[row]
+                                / (stateVarianceByAxis[row] + Math.sqrt(stateVarianceByAxis[row] * measurementVarianceByAxis[row]));
+                    }
+                }
+                Twist2d visionTwist = pose.log(visionUpdate.pose);
+                Twist2d scaledTwist = new Twist2d(visionTwist.dx * kalmanGainByAxis[0],
+                        visionTwist.dy * kalmanGainByAxis[1], visionTwist.dtheta * kalmanGainByAxis[2]);
+                pose = pose.exp(scaledTwist);
+            }
+            return pose;
         }
     }
 }

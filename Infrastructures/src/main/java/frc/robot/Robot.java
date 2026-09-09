@@ -10,8 +10,8 @@ import edu.wpi.first.wpilibj.TimedRobot;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.CommandScheduler;
 import frc.robot.RobotPose.RobotPose;
-import frc.robot.RobotPose.DemaciaPoseEstimator.OdometryData;
-import frc.robot.RobotPose.Vision.VisionConstants;
+import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator.OdometryData;
+import frc.robot.RobotPose.Vision.VisionManager;
 
 public class Robot extends TimedRobot {
   private Command m_autonomousCommand;
@@ -24,14 +24,14 @@ public class Robot extends TimedRobot {
     for(int i = 0; i < 4; i++){
       k[i] = new SwerveModulePosition();
     }
-    OdometryData t = new OdometryData(0, Rotation2d.kZero, k);
-    RobotPose.initialize(()-> t,VisionConstants.APRIL_TAG_CAMERAS); // just need to add an odometry data supplier (using a chassis instance)
+
+    RobotPose.initialize(()->new OdometryData(null, k), k, null, new VisionManager().withSource().withSource().withQuest().build());
+   
   }
 
   @Override
   public void robotPeriodic() {
     CommandScheduler.getInstance().run();
-    RobotPose.getInstance().periodic();
   }
 
   @Override
