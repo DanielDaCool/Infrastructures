@@ -25,13 +25,14 @@ public class Robot extends TimedRobot {
       k[i] = new SwerveModulePosition();
     }
 
-    RobotPose.initialize(()->new OdometryData(null, k), k, null, new VisionManager().withSource().withSource().withQuest().build());
+    RobotPose.initialize(()->new OdometryData(null, k), k, null, );
    
   }
 
   @Override
   public void robotPeriodic() {
     CommandScheduler.getInstance().run();
+    RobotPose.getInstance().periodic();
   }
 
   @Override

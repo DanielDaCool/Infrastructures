@@ -84,9 +84,18 @@ public final class RobotPose {
         }
 
         quest.ifPresent(q -> {
+           
             if (q.hasDrifted()) {
                 q.updatePose(poseEstimator.getEstimatedPose());
             }
+            else if(q.shouldUpdate()){
+                for (TimestampedVisionMeasurement measurement : q.getPoseEstimates()) {
+                    poseEstimator.addVisionMeasurement(measurement.pose(), measurement.timestampSeconds(),
+                            measurement.stdDevs());
+                }
+            }
+            
+            
         });
     }
 
