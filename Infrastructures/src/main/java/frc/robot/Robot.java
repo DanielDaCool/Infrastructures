@@ -39,7 +39,7 @@ public class Robot extends TimedRobot {
         () -> List.of(new OdometryData(Rotation2d.kZero, modulePositions)),
         angle -> {},
         moduleLocations,
-        VecBuilder.fill(0.3, 0.3, 0),
+        VecBuilder.fill(0.1, 0.1, 0),
         new VisionConfig());
   }
 

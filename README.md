@@ -70,7 +70,7 @@ RobotPose.initialize(
     () -> List.of(new OdometryData(chassis.getGyroAngle(), chassis.getModulePositions())),
     angle -> gyro.setYaw(angle.getDegrees()),        // used by setYaw()
     chassis.getModuleLocations(),                    // same order as the module positions
-    VecBuilder.fill(0.3, 0.3, 0),                    // odometry std devs (x m, y m, θ rad)
+    VecBuilder.fill(0.1, 0.1, 0),                    // odometry std devs (x m, y m, θ rad)
     VisionConstants.VISION_CONFIG);
 ```
 
@@ -184,6 +184,16 @@ RobotPose.initialize(odometryThread::getNewSamples, ...);
   to that sample instead of being dropped (the newest sample is a few ms old).
 
 ### Choosing std devs
+
+Each vision frame moves the estimate by `K` of the way to the measurement, per axis, with
+`K = 1 / (1 + σ_vision / σ_odometry)`. Only the **ratio** matters: lowering the odometry std
+is the same as raising every vision std. Examples with odometry σ = 0.1 (WPILib's default):
+
+| Vision σ | K | Each frame |
+|---|---|---|
+| 0.05 | 0.67 | Pulls two thirds of the way (e.g. a Quest). |
+| 0.3 | 0.25 | Pulls a quarter of the way. |
+| 0.9 | 0.10 | Small nudge (far or single-tag frames). |
 
 | Value | Meaning |
 |---|---|
