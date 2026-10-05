@@ -48,6 +48,8 @@ public class Quest extends BaseVisionSource {
     private boolean hasUpdatedQuestIntialPose;
     /** True at startup and after a disconnect, until re-anchored; see class docs. */
     private boolean hasQuestDisconnected;
+    /** Whether the newest frame read was tracking. */
+    private boolean isTracking;
     /** Whether this loop's periodic() got a new tracking frame. */
     private boolean hasNewPose;
     /** FPGA time of the last {@link #setPose}; infinite until the first one. */
@@ -133,7 +135,11 @@ public class Quest extends BaseVisionSource {
         poseFrames = questNav.getAllUnreadPoseFrames();
         hasNewPose = false;
 
-        if (poseFrames.length > 0 && poseFrames[poseFrames.length - 1].isTracking()) {
+        if (poseFrames.length > 0) {
+            isTracking = poseFrames[poseFrames.length - 1].isTracking();
+        }
+
+        if (poseFrames.length > 0 && isTracking) {
             timestampSeconds = poseFrames[poseFrames.length - 1].dataTimestamp();
 
             pose = new Pose2d(poseFrames[poseFrames.length - 1].questPose3d()
@@ -183,6 +189,8 @@ public class Quest extends BaseVisionSource {
     public void initSendable(SendableBuilder builder) {
         super.initSendable(builder);
         builder.addBooleanProperty("should update", () -> shouldUpdate(), null);
+        builder.addBooleanProperty("is tracking", () -> isTracking, null);
+        builder.addBooleanProperty("is anchored", () -> hasUpdatedQuestIntialPose, null);
         builder.addIntegerProperty("battery", () -> getBattery(), null);
     }
 }

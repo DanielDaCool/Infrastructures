@@ -51,6 +51,11 @@ public class LimelightTagCamera2d extends BaseVisionSource {
 
     private final AprilTagFieldLayout aprilTagFieldLayout;
 
+    /** Id of the tag used for the last pose (-1 until one is used). */
+    private int lastTagId = -1;
+    /** Floor distance camera to tag for the last pose (meters). */
+    private double lastTagDistance;
+
     private double lastFrameCounterValue = 0;
     private double lastFrameCounterChangeTime = -1;
 
@@ -151,6 +156,8 @@ public class LimelightTagCamera2d extends BaseVisionSource {
         double timestampSeconds = Timer.getFPGATimestamp() - latency;
 
         Rotation2d heading = RobotPose.getInstance().getEstimatedPoseAt(timestampSeconds).getRotation();
+        lastTagId = (int) Table.getEntry("tid").getDouble(-1);
+        lastTagDistance = getDistanceFromCamera();
         pose = new Pose2d((getTag().toTranslation2d()).minus(getRobotToTag(heading)), RobotPose.getInstance().getGyroAngle());
         return pose;
     }
@@ -206,5 +213,7 @@ public class LimelightTagCamera2d extends BaseVisionSource {
     public void initSendable(SendableBuilder builder) {
         super.initSendable(builder);
         builder.addBooleanProperty("is see", () -> shouldUpdate(), null);
+        builder.addIntegerProperty("tag id", () -> lastTagId, null);
+        builder.addDoubleProperty("tag distance m", () -> lastTagDistance, null);
     }
 }

@@ -7,6 +7,7 @@ import edu.wpi.first.math.numbers.N1;
 import edu.wpi.first.math.numbers.N3;
 import edu.wpi.first.util.sendable.Sendable;
 import edu.wpi.first.util.sendable.SendableBuilder;
+import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.wpilibj.smartdashboard.Field2d;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import frc.robot.RobotPose.Vision.visionConfigs.BaseVisionSourceConfig;
@@ -27,6 +28,13 @@ public abstract class BaseVisionSource implements VisionSource, Sendable {
     protected Pose2d pose;
 
     private Field2d field;
+
+    /** Measurements RobotPose has added to the estimator from this source. */
+    private int usedMeasurements;
+    /** FPGA time the last used measurement was captured; NaN until one is used. */
+    private double lastUsedTimestampSeconds = Double.NaN;
+    /** Distance between the last used measurement and the estimate at its capture time. */
+    private double lastErrorMeters;
 
     /** Copies the config and registers this source on SmartDashboard. */
     public BaseVisionSource(BaseVisionSourceConfig config) {
@@ -55,7 +63,28 @@ public abstract class BaseVisionSource implements VisionSource, Sendable {
     }
 
     @Override
+    public void onMeasurementUsed(TimestampedVisionMeasurement measurement, double errorMeters) {
+        usedMeasurements++;
+        lastUsedTimestampSeconds = measurement.timestampSeconds();
+        lastErrorMeters = errorMeters;
+    }
+
+    /**
+     * Dashboard entries shared by every source:
+     * <ul>
+     * <li>{@code is Connected}: the device is talking to the robot.</li>
+     * <li>{@code used measurements}: how many measurements were added to the estimator.</li>
+     * <li>{@code seconds since used}: age of the last used measurement (-1 if none yet).</li>
+     * <li>{@code last error m}: how far the last used measurement was from the estimate. If
+     * it stays large, the offset is wrong or the std devs are too small.</li>
+     * </ul>
+     */
+    @Override
     public void initSendable(SendableBuilder builder) {
         builder.addBooleanProperty("is Connected", () -> isConnected(), null);
+        builder.addIntegerProperty("used measurements", () -> usedMeasurements, null);
+        builder.addDoubleProperty("seconds since used", () -> Double.isNaN(lastUsedTimestampSeconds)
+                ? -1 : Timer.getFPGATimestamp() - lastUsedTimestampSeconds, null);
+        builder.addDoubleProperty("last error m", () -> lastErrorMeters, null);
     }
 }

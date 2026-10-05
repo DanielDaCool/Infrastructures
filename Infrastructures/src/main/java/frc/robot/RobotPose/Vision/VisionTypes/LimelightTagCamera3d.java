@@ -126,5 +126,7 @@ public class LimelightTagCamera3d extends BaseVisionSource {
     public void initSendable(SendableBuilder builder) {
         super.initSendable(builder);
         builder.addBooleanProperty("is see", () -> shouldUpdate(), null);
+        builder.addIntegerProperty("tag count", () -> poseEstimate == null ? 0 : poseEstimate.tagCount, null);
+        builder.addDoubleProperty("avg tag distance m", () -> poseEstimate == null ? 0 : poseEstimate.avgTagDist, null);
     }
 }

@@ -10,6 +10,9 @@ import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Translation2d;
 import edu.wpi.first.math.numbers.N1;
 import edu.wpi.first.math.numbers.N3;
+import edu.wpi.first.util.sendable.Sendable;
+import edu.wpi.first.util.sendable.SendableBuilder;
+import edu.wpi.first.wpilibj.smartdashboard.Field2d;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.InstantCommand;
 import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator;
@@ -38,7 +41,7 @@ import frc.robot.RobotPose.Vision.VisionTypes.Quest;
  * <p>Singleton: call {@link #initialize} once (in RobotContainer, after
  * the chassis is created), then {@link #getInstance()} everywhere else.
  */
-public final class RobotPose {
+public final class RobotPose implements Sendable {
 
     private static RobotPose instance;
 
@@ -49,6 +52,8 @@ public final class RobotPose {
     private final Consumer<Rotation2d> gyroYawSetter;
     /** Every configured vision source, including the Quest if there is one. */
     private final List<VisionSource> sources;
+    /** The estimated pose on the dashboard ({@code pose/field}). */
+    private final Field2d field = new Field2d();
 
     private RobotPose(Supplier<OdometryData> odometryDataSupplier, Consumer<Rotation2d> gyroYawSetter,
         Translation2d[] moduleLocations, Matrix<N3, N1> stateStd, List<VisionSource> sources) {
@@ -60,7 +65,15 @@ public final class RobotPose {
         addLog();
     }
 
+    /**
+     * Dashboard entries: {@code pose} (x, y, heading), {@code pose/field}, and buttons to
+     * reset the gyro to 0 or 180 degrees and the pose to the origin.
+     */
     private void addLog() {
+        SmartDashboard.putData("pose", this);
+        SmartDashboard.putData("pose/field", field);
+        SmartDashboard.putData("pose/reset pose",
+                new InstantCommand(() -> resetPose(Pose2d.kZero)).ignoringDisable(true));
         SmartDashboard.putData("chassis/reset gyro",
                 new InstantCommand(() -> setYaw(Rotation2d.kZero)).ignoringDisable(true));
         SmartDashboard.putData("chassis/reset gyro 180",
@@ -97,11 +110,23 @@ public final class RobotPose {
             }
             else if (source.shouldUpdate()) {
                 for (TimestampedVisionMeasurement measurement : source.getPoseEstimates()) {
+                    double errorMeters = measurement.pose().getTranslation().getDistance(
+                            poseEstimator.getPoseAt(measurement.timestampSeconds()).getTranslation());
+                    source.onMeasurementUsed(measurement, errorMeters);
                     poseEstimator.addVisionMeasurement(measurement.pose(), measurement.timestampSeconds(),
                             measurement.stdDevs());
                 }
             }
         }
+
+        field.setRobotPose(poseEstimator.getEstimatedPose());
+    }
+
+    @Override
+    public void initSendable(SendableBuilder builder) {
+        builder.addDoubleProperty("x", () -> getEstimatedPose().getX(), null);
+        builder.addDoubleProperty("y", () -> getEstimatedPose().getY(), null);
+        builder.addDoubleProperty("heading deg", () -> getEstimatedPose().getRotation().getDegrees(), null);
     }
 
     /**

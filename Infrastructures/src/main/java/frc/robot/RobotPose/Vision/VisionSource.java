@@ -42,4 +42,14 @@ public interface VisionSource {
      * new data from its device (and, for MegaTag2, sends it the robot's heading first).
      */
     void periodic();
+
+    /**
+     * Called by RobotPose for each measurement it adds to the estimator, for the dashboard.
+     *
+     * @param measurement The measurement that was added.
+     * @param errorMeters Distance between the measurement and the estimate at its capture
+     *                    time, before it was added.
+     */
+    default void onMeasurementUsed(TimestampedVisionMeasurement measurement, double errorMeters) {
+    }
 }

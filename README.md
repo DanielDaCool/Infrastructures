@@ -177,13 +177,35 @@ so it must be **anchored** to the fused estimate first.
 
 ## Dashboard
 
+All values are read lazily, only when NetworkTables publishes them.
+
+**Pose**
+
 | Key | What |
 |---|---|
+| `pose/x`, `pose/y`, `pose/heading deg` | The fused pose. |
+| `pose/field` | Field2d with the fused pose. |
+| `pose/reset pose` | Button: `resetPose` to the origin. |
 | `chassis/reset gyro` | Button: `setYaw(0°)`. |
 | `chassis/reset gyro 180` | Button: `setYaw(180°)`. |
-| `vision/<name>` | `is Connected`; `is see` for Limelights; `should update` and `battery` for the Quest. |
-| `vision/<name>/field` | Field2d showing the robot pose from that source's newest frame. |
-| `vision/<name>/Reset Quest Pose` | Button (Quest only): re-anchor the Quest to the current estimate. |
+
+**Every vision source** (`vision/<name>/...`)
+
+| Key | What |
+|---|---|
+| `is Connected` | The device is talking to the robot. |
+| `used measurements` | How many measurements were added to the estimator. Not increasing = the source isn't contributing. |
+| `seconds since used` | Age of the last used measurement (-1 if none yet). |
+| `last error m` | Distance between the last used measurement and the estimate at its capture time. Consistently large = wrong offset or std devs too small. |
+| `field` | Field2d with the robot pose from that source's newest frame. |
+
+**Per type**
+
+| Source | Keys |
+|---|---|
+| 2D Limelight | `is see`, `tag id`, `tag distance m` (of the last tag used). |
+| MegaTag2 Limelight | `is see`, `tag count`, `avg tag distance m`. |
+| Quest | `should update`, `is tracking`, `is anchored`, `battery`, and a `Reset Quest Pose` button (re-anchors the Quest to the current estimate). |
 
 ## Adding a new kind of vision source
 
@@ -200,6 +222,7 @@ so it must be **anchored** to the fused estimate first.
 | Pose drifts when driving straight | Module locations in the wrong order, or wheel diameter / gear ratio wrong in module positions. |
 | Pose rotates the wrong way | Gyro sign: the angle must be CCW-positive. |
 | Pose jumps to vision every frame | A vision std dev is 0. |
-| Vision never changes the pose | Std devs are ∞, or odometry std is 0 on that axis, or `shouldUpdate()` is false (check `is see`). |
+| Vision never changes the pose | `used measurements` not increasing: check `is Connected` / `is see` (Quest: `is tracking`, `is anchored`). If it is increasing: std devs are ∞, or odometry std is 0 on that axis. |
+| Vision keeps pulling the pose around | Large `last error m` on one source: its offset is wrong, or its std devs are too small. |
 | 2D camera is off by meters when turned | Wrong offset yaw, or camera height/pitch wrong. |
 | Quest pulls the pose to (0, 0) | Something called `QuestNav.setPose` directly. Use `RobotPose.resetPose` or the dashboard button. |
