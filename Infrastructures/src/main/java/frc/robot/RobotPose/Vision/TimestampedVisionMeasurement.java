@@ -6,14 +6,16 @@ import edu.wpi.first.math.numbers.N1;
 import edu.wpi.first.math.numbers.N3;
 
 /**
- * A single, self-contained, self-scored vision pose measurement. Each VisionSource computes
- * and reports its OWN stdDevs per-measurement 
+ * One vision measurement, as a {@link VisionSource} hands it to RobotPose.
  *
- * @param pose              The measured field-relative robot pose.
- * @param timestampSeconds  When this measurement was actually captured (e.g. FPGA time
- *                          minus the source's own reported latency)
- * @param stdDevs           This specific measurement's own confidence, per-axis
- *                          (x meters, y meters, theta radians)
+ * @param pose              The measured field pose of the robot center (blue-alliance
+ *                          origin).
+ * @param timestampSeconds  FPGA time the frame was captured, not when it arrived (e.g. now
+ *                          minus the camera's latency).
+ * @param stdDevs           How much to trust this measurement, per axis (x meters,
+ *                          y meters, theta radians). Use {@code Double.POSITIVE_INFINITY}
+ *                          for an axis that wasn't actually measured, e.g. a heading that
+ *                          was copied from the estimate.
  */
 public record TimestampedVisionMeasurement(Pose2d pose, double timestampSeconds, Matrix<N3, N1> stdDevs) {
 }

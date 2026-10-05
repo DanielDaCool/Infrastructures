@@ -4,14 +4,16 @@
 
 package frc.robot;
 
+import edu.wpi.first.math.VecBuilder;
 import edu.wpi.first.math.geometry.Rotation2d;
+import edu.wpi.first.math.geometry.Translation2d;
 import edu.wpi.first.math.kinematics.SwerveModulePosition;
 import edu.wpi.first.wpilibj.TimedRobot;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.CommandScheduler;
 import frc.robot.RobotPose.RobotPose;
 import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator.OdometryData;
-import frc.robot.RobotPose.Vision.VisionManager;
+import frc.robot.RobotPose.Vision.VisionConfig;
 
 public class Robot extends TimedRobot {
   private Command m_autonomousCommand;
@@ -20,13 +22,23 @@ public class Robot extends TimedRobot {
 
   public Robot() {
     m_robotContainer = new RobotContainer();
-    SwerveModulePosition[] k = new SwerveModulePosition[4];
-    for(int i = 0; i < 4; i++){
-      k[i] = new SwerveModulePosition();
-    }
 
-    RobotPose.initialize(()->new OdometryData(null, k), k, null, );
-   
+    // Placeholder wiring so the project runs without a chassis. On a real robot, read the
+    // gyro and the swerve modules here (see README.md).
+    SwerveModulePosition[] modulePositions = new SwerveModulePosition[4];
+    for (int i = 0; i < 4; i++) {
+      modulePositions[i] = new SwerveModulePosition();
+    }
+    Translation2d[] moduleLocations = {
+        new Translation2d(0.3, 0.3), new Translation2d(0.3, -0.3),
+        new Translation2d(-0.3, 0.3), new Translation2d(-0.3, -0.3) };
+
+    RobotPose.initialize(
+        () -> new OdometryData(Rotation2d.kZero, modulePositions),
+        angle -> {},
+        moduleLocations,
+        VecBuilder.fill(0.3, 0.3, 0),
+        new VisionConfig());
   }
 
   @Override
