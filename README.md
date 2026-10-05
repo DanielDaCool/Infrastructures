@@ -4,7 +4,8 @@ Field-pose estimation for a swerve robot: odometry from the gyro and swerve modu
 with vision from Limelights (2D or MegaTag2) and a Meta Quest (QuestNav).
 
 The code lives in [`Infrastructures/src/main/java/frc/robot/RobotPose`](Infrastructures/src/main/java/frc/robot/RobotPose).
-It is kept in sync with `frc.demacia.RobotPose` in DemaciaCode, with the DemaciaCode-only
+It is kept in sync with `frc.demacia.RobotPose` in DemaciaCode (estimation from `robot-pose-fixes`,
+vision from `mechanism`), with the DemaciaCode-only
 dependencies (`Chassis`, `Log`, `ElasticGenerator`) removed so it works in any project.
 
 ## Contents
@@ -180,8 +181,8 @@ so it must be **anchored** to the fused estimate first.
 |---|---|
 | `chassis/reset gyro` | Button: `setYaw(0°)`. |
 | `chassis/reset gyro 180` | Button: `setYaw(180°)`. |
-| `vision/<name>` | `is Connected` (and `is see` for Limelights). |
-| `vision/<name>/field` | Field2d widget for the source. |
+| `vision/<name>` | `is Connected`; `is see` for Limelights; `should update` and `battery` for the Quest. |
+| `vision/<name>/field` | Field2d showing the robot pose from that source's newest frame. |
 | `vision/<name>/Reset Quest Pose` | Button (Quest only): re-anchor the Quest to the current estimate. |
 
 ## Adding a new kind of vision source

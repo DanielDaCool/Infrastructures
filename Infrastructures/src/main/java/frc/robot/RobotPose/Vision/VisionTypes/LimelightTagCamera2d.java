@@ -42,8 +42,6 @@ public class LimelightTagCamera2d extends BaseVisionSource {
     private String limelightName;
     private NetworkTable Table;
 
-    /** Last calculated robot pose (heading copied from the estimate). */
-    private Pose2d pose;
     /** Capture time of {@link #pose}. */
     private double timestampSeconds;
     /** Whether this loop's periodic() produced a new, finite pose. */
@@ -66,7 +64,6 @@ public class LimelightTagCamera2d extends BaseVisionSource {
         super(config);
         limelightName = "limelight-" + config.name;
         Table = NetworkTableInstance.getDefault().getTable(limelightName);
-        pose = Pose2d.kZero;
         aprilTagFieldLayout = AprilTagFieldLayout.loadField(AprilTagFields.kDefaultField);
     }
 
@@ -120,7 +117,10 @@ public class LimelightTagCamera2d extends BaseVisionSource {
      */
     @Override
     public void periodic() {
+        super.periodic();
+
         hasNewPose = false;
+
         if (!shouldUpdate()) {
             return;
         }

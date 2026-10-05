@@ -1,6 +1,7 @@
 package frc.robot.RobotPose.Vision.VisionTypes;
 
 import java.util.List;
+
 import edu.wpi.first.math.VecBuilder;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.util.sendable.SendableBuilder;
@@ -24,7 +25,7 @@ public class LimelightTagCamera3d extends BaseVisionSource {
     private String limelightName;
 
     /** Last MegaTag2 estimate read (blue-alliance origin), or null if none. */
-    private PoseEstimate pose;
+    private PoseEstimate poseEstimate;
     /** Capture time of the last frame reported, so each frame is fused only once. */
     private double lastReportedTimestampSeconds = Double.NaN;
     /** Whether this loop's periodic() read a new frame that has at least one tag. */
@@ -92,7 +93,7 @@ public class LimelightTagCamera3d extends BaseVisionSource {
             return List.of();
         }
 
-        return List.of(new TimestampedVisionMeasurement(pose.pose, pose.timestampSeconds, 
+        return List.of(new TimestampedVisionMeasurement(poseEstimate.pose, poseEstimate.timestampSeconds, 
             VecBuilder.fill(std.get(0, 0), std.get(1, 0), Double.POSITIVE_INFINITY)));
     }
 
@@ -106,15 +107,18 @@ public class LimelightTagCamera3d extends BaseVisionSource {
      */
     @Override
     public void periodic() {
+        super.periodic();
+        
         Rotation2d heading = RobotPose.getInstance().getEstimatedPose().getRotation();
         LimelightHelpers.SetRobotOrientation(limelightName, heading.getDegrees(), 0.0, 0.0, 0.0, 0.0, 0.0);
     
-        pose = LimelightHelpers.getBotPoseEstimate_wpiBlue_MegaTag2(limelightName);
+        poseEstimate = LimelightHelpers.getBotPoseEstimate_wpiBlue_MegaTag2(limelightName);
         
         // Until the camera publishes a newer frame, the same estimate is read back every loop.
-        hasNewPose = pose != null && pose.tagCount > 0 && pose.timestampSeconds != lastReportedTimestampSeconds;
+        hasNewPose = poseEstimate != null && poseEstimate.tagCount > 0 && poseEstimate.timestampSeconds != lastReportedTimestampSeconds;
         if (hasNewPose) {
-            lastReportedTimestampSeconds = pose.timestampSeconds;
+            pose = poseEstimate.pose;
+            lastReportedTimestampSeconds = poseEstimate.timestampSeconds;
         }
     }
 

@@ -1,6 +1,7 @@
 package frc.robot.RobotPose.Vision;
 
 import edu.wpi.first.math.Matrix;
+import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Transform3d;
 import edu.wpi.first.math.numbers.N1;
 import edu.wpi.first.math.numbers.N3;
@@ -22,6 +23,9 @@ public abstract class BaseVisionSource implements VisionSource, Sendable {
     /** Base measurement std devs from the config (x meters, y meters, theta radians). */
     protected Matrix<N3, N1> std;
 
+    /** Robot pose from the newest frame (heading copied from the estimate). */
+    protected Pose2d pose;
+
     private Field2d field;
 
     /** Copies the config and registers this source on SmartDashboard. */
@@ -30,6 +34,7 @@ public abstract class BaseVisionSource implements VisionSource, Sendable {
         offset = config.offset;
         std = config.std;
         field = new Field2d();
+        pose = Pose2d.kZero;
 
         addLog();
         SmartDashboard.putData("vision/" + name, this);
@@ -42,6 +47,11 @@ public abstract class BaseVisionSource implements VisionSource, Sendable {
 
     public String getName() {
         return name;
+    }
+
+    @Override
+    public void periodic() {
+        field.setRobotPose(pose);
     }
 
     @Override
