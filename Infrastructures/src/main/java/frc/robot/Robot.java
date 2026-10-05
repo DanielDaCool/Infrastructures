@@ -4,6 +4,8 @@
 
 package frc.robot;
 
+import java.util.List;
+
 import edu.wpi.first.math.VecBuilder;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Translation2d;
@@ -34,7 +36,7 @@ public class Robot extends TimedRobot {
         new Translation2d(-0.3, 0.3), new Translation2d(-0.3, -0.3) };
 
     RobotPose.initialize(
-        () -> new OdometryData(Rotation2d.kZero, modulePositions),
+        () -> List.of(new OdometryData(Rotation2d.kZero, modulePositions)),
         angle -> {},
         moduleLocations,
         VecBuilder.fill(0.3, 0.3, 0),

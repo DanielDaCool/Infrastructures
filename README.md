@@ -15,6 +15,7 @@ dependencies (`Chassis`, `Log`, `ElasticGenerator`) removed so it works in any p
 | `RobotPose.java` | The one class the rest of the robot uses. Singleton. Runs everything each loop. |
 | `Estimation/DemaciaOdometry.java` | Swerve odometry (gyro + module positions → twist). |
 | `Estimation/DemaciaPoseEstimator.java` | Fuses odometry and vision with a replayed history (same approach as 6328's estimator). |
+| `Estimation/PhoenixOdometryThread.java` | Optional: reads the gyro and modules at 250 Hz (CAN FD) / 100 Hz (CAN 2.0) on a separate thread. |
 | `Vision/VisionSource.java` | Interface every vision source implements. |
 | `Vision/BaseVisionSource.java` | Base class for sources: config values and dashboard entries. |
 | `Vision/VisionConfig.java` | The list of sources passed to `RobotPose.initialize`. |
@@ -25,7 +26,8 @@ dependencies (`Chassis`, `Log`, `ElasticGenerator`) removed so it works in any p
 | `Vision/visionConfigs/*Config.java` | One config class per source type. |
 | `Vision/LimelightHelpers.java` | Limelight's official helper library. |
 
-Vendor dependencies: `questnavlib` (for the Quest) and WPILib New Commands.
+Vendor dependencies: `questnavlib` (for the Quest), Phoenix 6 (for `PhoenixOdometryThread`)
+and WPILib New Commands.
 
 ## Quick start
 
@@ -63,7 +65,9 @@ is fine).
 
 ```java
 RobotPose.initialize(
-    () -> new OdometryData(chassis.getGyroAngle(), chassis.getModulePositions()), // read every loop
+    // Every odometry sample since the last loop. Here: one sample read now, every loop.
+    // For 250 Hz odometry pass odometryThread::getNewSamples instead (see below).
+    () -> List.of(new OdometryData(chassis.getGyroAngle(), chassis.getModulePositions())),
     angle -> gyro.setYaw(angle.getDegrees()),        // used by setYaw()
     chassis.getModuleLocations(),                    // same order as the module positions
     VecBuilder.fill(0.3, 0.3, 0),                    // odometry std devs (x m, y m, θ rad)
@@ -97,14 +101,14 @@ the real chassis.
 | `getEstimatedPoseAt(t)` | Fused pose at a past FPGA time. Only the last 1.5 s are kept. |
 | `resetPose(pose)` | Sets position and heading. The gyro is **not** written; an offset is stored instead. Clears the vision history and re-anchors the Quest. |
 | `setYaw(angle)` | Sets the heading only and **writes it to the gyro** (through `gyroYawSetter`). Keeps the position. |
-| `getGyroAngle()` | Raw gyro reading. Not the field heading after a `resetPose`; use `getEstimatedPose()` for that. |
+| `getGyroAngle()` | Raw gyro reading of the newest odometry sample. Not the field heading after a `resetPose`; use `getEstimatedPose()` for that. |
 
 ## How it works
 
 Each `periodic()`:
 
-1. **Odometry first.** One sample (gyro + modules) is added at the current time, so any
-   vision frame captured up to now has odometry around it.
+1. **Odometry first.** Every sample since the last loop (gyro + modules) is added at its
+   own timestamp, so any vision frame captured up to now has odometry around it.
 2. **Every source reads its device** (`VisionSource.periodic()`). The MegaTag2 Limelight
    sends the current heading here.
 3. **Every source is checked.** A Quest that just (re)connected is re-anchored to the
@@ -127,6 +131,57 @@ Each `periodic()`:
 - Per field axis (x, y, θ), measurements at the same time are combined by inverse variance,
   then the estimate moves by `K * residual`, with `K = q / (q + sqrt(q * r))` (q = odometry
   variance, r = measurement variance).
+
+## 250 Hz odometry
+
+Odometry adds up small steps, and each step assumes the robot moved in one smooth arc
+between two readings. At 50 Hz a step is 20 ms; when the robot accelerates or turns during
+it, the guess is off and the error stays in the pose. At 250 Hz a step is 4 ms, so each
+guess is much closer. In 6328's testing, 250 Hz autos ended in almost the same place every
+run (84% smaller spread than 50 Hz).
+
+`PhoenixOdometryThread` reads the signals on its own thread. Each cycle it waits until the
+gyro yaw and every drive/steer position have a new value (`BaseStatusSignal.waitForAll`),
+builds a sample, stamps it with the FPGA time minus the signals' CAN latency, and queues it.
+Each robot loop `RobotPose` takes the ~5 queued samples and adds them all, then replays the
+history once. The pose math stays on the main thread; the thread only reads CAN.
+
+| Bus | Frequency | How it waits |
+|---|---|---|
+| CAN FD (CANivore) | 250 Hz | `waitForAll`: returns when all frames arrived, so all signals are sampled together. |
+| CAN 2.0 (roboRIO) | 100 Hz | Sleeps one period, then `refreshAll` (CAN 2.0 can't wait on several signals). |
+
+```java
+// Clones, so the main thread refreshing the originals doesn't interfere with the thread.
+StatusSignal<Angle> yaw = pigeon.getYaw().clone();
+StatusSignal<Angle>[] drive = ...; // module.driveMotor.getPosition().clone()
+StatusSignal<Angle>[] steer = ...; // module.steerMotor.getPosition().clone()
+
+PhoenixOdometryThread odometryThread = new PhoenixOdometryThread(canBus,
+    () -> {
+        // Runs on the odometry thread: only read the signals' values, never refresh them.
+        SwerveModulePosition[] modules = new SwerveModulePosition[4];
+        for (int i = 0; i < 4; i++) {
+            modules[i] = new SwerveModulePosition(
+                drive[i].getValueAsDouble() * WHEEL_CIRCUMFERENCE,         // wheel rotations -> m
+                Rotation2d.fromRotations(steer[i].getValueAsDouble()));   // steer rotations
+        }
+        return new OdometryData(Rotation2d.fromDegrees(yaw.getValueAsDouble()), modules);
+    },
+    yaw, drive[0], steer[0], drive[1], steer[1], drive[2], steer[2], drive[3], steer[3]);
+
+RobotPose.initialize(odometryThread::getNewSamples, ...);
+```
+
+- The thread starts in the constructor and sets these signals to its frequency. If you use
+  `optimizeBusUtilization`, call it after creating the thread.
+- The unit conversions must match your motor configs (`SensorToMechanismRatio`). Any extra
+  math your module does (e.g. a steer/drive coupling correction) goes in the reader too,
+  using only these signals.
+- `getFailedCycles()` counts cycles where a signal didn't arrive in time (e.g. an unplugged
+  device).
+- Vision is unchanged. A frame up to 50 ms newer than the newest odometry sample is added
+  to that sample instead of being dropped (the newest sample is a few ms old).
 
 ### Choosing std devs
 

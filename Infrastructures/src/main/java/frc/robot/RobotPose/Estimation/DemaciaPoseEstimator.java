@@ -47,6 +47,16 @@ public class DemaciaPoseEstimator {
      */
     public static final double HISTORY_LENGTH_SECONDS = 1.5;
 
+    /**
+     * A vision frame up to this much newer than the latest odometry sample is placed on that
+     * sample instead of being dropped. With high-frequency odometry the latest sample is a few
+     * milliseconds old, so a fresh frame can be newer than it.
+     */
+    private static final double MAX_VISION_AHEAD_OF_ODOMETRY_SECONDS = 0.05;
+
+    /** Odometry samples closer together than this are spread apart to keep them in order. */
+    private static final double MIN_SAMPLE_SPACING_SECONDS = 1e-6;
+
     private final DemaciaOdometry odometry;
 
     /** Per-axis (x meters, y meters, theta radians) squared state std devs, used as the "q" term in the per-axis gain formula below. */
@@ -60,13 +70,11 @@ public class DemaciaPoseEstimator {
     private final NavigableMap<Double, PoseUpdate> updates = new TreeMap<>();
 
     /**
-     * @param initialPositions Module readings right now.
      * @param moduleLocations  Module positions relative to the robot center (meters).
      * @param stateSTD         Odometry std devs (x m, y m, theta rad); see {@link #setStateStd}.
      */
-    public DemaciaPoseEstimator(SwerveModulePosition[] initialPositions, Translation2d[] moduleLocations,
-            Matrix<N3, N1> stateSTD) {
-        this.odometry = new DemaciaOdometry(initialPositions, moduleLocations);
+    public DemaciaPoseEstimator(Translation2d[] moduleLocations, Matrix<N3, N1> stateSTD) {
+        this.odometry = new DemaciaOdometry(moduleLocations);
         setStateStd(stateSTD);
         this.latestPose = this.initialPose;
     }
@@ -85,13 +93,25 @@ public class DemaciaPoseEstimator {
     }
 
     /**
-     * Runs odometry with a new sample, stores its twist at the current FPGA time, and
-     * replays the history. Call once per loop, before adding that loop's vision.
+     * Runs odometry on each sample (oldest first), stores each twist at its sample's
+     * timestamp, then replays the history once. Call once per loop with every sample since
+     * the last loop, before adding that loop's vision.
+     *
+     * <p>A sample that isn't newer than the last one is moved just after it, so the history
+     * stays in the order the twists were computed.
      */
-    public void addOdometryData(OdometryData odometryData) {
-        double timestamp = Timer.getFPGATimestamp();
-        Twist2d twist = odometry.updateOdometry(odometryData.gyroAngle(), odometryData.swerveModules());
-        updates.put(timestamp, new PoseUpdate(twist, new ArrayList<>()));
+    public void addOdometryData(List<OdometryData> samples) {
+        if (samples.isEmpty()) {
+            return;
+        }
+        for (OdometryData sample : samples) {
+            double timestamp = sample.timestampSeconds();
+            if (!updates.isEmpty() && timestamp <= updates.lastKey()) {
+                timestamp = updates.lastKey() + MIN_SAMPLE_SPACING_SECONDS;
+            }
+            Twist2d twist = odometry.updateOdometry(sample.gyroAngle(), sample.swerveModules());
+            updates.put(timestamp, new PoseUpdate(twist, new ArrayList<>()));
+        }
         update();
     }
 
@@ -105,8 +125,10 @@ public class DemaciaPoseEstimator {
      * <li>Otherwise the odometry entry right after the timestamp is split into two twists
      * (before/after the capture time, in proportion to time), and the measurement is put
      * on the new entry in between.</li>
-     * <li>Dropped if it is older than the whole history or newer than the latest odometry
-     * sample.</li>
+     * <li>If it is newer than the latest odometry sample by up to
+     * {@link #MAX_VISION_AHEAD_OF_ODOMETRY_SECONDS}, it is added to that sample.</li>
+     * <li>Dropped if it is older than the whole history or further ahead of the latest
+     * odometry sample.</li>
      * </ul>
      *
      * @param visionRobotPose  The measured field pose of the robot center.
@@ -122,6 +144,11 @@ public class DemaciaPoseEstimator {
         }
 
         VisionUpdate visionUpdate = new VisionUpdate(visionRobotPose, stdDevs);
+
+        if (!updates.isEmpty() && timestampSeconds > updates.lastKey()
+                && timestampSeconds - updates.lastKey() <= MAX_VISION_AHEAD_OF_ODOMETRY_SECONDS) {
+            timestampSeconds = updates.lastKey();
+        }
 
         if (updates.containsKey(timestampSeconds)) {
             updates.get(timestampSeconds).visionUpdates.add(visionUpdate);
@@ -239,11 +266,16 @@ public class DemaciaPoseEstimator {
     /**
      * One odometry sample.
      *
-     * @param gyroAngle     Raw gyro heading.
-     * @param swerveModules Module positions (total distance driven + wheel angle), same order
-     *                      as the module locations.
+     * @param timestampSeconds FPGA time the sample was measured.
+     * @param gyroAngle        Raw gyro heading.
+     * @param swerveModules    Module positions (total distance driven + wheel angle), same
+     *                         order as the module locations.
      */
-    public record OdometryData(Rotation2d gyroAngle, SwerveModulePosition[] swerveModules) {
+    public record OdometryData(double timestampSeconds, Rotation2d gyroAngle, SwerveModulePosition[] swerveModules) {
+        /** A sample measured now (for odometry read in the robot loop, without a thread). */
+        public OdometryData(Rotation2d gyroAngle, SwerveModulePosition[] swerveModules) {
+            this(Timer.getFPGATimestamp(), gyroAngle, swerveModules);
+        }
     }
 
     /** One vision measurement waiting in the history. */

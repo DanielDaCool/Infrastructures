@@ -34,7 +34,7 @@ public class DemaciaOdometry {
     private Pose2d pose;
     /** Field heading minus raw gyro reading, set on reset so the reset heading is kept. */
     private Rotation2d gyroOffset = Rotation2d.kZero;
-    /** Module readings from the previous update, to get this loop's change. */
+    /** Module readings from the previous update, to get this update's change; null before the first. */
     private SwerveModulePosition[] lastModulePositions;
     /** Robot-relative chord of each module this loop (meters). Reused every update. */
     private Translation2d[] moduleDisplacements;
@@ -44,20 +44,19 @@ public class DemaciaOdometry {
     private final Translation2d[] moduleLocations;
 
     /**
-     * @param initialModulePositions Module readings right now, so the first update only counts
-     *                               motion from this point.
-     * @param moduleLocations        Module positions relative to the robot center (meters),
-     *                               same order as the module readings.
+     * The first update only stores the module readings (no translation), so motion is
+     * counted from then on.
+     *
+     * @param moduleLocations Module positions relative to the robot center (meters), same
+     *                        order as the module readings.
      */
-    public DemaciaOdometry(SwerveModulePosition[] initialModulePositions, Translation2d[] moduleLocations) {
+    public DemaciaOdometry(Translation2d[] moduleLocations) {
         this.moduleLocations = moduleLocations;
-        this.lastModulePositions = new SwerveModulePosition[initialModulePositions.length];
-        this.modulesWeights = new double[initialModulePositions.length];
-        this.moduleDisplacements = new Translation2d[initialModulePositions.length];
+        this.modulesWeights = new double[moduleLocations.length];
+        this.moduleDisplacements = new Translation2d[moduleLocations.length];
 
-        for (int i = 0; i < initialModulePositions.length; i++) {
-            lastModulePositions[i] = initialModulePositions[i].copy();
-            modulesWeights[i] = 1.0 / initialModulePositions.length;
+        for (int i = 0; i < moduleLocations.length; i++) {
+            modulesWeights[i] = 1.0 / moduleLocations.length;
             moduleDisplacements[i] = Translation2d.kZero;
         }
         this.pose = Pose2d.kZero;
@@ -83,8 +82,12 @@ public class DemaciaOdometry {
      * @return The robot-relative motion of this update (dx, dy in meters, dtheta in radians).
      */
     public Twist2d updateOdometry(Rotation2d gyroAngle, SwerveModulePosition[] modulePositions) {
-        for (int i = 0; i < modulePositions.length; i++) {
-            moduleDisplacements[i] = calculateModuleDisplacement(lastModulePositions[i], modulePositions[i]);
+        if (lastModulePositions == null) {
+            lastModulePositions = new SwerveModulePosition[modulePositions.length];
+        } else {
+            for (int i = 0; i < modulePositions.length; i++) {
+                moduleDisplacements[i] = calculateModuleDisplacement(lastModulePositions[i], modulePositions[i]);
+            }
         }
 
         Rotation2d previousRotation = pose.getRotation();

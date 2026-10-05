@@ -17,6 +17,7 @@ import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.InstantCommand;
 import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator;
 import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator.OdometryData;
+import frc.robot.RobotPose.Estimation.PhoenixOdometryThread;
 import frc.robot.RobotPose.Vision.TimestampedVisionMeasurement;
 import frc.robot.RobotPose.Vision.VisionConfig;
 import frc.robot.RobotPose.Vision.VisionSource;
@@ -28,8 +29,9 @@ import frc.robot.RobotPose.Vision.VisionTypes.Quest;
  *
  * <p>Every loop {@link #periodic()} feeds the {@link DemaciaPoseEstimator} with:
  * <ol>
- * <li>one odometry sample (gyro + swerve module positions) from the supplier passed to
- * {@link #initialize}, and</li>
+ * <li>every odometry sample (gyro + swerve module positions) since the last loop, from the
+ * supplier passed to {@link #initialize} (one sample at 50 Hz, about five with a 250 Hz
+ * {@link PhoenixOdometryThread}), and</li>
  * <li>every new measurement from the {@link VisionSource}s in the {@link VisionConfig}.</li>
  * </ol>
  *
@@ -46,8 +48,10 @@ public final class RobotPose implements Sendable {
     private static RobotPose instance;
 
     private final DemaciaPoseEstimator poseEstimator;
-    /** Reads the gyro and module positions; called once per loop (and by {@link #getGyroAngle()}). */
-    private final Supplier<OdometryData> odometryDataSupplier;
+    /** Returns every odometry sample since the last call; called once per loop. */
+    private final Supplier<List<OdometryData>> odometrySamplesSupplier;
+    /** Raw gyro reading of the newest odometry sample. */
+    private Rotation2d lastGyroAngle = Rotation2d.kZero;
     /** Writes a new yaw to the gyro; used by {@link #setYaw}. */
     private final Consumer<Rotation2d> gyroYawSetter;
     /** Every configured vision source, including the Quest if there is one. */
@@ -55,11 +59,11 @@ public final class RobotPose implements Sendable {
     /** The estimated pose on the dashboard ({@code pose/field}). */
     private final Field2d field = new Field2d();
 
-    private RobotPose(Supplier<OdometryData> odometryDataSupplier, Consumer<Rotation2d> gyroYawSetter,
+    private RobotPose(Supplier<List<OdometryData>> odometrySamplesSupplier, Consumer<Rotation2d> gyroYawSetter,
         Translation2d[] moduleLocations, Matrix<N3, N1> stateStd, List<VisionSource> sources) {
-        this.odometryDataSupplier = odometryDataSupplier;
+        this.odometrySamplesSupplier = odometrySamplesSupplier;
         this.gyroYawSetter = gyroYawSetter;
-        this.poseEstimator = new DemaciaPoseEstimator(odometryDataSupplier.get().swerveModules(), moduleLocations, stateStd);
+        this.poseEstimator = new DemaciaPoseEstimator(moduleLocations, stateStd);
         this.sources = sources;
 
         addLog();
@@ -85,7 +89,7 @@ public final class RobotPose implements Sendable {
      * CommandScheduler.
      *
      * <ol>
-     * <li>Adds this loop's odometry sample. This always happens first, so vision frames
+     * <li>Adds this loop's odometry samples. This always happens first, so vision frames
      * captured up to now have odometry around them to be placed into.</li>
      * <li>Calls {@link VisionSource#periodic()} on every source. Sources read their device
      * here (and the 3D Limelight sends it the current heading).</li>
@@ -98,7 +102,7 @@ public final class RobotPose implements Sendable {
      * measurement is used.
      */
     public void periodic() {
-        poseEstimator.addOdometryData(odometryDataSupplier.get());
+        addNewOdometrySamples();
 
         for (VisionSource source : sources) {
             source.periodic();
@@ -129,6 +133,15 @@ public final class RobotPose implements Sendable {
         builder.addDoubleProperty("heading deg", () -> getEstimatedPose().getRotation().getDegrees(), null);
     }
 
+    /** Adds every odometry sample since the last call to the estimator. */
+    private void addNewOdometrySamples() {
+        List<OdometryData> samples = odometrySamplesSupplier.get();
+        if (!samples.isEmpty()) {
+            poseEstimator.addOdometryData(samples);
+            lastGyroAngle = samples.get(samples.size() - 1).gyroAngle();
+        }
+    }
+
     /**
      * @return The latest fused field pose (blue-alliance origin, meters and radians), as of
      *         the last {@link #periodic()}.
@@ -156,7 +169,9 @@ public final class RobotPose implements Sendable {
      * @param pose The new field pose.
      */
     public void resetPose(Pose2d pose) {
-        resetEstimator(pose, getGyroAngle());
+        // Samples measured before the reset must not be applied on top of it.
+        addNewOdometrySamples();
+        resetEstimator(pose, lastGyroAngle);
     }
 
     /**
@@ -168,6 +183,8 @@ public final class RobotPose implements Sendable {
      */
     public void setYaw(Rotation2d angle) {
         if (angle != null) {
+            // Samples measured before the reset must not be applied on top of it.
+            addNewOdometrySamples();
             gyroYawSetter.accept(angle);
             // The gyro was just set to `angle`, so pass it as the gyro reading (the new value may
             // not have been read back from the device yet).
@@ -190,11 +207,12 @@ public final class RobotPose implements Sendable {
     }
 
     /**
-     * @return The raw gyro reading, read now. This is not the field heading if the pose has
-     *         been reset without setting the gyro; use {@link #getEstimatedPose()} for that.
+     * @return The raw gyro reading of the newest odometry sample (as of the last
+     *         {@link #periodic()}). This is not the field heading if the pose has been reset
+     *         without setting the gyro; use {@link #getEstimatedPose()} for that.
      */
     public Rotation2d getGyroAngle() {
-        return odometryDataSupplier.get().gyroAngle();
+        return lastGyroAngle;
     }
 
 
@@ -202,8 +220,13 @@ public final class RobotPose implements Sendable {
      * Creates the singleton. Call once from RobotContainer, after the chassis is created.
      * A second call replaces the instance (and its history).
      *
-     * @param odometryDataSupplier   Returns the current gyro angle and swerve module
-     *                               positions; called every loop.
+     * @param odometrySamples        Returns every odometry sample (gyro angle and swerve
+     *                               module positions) since the last call, oldest first;
+     *                               called every loop. Use
+     *                               {@code odometryThread::getNewSamples} for 250 Hz
+     *                               odometry, or
+     *                               {@code () -> List.of(new OdometryData(gyro, modules))}
+     *                               to read once per loop.
      * @param gyroYawSetter          Writes a new yaw to the gyro (used by {@link #setYaw}),
      *                               e.g. {@code angle -> gyro.setYaw(angle.getDegrees())}.
      * @param moduleLocations        Each module's position relative to the robot center
@@ -214,10 +237,10 @@ public final class RobotPose implements Sendable {
      * @param visionConfig           The vision sources to use. They are already created when
      *                               the config is built.
      */
-    public static synchronized void initialize(Supplier<OdometryData> odometryDataSupplier,
+    public static synchronized void initialize(Supplier<List<OdometryData>> odometrySamples,
             Consumer<Rotation2d> gyroYawSetter, Translation2d[] moduleLocations, Matrix<N3, N1> stateStd,
             VisionConfig visionConfig) {
-        instance = new RobotPose(odometryDataSupplier, 
+        instance = new RobotPose(odometrySamples, 
             gyroYawSetter,
             moduleLocations, 
             stateStd, 
