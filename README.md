@@ -194,8 +194,7 @@ All values are read lazily, only when NetworkTables publishes them.
 | Key | What |
 |---|---|
 | `is Connected` | The device is talking to the robot. |
-| `used measurements` | How many measurements were added to the estimator. Not increasing = the source isn't contributing. |
-| `seconds since used` | Age of the last used measurement (-1 if none yet). |
+| `seconds since used` | Age of the last used measurement (-1 if none yet). Keeps growing = the source isn't contributing. |
 | `last error m` | Distance between the last used measurement and the estimate at its capture time. Consistently large = wrong offset or std devs too small. |
 | `field` | Field2d with the robot pose from that source's newest frame. |
 
@@ -222,7 +221,7 @@ All values are read lazily, only when NetworkTables publishes them.
 | Pose drifts when driving straight | Module locations in the wrong order, or wheel diameter / gear ratio wrong in module positions. |
 | Pose rotates the wrong way | Gyro sign: the angle must be CCW-positive. |
 | Pose jumps to vision every frame | A vision std dev is 0. |
-| Vision never changes the pose | `used measurements` not increasing: check `is Connected` / `is see` (Quest: `is tracking`, `is anchored`). If it is increasing: std devs are ∞, or odometry std is 0 on that axis. |
+| Vision never changes the pose | `seconds since used` keeps growing: check `is Connected` / `is see` (Quest: `is tracking`, `is anchored`). If it stays small: std devs are ∞, or odometry std is 0 on that axis. |
 | Vision keeps pulling the pose around | Large `last error m` on one source: its offset is wrong, or its std devs are too small. |
 | 2D camera is off by meters when turned | Wrong offset yaw, or camera height/pitch wrong. |
 | Quest pulls the pose to (0, 0) | Something called `QuestNav.setPose` directly. Use `RobotPose.resetPose` or the dashboard button. |

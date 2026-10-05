@@ -29,8 +29,6 @@ public abstract class BaseVisionSource implements VisionSource, Sendable {
 
     private Field2d field;
 
-    /** Measurements RobotPose has added to the estimator from this source. */
-    private int usedMeasurements;
     /** FPGA time the last used measurement was captured; NaN until one is used. */
     private double lastUsedTimestampSeconds = Double.NaN;
     /** Distance between the last used measurement and the estimate at its capture time. */
@@ -64,7 +62,6 @@ public abstract class BaseVisionSource implements VisionSource, Sendable {
 
     @Override
     public void onMeasurementUsed(TimestampedVisionMeasurement measurement, double errorMeters) {
-        usedMeasurements++;
         lastUsedTimestampSeconds = measurement.timestampSeconds();
         lastErrorMeters = errorMeters;
     }
@@ -73,7 +70,6 @@ public abstract class BaseVisionSource implements VisionSource, Sendable {
      * Dashboard entries shared by every source:
      * <ul>
      * <li>{@code is Connected}: the device is talking to the robot.</li>
-     * <li>{@code used measurements}: how many measurements were added to the estimator.</li>
      * <li>{@code seconds since used}: age of the last used measurement (-1 if none yet).</li>
      * <li>{@code last error m}: how far the last used measurement was from the estimate. If
      * it stays large, the offset is wrong or the std devs are too small.</li>
@@ -82,7 +78,6 @@ public abstract class BaseVisionSource implements VisionSource, Sendable {
     @Override
     public void initSendable(SendableBuilder builder) {
         builder.addBooleanProperty("is Connected", () -> isConnected(), null);
-        builder.addIntegerProperty("used measurements", () -> usedMeasurements, null);
         builder.addDoubleProperty("seconds since used", () -> Double.isNaN(lastUsedTimestampSeconds)
                 ? -1 : Timer.getFPGATimestamp() - lastUsedTimestampSeconds, null);
         builder.addDoubleProperty("last error m", () -> lastErrorMeters, null);
