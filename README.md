@@ -81,6 +81,17 @@ RobotPose.initialize(
     VisionConstants.VISION_CONFIG);
 ```
 
+By default `resetPose` doesn't write the gyro, so anything that reads the gyro directly (e.g.
+field-relative driving) has to use `getEstimatedPose().getRotation()` instead. To have
+`resetPose` set the gyro too, pass a second setter after `gyroYawSetter`:
+
+```java
+RobotPose.initialize(samples,
+    angle -> gyro.setYaw(angle.getDegrees()),        // used by setYaw()
+    angle -> gyro.setYaw(angle.getDegrees()),        // used by resetPose() (null = don't write the gyro)
+    moduleLocations, odometryStd, VisionConstants.VISION_CONFIG);
+```
+
 ### 3. Run it every loop
 
 In `Robot.robotPeriodic()`, **after** the CommandScheduler:
@@ -106,7 +117,7 @@ the real chassis.
 |---|---|
 | `getEstimatedPose()` | Latest fused field pose (blue-alliance origin). |
 | `getEstimatedPoseAt(t)` | Fused pose at a past FPGA time. Only the last 1.5 s are kept. |
-| `resetPose(pose)` | Sets position and heading. The gyro is **not** written; an offset is stored instead. Clears the vision history and re-anchors the Quest. |
+| `resetPose(pose)` | Sets position and heading. Clears the vision history and re-anchors the Quest. The gyro is **not** written (an offset is stored instead) unless a pose reset gyro setter was passed to `initialize`. |
 | `setYaw(angle)` | Sets the heading only and **writes it to the gyro** (through `gyroYawSetter`). Keeps the position. |
 | `getGyroAngle()` | Raw gyro reading of the newest odometry sample. Not the field heading after a `resetPose`; use `getEstimatedPose()` for that. |
 | `enableCollisionDetection(orientation, position, yawRate)` | Optional. Turns on collision detection (see below). |

@@ -65,6 +65,11 @@ public final class RobotPose implements Sendable {
     private Rotation2d lastGyroAngle = Rotation2d.kZero;
     /** Writes a new yaw to the gyro; used by {@link #setYaw}. */
     private final Consumer<Rotation2d> gyroYawSetter;
+    /**
+     * Writes the new heading to the gyro on {@link #resetPose}, or null to only store an offset
+     * in the estimator; see {@link #initialize}.
+     */
+    private final Consumer<Rotation2d> poseResetGyroSetter;
     /** Every configured vision source, including the Quest if there is one. */
     private final List<VisionSource> sources;
     /** The estimated pose on the dashboard ({@code pose/field}). */
@@ -92,9 +97,11 @@ public final class RobotPose implements Sendable {
     private final Map<String, SourceDisagreement> sourceDisagreements = new HashMap<>();
 
     private RobotPose(Supplier<List<OdometryData>> odometrySamplesSupplier, Consumer<Rotation2d> gyroYawSetter,
-        Translation2d[] moduleLocations, Matrix<N3, N1> stateStd, List<VisionSource> sources) {
+        Consumer<Rotation2d> poseResetGyroSetter, Translation2d[] moduleLocations, Matrix<N3, N1> stateStd,
+        List<VisionSource> sources) {
         this.odometrySamplesSupplier = odometrySamplesSupplier;
         this.gyroYawSetter = gyroYawSetter;
+        this.poseResetGyroSetter = poseResetGyroSetter;
         this.poseEstimator = new DemaciaPoseEstimator(moduleLocations, stateStd);
         this.sources = sources;
 
@@ -283,16 +290,28 @@ public final class RobotPose implements Sendable {
     }
 
     /**
-     * Sets the robot's pose (position and heading). The gyro itself is not changed; the
-     * estimator stores the difference between the gyro and the new heading instead. The
-     * vision history is cleared and every Quest is re-anchored to the new pose.
+     * Sets the robot's pose (position and heading). The vision history is cleared and every
+     * Quest is re-anchored to the new pose.
+     *
+     * <p>If a pose reset gyro setter was passed to {@link #initialize}, the new heading is also
+     * written to the gyro (like {@link #setYaw}). Otherwise the gyro itself is not changed; the
+     * estimator stores the difference between the gyro and the new heading instead, so anything
+     * that reads the gyro directly (e.g. field-relative driving) must use
+     * {@code getEstimatedPose().getRotation()} instead.
      *
      * @param pose The new field pose.
      */
     public void resetPose(Pose2d pose) {
         // Samples measured before the reset must not be applied on top of it.
         addNewOdometrySamples();
-        resetEstimator(pose, lastGyroAngle);
+        if (poseResetGyroSetter != null) {
+            poseResetGyroSetter.accept(pose.getRotation());
+            // The gyro was just set, so pass the new heading as the gyro reading (the new value
+            // may not have been read back from the device yet).
+            resetEstimator(pose, pose.getRotation());
+        } else {
+            resetEstimator(pose, lastGyroAngle);
+        }
     }
 
     /**
@@ -393,7 +412,8 @@ public final class RobotPose implements Sendable {
 
     /**
      * Creates the singleton. Call once from RobotContainer, after the chassis is created.
-     * A second call replaces the instance (and its history).
+     * A second call replaces the instance (and its history). {@link #resetPose} does not write
+     * the gyro; use the overload with a pose reset gyro setter for that.
      *
      * @param odometrySamples        Returns every odometry sample (gyro angle and swerve
      *                               module positions) since the last call, oldest first;
@@ -415,10 +435,25 @@ public final class RobotPose implements Sendable {
     public static synchronized void initialize(Supplier<List<OdometryData>> odometrySamples,
             Consumer<Rotation2d> gyroYawSetter, Translation2d[] moduleLocations, Matrix<N3, N1> stateStd,
             VisionConfig visionConfig) {
-        instance = new RobotPose(odometrySamples, 
+        initialize(odometrySamples, gyroYawSetter, null, moduleLocations, stateStd, visionConfig);
+    }
+
+    /**
+     * Same as {@link #initialize(Supplier, Consumer, Translation2d[], Matrix, VisionConfig)}, but
+     * {@link #resetPose} also writes the new heading to the gyro.
+     *
+     * @param poseResetGyroSetter Writes the new heading to the gyro on {@link #resetPose}, e.g.
+     *                            {@code angle -> gyro.setYaw(angle.getDegrees())}. {@code null}
+     *                            keeps the gyro unchanged (only an offset is stored).
+     */
+    public static synchronized void initialize(Supplier<List<OdometryData>> odometrySamples,
+            Consumer<Rotation2d> gyroYawSetter, Consumer<Rotation2d> poseResetGyroSetter,
+            Translation2d[] moduleLocations, Matrix<N3, N1> stateStd, VisionConfig visionConfig) {
+        instance = new RobotPose(odometrySamples,
             gyroYawSetter,
-            moduleLocations, 
-            stateStd, 
+            poseResetGyroSetter,
+            moduleLocations,
+            stateStd,
             visionConfig.getSources());
     }
 
