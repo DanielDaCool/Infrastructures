@@ -105,7 +105,8 @@ public class LimelightTagCamera2d extends BaseVisionSource {
 
     /** @return Whether the camera sees a tag right now ({@code tv}); for the dashboard. */
     private boolean seesTag() {
-        return Table.getEntry("tv").getDouble(0.0) >= 0.1;
+        // The dashboard reads this from BaseVisionSource's constructor, before Table is set.
+        return Table != null && Table.getEntry("tv").getDouble(0.0) >= 0.1;
     }
 
     /**
