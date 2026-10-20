@@ -4,8 +4,10 @@ import java.util.List;
 
 import edu.wpi.first.math.VecBuilder;
 import edu.wpi.first.math.geometry.Rotation2d;
+import edu.wpi.first.math.geometry.Transform3d;
 import edu.wpi.first.util.sendable.SendableBuilder;
 import edu.wpi.first.wpilibj.Timer;
+import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import frc.robot.RobotPose.RobotPose;
 import frc.robot.RobotPose.Vision.BaseVisionSource;
 import frc.robot.RobotPose.Vision.LimelightHelpers;
@@ -18,8 +20,8 @@ import frc.robot.RobotPose.Vision.visionConfigs.LimelightTagCamera3dConfig;
  * sees, using the robot heading we send it each loop. Only x and y are used; MegaTag2's yaw is
  * just the heading we sent.
  *
- * <p>The camera's position on the robot (the config offset) is sent to the Limelight once, at
- * construction.
+ * <p>The camera's position on the robot (the config offset, converted to the Limelight's
+ * frame) is sent to the Limelight once, at construction.
  */
 public class LimelightTagCamera3d extends BaseVisionSource {
     private String limelightName;
@@ -39,20 +41,27 @@ public class LimelightTagCamera3d extends BaseVisionSource {
 
     /**
      * Sends the config offset to the Limelight as its camera pose in robot space (meters,
-     * degrees). This overwrites what was set in the Limelight web UI.
+     * degrees). This overwrites what was set in the Limelight web UI. The offset is converted to
+     * the Limelight's frame by {@link LimelightTagCamera3dConfig#getSourceOffset()}, and the six
+     * values sent are put on {@code vision/<name>/source pose sent} (forward, side, up, roll,
+     * pitch, yaw).
      *
      * @param config The camera's config. The Limelight name is {@code "limelight-" + config.name}.
      */
     public LimelightTagCamera3d(LimelightTagCamera3dConfig config) {
         super(config);
         limelightName = "limelight-" + config.name;
-        LimelightHelpers.setCameraPose_RobotSpace(limelightName, 
-            offset.getX(), 
-            offset.getY(), 
-            offset.getZ(), 
-            Math.toDegrees(offset.getRotation().getX()), 
-            Math.toDegrees(offset.getRotation().getY()), 
-            Math.toDegrees(offset.getRotation().getZ()));
+        Transform3d sourceOffset = config.getSourceOffset();
+        double[] sourcePose = {
+            sourceOffset.getX(),
+            sourceOffset.getY(),
+            sourceOffset.getZ(),
+            Math.toDegrees(sourceOffset.getRotation().getX()),
+            Math.toDegrees(sourceOffset.getRotation().getY()),
+            Math.toDegrees(sourceOffset.getRotation().getZ()) };
+        LimelightHelpers.setCameraPose_RobotSpace(limelightName,
+            sourcePose[0], sourcePose[1], sourcePose[2], sourcePose[3], sourcePose[4], sourcePose[5]);
+        SmartDashboard.putNumberArray("vision/" + name + "/source pose sent", sourcePose);
     }
 
     /**

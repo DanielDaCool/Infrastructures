@@ -38,6 +38,11 @@ and WPILib New Commands.
 Each source has a config: a **name**, an **offset** (robot center → device, meters/radians)
 and **std devs** (x m, y m, θ rad) saying how much to trust it.
 
+Every offset is in the **WPILib robot frame**: x forward, y left, z up, rotations CCW
+positive. This holds for every source type. A device that uses another frame gets the offset
+converted by its config class (`BaseVisionSourceConfig.sourceFrame()` /
+`getSourceOffset()`); sources never flip signs themselves.
+
 ```java
 public final class VisionConstants {
     // Limelight hostname must be "limelight-back" for this one.
@@ -256,6 +261,10 @@ every loop.
 
 - The config offset is sent to the Limelight at startup and **overwrites** the camera pose
   set in the Limelight web UI.
+- The Limelight's robot space has y pointing **right**, so `LimelightTagCamera3dConfig`
+  mirrors y (`sourceFrame() = diag(1, -1, 1)`): position y, roll and yaw change sign, pitch
+  stays. A camera at y = -0.3 facing right (yaw -90°) is sent as side +0.3, yaw +90°. The six
+  values sent are on `vision/<name>/source pose sent`; they should match the Limelight web UI.
 - Only x and y are used (MegaTag2's yaw is just the heading we sent).
 
 ### `Quest` – Meta Quest / QuestNav
@@ -299,7 +308,7 @@ All values are read lazily, only when NetworkTables publishes them.
 | Source | Keys |
 |---|---|
 | 2D Limelight | `is see`, `tag id`, `tag distance m` (of the last tag used). |
-| MegaTag2 Limelight | `is see`, `tag count`, `avg tag distance m`. |
+| MegaTag2 Limelight | `is see`, `tag count`, `avg tag distance m`, `source pose sent` (forward, side, up m; roll, pitch, yaw deg, in the Limelight's frame). |
 | Quest | `should update`, `is tracking`, `is anchored`, `battery`, and a `Reset Quest Pose` button (re-anchors the Quest to the current estimate). A WPILib alert is raised once the battery is at or below 20%. |
 
 ## Adding a new kind of vision source
