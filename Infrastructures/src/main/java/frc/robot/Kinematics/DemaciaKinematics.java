@@ -50,6 +50,10 @@ public class DemaciaKinematics {
         }
     }
 
+    public int getModuleCount() {
+        return modulePositionOnTheRobot.length;
+    }
+
     /**
      * Robot speeds from the module states: the rigid-body motion closest (least squares) to the
      * module velocities, with omega from the gyro. For a symmetric layout vx and vy are the average
