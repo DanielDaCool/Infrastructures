@@ -22,7 +22,8 @@ import static frc.robot.Kinematics.KinematicsConstants.*;
  * turned only the rotation part of each module vector, so the modules no longer agreed on one
  * rigid-body motion and the forward kinematics couldn't undo it. To make up for the robot
  * turning during a loop, discretize the speeds before calling this (WPILib's
- * {@code ChassisSpeeds.discretize(speeds, CYCLE_DT)}).
+ * {@code ChassisSpeeds.discretize(speeds, CYCLE_DT)}). {@link AccelLimitedSwerve} does this:
+ * it desaturates, then discretizes.
  */
 public class DemaciaKinematics {
 

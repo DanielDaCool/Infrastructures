@@ -134,7 +134,12 @@ public void setModuleStates(SwerveModuleState[] states) {
 | `getSentSpeedsRobotRel()` | The same, robot-relative (with the heading of that loop). |
 
 These are the speeds the module states really ask for (read back with
-`DemaciaKinematics.toChassisSpeeds`), not the wanted ones.
+`DemaciaKinematics.toChassisSpeeds`, with the discretize undone), not the wanted ones: the
+robot's mean velocity over the loop.
+
+Speeds measured from module states (as in `resetTo` above) are the module vectors, so while the
+robot turns their direction is about ω·dt/2 off from the mean velocity. That is small and the
+limiter catches up in the next loops.
 
 ## How it works
 
@@ -153,15 +158,23 @@ Each `calculate`:
 2. **To the robot.** The limited speeds are turned robot-relative with the heading.
 3. **Standing?** Below `MIN_VELOCITY` (both translation and omega) every module gets speed 0
    at its last angle.
-4. **Kinematics.** `DemaciaKinematics.toSwerveModuleStates`: module at (x, y) moves at
+4. **Desaturate.** `DemaciaKinematics.toSwerveModuleStates`: module at (x, y) moves at
    (vx - ω·y, vy + ω·x), then all modules are scaled by one factor if any is above
    `MAX_ALLOWED_MODULE_VELOCITY`, so the robot keeps its direction and its turn/drive ratio.
-5. **Store.** The states are read back into field-relative speeds; the next loop starts there.
+   The states are read back into the speeds the modules can really drive.
+5. **Discretize.** `ChassisSpeeds.discretize(speeds, CYCLE_DT)`, then the module states again.
+   A state held for one loop while the robot turns moves it along the wanted direction turned
+   by ω·dt/2; without this the robot drifts sideways while it spins. The discretize makes the
+   translation slightly bigger, so at full speed the states are desaturated again, which leaves
+   about a millimeter of drift per 2 s while spinning fast.
+6. **Store.** The states are read back into robot speeds, the discretize is undone (the chord
+   of one loop's arc, over dt) and they are turned field-relative; the next loop starts there.
 
 The stored speeds are field-relative on purpose: kept robot-relative, a robot turning while
 driving would see its last speeds turn with it every loop, and the limiter could not keep up.
 
-`DemaciaKinematics` has no lead-angle term (see its class javadoc).
+`DemaciaKinematics` has no lead-angle term (see its class javadoc); `AccelLimitedSwerve`
+discretizes instead.
 
 ## Troubleshooting
 
