@@ -1,11 +1,14 @@
 package frc.robot.RobotPose.Vision.VisionTypes;
 
 import java.util.List;
+import java.util.OptionalInt;
 
 import edu.wpi.first.math.VecBuilder;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Pose3d;
 import edu.wpi.first.util.sendable.SendableBuilder;
+import edu.wpi.first.wpilibj.Alert;
+import edu.wpi.first.wpilibj.Alert.AlertType;
 import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.InstantCommand;
@@ -60,6 +63,12 @@ public class Quest extends BaseVisionSource {
      * captured this long after the reset was sent.
      */
     private static final double QUEST_RESET_SETTLE_SECONDS = 0.25;
+
+    /** Battery percent at or below which {@link #lowBatteryAlert} is raised. */
+    private static final int LOW_BATTERY_PERCENT = 20;
+    /** Raised once the battery is low, and stays on for the rest of the run. */
+    private final Alert lowBatteryAlert = new Alert(
+            name + " battery is at or below " + LOW_BATTERY_PERCENT + " percent", AlertType.kWarning);
 
     /**
      * @param config The Quest's config. offset is robot center to headset:
@@ -142,6 +151,7 @@ public class Quest extends BaseVisionSource {
         if (poseFrames.length > 0 && isTracking) {
             timestampSeconds = poseFrames[poseFrames.length - 1].dataTimestamp();
 
+            // Heading at the frame's capture time, not now.
             pose = new Pose2d(poseFrames[poseFrames.length - 1].questPose3d()
                 .transformBy(offset.inverse()).toPose2d().getTranslation(), 
                 RobotPose.getInstance().getEstimatedPoseAt(timestampSeconds).getRotation());
@@ -156,6 +166,12 @@ public class Quest extends BaseVisionSource {
         if (!hasQuestDisconnected && !isConnected()) {
             hasQuestDisconnected = true;
             hasUpdatedQuestIntialPose = false;
+        }
+
+        // The battery percent is empty until the Quest reports it; that isn't a low battery.
+        OptionalInt battery = questNav.getBatteryPercent();
+        if (isConnected() && battery.isPresent() && battery.getAsInt() <= LOW_BATTERY_PERCENT) {
+            lowBatteryAlert.set(true);
         }
     }
 
