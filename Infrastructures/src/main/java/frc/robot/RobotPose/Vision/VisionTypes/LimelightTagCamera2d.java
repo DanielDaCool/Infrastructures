@@ -13,6 +13,7 @@ import edu.wpi.first.math.geometry.Translation2d;
 import edu.wpi.first.math.geometry.Translation3d;
 import edu.wpi.first.networktables.NetworkTable;
 import edu.wpi.first.networktables.NetworkTableInstance;
+import edu.wpi.first.networktables.TimestampedDoubleArray;
 import edu.wpi.first.util.sendable.SendableBuilder;
 import edu.wpi.first.wpilibj.Timer;
 import frc.robot.RobotPose.RobotPose;
@@ -36,6 +37,11 @@ import frc.robot.RobotPose.Vision.visionConfigs.LimelightTagCamera2dConfig;
  * <li>Robot position = tag position - robot to tag.</li>
  * </ol>
  *
+ * <p>Each frame is read once, atomically, from the {@code t2d} array (valid, count, tl, cl,
+ * tx, ty, ..., tid; see {@link LimelightHelpers#getT2DArray}), so tx, ty, tid and the latency
+ * all belong to the same frame. Its capture time is the time NetworkTables received the array
+ * minus the pipeline and capture latency.
+ *
  * <p>Reads the Limelight's NetworkTables table {@code "limelight-" + name} directly.
  */
 public class LimelightTagCamera2d extends BaseVisionSource {
@@ -46,8 +52,23 @@ public class LimelightTagCamera2d extends BaseVisionSource {
     private double timestampSeconds;
     /** Whether this loop's periodic() produced a new, finite pose. */
     private boolean hasNewPose;
-    /** Heartbeat of the last frame processed; it increments once per camera frame. */
-    private double lastHeartbeat = Double.NaN;
+    /** NetworkTables time (microseconds) of the last t2d array processed. */
+    private long lastT2dTimestamp = 0;
+
+    /** Index of each value used in the t2d array. */
+    private static final int T2D_VALID = 0;
+    private static final int T2D_PIPELINE_LATENCY_MS = 2;
+    private static final int T2D_CAPTURE_LATENCY_MS = 3;
+    private static final int T2D_TX = 4;
+    private static final int T2D_TY = 5;
+    private static final int T2D_TID = 9;
+
+    /** tx of the frame being processed (degrees, positive = tag to the right). */
+    private double tx;
+    /** ty of the frame being processed (degrees, positive = tag above the crosshair). */
+    private double ty;
+    /** Field position of the tag in the frame being processed. */
+    private Translation3d tag = new Translation3d();
 
     private final AprilTagFieldLayout aprilTagFieldLayout;
 
@@ -73,14 +94,17 @@ public class LimelightTagCamera2d extends BaseVisionSource {
     }
 
     /**
-     * @return Whether the camera sees a tag ({@code tv}). Does not check if the frame is new;
-     *         {@link #getPoseEstimates()} handles that.
+     * @return Whether this loop's {@link #periodic()} read a new frame with a known tag and got
+     *         a finite pose from it. Taken from the same t2d array as the measurement, so it can't
+     *         disagree with it.
      */
     @Override
     public boolean shouldUpdate() {
-        if (Table == null) {
-            return false;
-        }
+        return hasNewPose;
+    }
+
+    /** @return Whether the camera sees a tag right now ({@code tv}); for the dashboard. */
+    private boolean seesTag() {
         return Table.getEntry("tv").getDouble(0.0) >= 0.1;
     }
 
@@ -118,8 +142,8 @@ public class LimelightTagCamera2d extends BaseVisionSource {
     }
 
     /**
-     * Calculates a new pose if the camera sees a tag, the frame is new (heartbeat changed),
-     * and the tag is in the field layout. Otherwise there is no measurement this loop.
+     * Calculates a new pose if the t2d array is new, has a target, and its tag is in the field
+     * layout. Otherwise there is no measurement this loop.
      */
     @Override
     public void periodic() {
@@ -127,39 +151,51 @@ public class LimelightTagCamera2d extends BaseVisionSource {
 
         hasNewPose = false;
 
-        if (!shouldUpdate()) {
+        TimestampedDoubleArray t2d = LimelightHelpers.getLimelightDoubleArrayEntry(limelightName, "t2d").getAtomic();
+        // Until the camera publishes a newer frame, the same array is read back every loop.
+        if (t2d.timestamp == lastT2dTimestamp || t2d.value.length <= T2D_TID) {
             return;
         }
+        lastT2dTimestamp = t2d.timestamp;
 
-        // Until the camera publishes a newer frame, the same tx/ty are read back every loop.
-        double heartbeat = LimelightHelpers.getHeartbeat(limelightName);
-        if (heartbeat == lastHeartbeat) {
+        if (t2d.value[T2D_VALID] < 0.1) {
             return;
         }
-        lastHeartbeat = heartbeat;
 
         // A tag that isn't in the field layout has no known position to measure from.
-        if (aprilTagFieldLayout.getTagPose((int) Table.getEntry("tid").getDouble(0.0)).isEmpty()) {
+        int tagId = (int) t2d.value[T2D_TID];
+        Optional<Pose3d> tagPose = aprilTagFieldLayout.getTagPose(tagId);
+        if (tagPose.isEmpty()) {
             return;
         }
 
+        tag = tagPose.get().getTranslation();
+        tx = t2d.value[T2D_TX];
+        ty = t2d.value[T2D_TY];
+        lastTagId = tagId;
+        timestampSeconds = getCaptureTimestampSeconds(t2d);
         updatePose();
         // e.g. a tag at the camera's height makes the range dh / tan(0)
         hasNewPose = Double.isFinite(pose.getX()) && Double.isFinite(pose.getY());
     }
 
     /**
-     * Sets {@link #timestampSeconds} (now minus pipeline + capture latency) and calculates
-     * {@link #pose} from the current tag.
+     * Capture time of a t2d frame (FPGA seconds): the time NetworkTables received it minus the
+     * pipeline ({@code tl}) and capture ({@code cl}) latency, both in milliseconds.
+     *
+     * @param t2d The t2d array with its NetworkTables timestamp (microseconds).
      */
+    public static double getCaptureTimestampSeconds(TimestampedDoubleArray t2d) {
+        return t2d.timestamp / 1e6
+                - (t2d.value[T2D_PIPELINE_LATENCY_MS] + t2d.value[T2D_CAPTURE_LATENCY_MS]) / 1000.0;
+    }
+
+    /** Calculates {@link #pose} from the frame read in {@link #periodic()}. */
     private Pose2d updatePose() {
-        double latency = (Table.getEntry("tl").getDouble(0.0) + Table.getEntry("cl").getDouble(0.0))/1000.0;
-        timestampSeconds = Timer.getFPGATimestamp() - latency;
         // Heading at the frame's capture time, not now (the robot may turn during the latency).
         Rotation2d heading = RobotPose.getInstance().getEstimatedPoseAt(timestampSeconds).getRotation();
-        lastTagId = (int) Table.getEntry("tid").getDouble(-1);
         lastTagDistance = getDistanceFromCamera();
-        pose = new Pose2d((getTag().toTranslation2d()).minus(getRobotToTag(heading)), heading);
+        pose = new Pose2d(tag.toTranslation2d().minus(getRobotToTag(heading)), heading);
         return pose;
     }
 
@@ -184,7 +220,7 @@ public class LimelightTagCamera2d extends BaseVisionSource {
      */
     private Translation2d getCameraToTag() {
         return new Translation2d(getDistanceFromCamera(),
-            new Rotation2d(Math.toRadians(-Table.getEntry("tx").getDouble(0.0)) + offset.getRotation().getZ()));
+            new Rotation2d(Math.toRadians(-tx) + offset.getRotation().getZ()));
     }
 
     /**
@@ -194,26 +230,17 @@ public class LimelightTagCamera2d extends BaseVisionSource {
      * Not finite when {@code cameraPitch + ty} is 0 (tag at the camera's height).
      */
     private double getDistanceFromCamera() {
-        double deltaHeight = getTag().getZ() - offset.getZ();
-        double alpha = offset.getRotation().getY() + Math.toRadians(Table.getEntry("ty").getDouble(0.0));
-        double distance = Math.abs(deltaHeight / Math.tan(alpha)) / Math.cos(Math.toRadians(Table.getEntry("tx").getDouble(0.0)));
+        double deltaHeight = tag.getZ() - offset.getZ();
+        double alpha = offset.getRotation().getY() + Math.toRadians(ty);
+        double distance = Math.abs(deltaHeight / Math.tan(alpha)) / Math.cos(Math.toRadians(tx));
 
         return distance;
-    }
-
-    /** Field position of the tag the camera sees ({@code tid}), or (0, 0, 0) if unknown. */
-    private Translation3d getTag() {
-        Optional<Pose3d> tagPose = aprilTagFieldLayout.getTagPose((int) Table.getEntry("tid").getDouble(0.0));
-        if (tagPose.isEmpty()) {
-            return new Translation3d();
-        }
-        return tagPose.get().getTranslation();
     }
 
     @Override
     public void initSendable(SendableBuilder builder) {
         super.initSendable(builder);
-        builder.addBooleanProperty("is see", () -> shouldUpdate(), null);
+        builder.addBooleanProperty("is see", () -> seesTag(), null);
         builder.addIntegerProperty("tag id", () -> lastTagId, null);
         builder.addDoubleProperty("tag distance m", () -> lastTagDistance, null);
     }

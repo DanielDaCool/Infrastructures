@@ -254,7 +254,9 @@ field (`AprilTagFields.kDefaultField`).
 - NetworkTables table: `"limelight-" + name`. The Limelight hostname must match.
 - The offset's **height, pitch and yaw** are used in the distance math, so measure them
   carefully. Pitch is positive = camera tilted up.
-- Only new frames (heartbeat changed) with a known tag are used.
+- Each frame is read once, atomically, from the `t2d` array, so `tx`, `ty`, `tid` and the
+  latency always come from the same frame. Only new arrays with a target and a known tag are used.
+- Capture time = the time NetworkTables received the array − (`tl` + `cl`).
 - Does not work when the tag is at the camera's height (distance becomes infinite; the
   frame is dropped).
 
@@ -312,7 +314,7 @@ All values are read lazily, only when NetworkTables publishes them.
 
 | Source | Keys |
 |---|---|
-| 2D Limelight | `is see`, `tag id`, `tag distance m` (of the last tag used). |
+| 2D Limelight | `is see` (`tv`), `tag id`, `tag distance m` (of the last tag used). |
 | MegaTag2 Limelight | `is see`, `tag count`, `avg tag distance m`, `source pose sent` (forward, side, up m; roll, pitch, yaw deg, in the Limelight's frame). |
 | Quest | `should update`, `is tracking`, `is anchored`, `battery`, and a `Reset Quest Pose` button (re-anchors the Quest to the current estimate). A WPILib alert is raised once the battery is at or below 20%. |
 
