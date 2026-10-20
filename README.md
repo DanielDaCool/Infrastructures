@@ -43,6 +43,10 @@ positive. This holds for every source type. A device that uses another frame get
 converted by its config class (`BaseVisionSourceConfig.sourceFrame()` /
 `getSourceOffset()`); sources never flip signs themselves.
 
+**Exception:** the 2D Limelight reads only the offset's height, pitch and yaw (plus its x and
+y position), and its pitch is positive = camera **tilted up**, the opposite of WPILib's
+right-hand pitch (where positive points the camera down). `BACK_2D` below is tilted up 20°.
+
 ```java
 public final class VisionConstants {
     // Limelight hostname must be "limelight-back" for this one.
@@ -263,13 +267,18 @@ Computes the position from `tx`, `ty` and `tid` of a single tag plus the tag's p
 field (`AprilTagFields.kDefaultField`).
 
 - NetworkTables table: `"limelight-" + name`. The Limelight hostname must match.
-- The offset's **height, pitch and yaw** are used in the distance math, so measure them
-  carefully. Pitch is positive = camera tilted up.
+- Only the offset's **height, pitch and yaw** (plus its x and y position) are read, and they
+  are used in the distance math, so measure them carefully. Roll is ignored.
+- Pitch is positive = camera **tilted up**, the opposite of WPILib's right-hand pitch. This
+  is the one exception to the frame contract (see Quick start §1).
+- The math is exact for a pinhole camera (Limelight's `tx`/`ty` are each the atan of the
+  normalized image coordinate on their axis), including a pitched camera with the tag off to
+  the side.
 - Each frame is read once, atomically, from the `t2d` array, so `tx`, `ty`, `tid` and the
   latency always come from the same frame. Only new arrays with a target and a known tag are used.
 - Capture time = the time NetworkTables received the array − (`tl` + `cl`).
-- Does not work when the tag is at the camera's height (distance becomes infinite; the
-  frame is dropped).
+- Does not work when the tag is at the camera's height, or when the ray to the tag never
+  reaches the tag's height (the frame is dropped).
 
 ### `LimelightTagCamera3d` – MegaTag2 Limelight
 

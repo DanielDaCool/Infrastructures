@@ -20,6 +20,10 @@ import frc.robot.RobotPose.Vision.VisionTypes.Quest;
  * y left, z up, rotations CCW positive), whatever the device. A source whose device expects
  * another frame overrides {@link #sourceFrame()}, and sends {@link #getSourceOffset()} to the
  * device. Only the config classes convert frames; the sources never flip signs by hand.
+ *
+ * <p><b>Exception:</b> the 2D Limelight ({@link LimelightTagCamera2dConfig}) reads only the
+ * offset's height, pitch and yaw, and takes its pitch as positive = camera tilted up, the
+ * opposite of WPILib's right-hand pitch (where positive points the camera down).
  */
 public abstract class BaseVisionSourceConfig {
     /** Every kind of vision source, and how to create it from its config. */

@@ -27,15 +27,21 @@ import frc.robot.RobotPose.Vision.visionConfigs.LimelightTagCamera2dConfig;
  * AprilTag ({@code tx}, {@code ty}, {@code tid}) plus the tag's known place on the field.
  * Only x and y are measured; the heading is taken from the pose estimate.
  *
- * <p>The math, per new frame:
+ * <p>The math, per new frame ({@code p} = camera pitch, positive = tilted up):
  * <ol>
- * <li>Horizontal distance camera to tag: {@code |tagHeight - cameraHeight| / tan(cameraPitch + ty)},
- * divided by {@code cos(tx)}.</li>
- * <li>Camera to tag vector: that distance at angle {@code cameraYaw - tx} (robot-relative).</li>
+ * <li>Ray to the tag in camera axes: {@code (1, -tan(tx), tan(ty))}.</li>
+ * <li>Tilted up by {@code p}: {@code x' = cos p - tan(ty) sin p}, {@code y' = -tan(tx)},
+ * {@code z' = sin p + tan(ty) cos p}.</li>
+ * <li>Scaled to the tag's height: {@code s = (tagHeight - cameraHeight) / z'}. If {@code s}
+ * isn't positive the ray never reaches the tag's height and the frame is dropped.</li>
+ * <li>Camera to tag (robot-relative) = {@code (s x', s y')} rotated by the camera yaw.</li>
  * <li>Robot to tag = robot to camera + camera to tag (robot-relative), rotated to the field
  * by the heading at the frame's capture time.</li>
  * <li>Robot position = tag position - robot to tag.</li>
  * </ol>
+ *
+ * <p>This is exact for a pinhole camera: Limelight's tx and ty are each the atan of the
+ * normalized image coordinate on their own axis. Camera roll is not modeled.
  *
  * <p>Each frame is read once, atomically, from the {@code t2d} array (valid, count, tl, cl,
  * tx, ty, ..., tid; see {@link LimelightHelpers#getT2DArray}), so tx, ty, tid and the latency
@@ -176,7 +182,7 @@ public class LimelightTagCamera2d extends BaseVisionSource {
         lastTagId = tagId;
         timestampSeconds = getCaptureTimestampSeconds(t2d);
         updatePose();
-        // e.g. a tag at the camera's height makes the range dh / tan(0)
+        // e.g. a ray that never reaches the tag's height gives a NaN camera to tag
         hasNewPose = Double.isFinite(pose.getX()) && Double.isFinite(pose.getY());
     }
 
@@ -216,26 +222,32 @@ public class LimelightTagCamera2d extends BaseVisionSource {
     }
 
     /**
-     * Vector from the camera to the tag, relative to the robot (not the field): the floor
-     * distance at angle {@code cameraYaw - tx} (tx is positive to the right).
+     * Vector from the camera to the tag, relative to the robot (not the field) and level with
+     * the floor: the ray {@code (1, -tan(tx), tan(ty))} tilted up by the camera pitch
+     * (positive = up), scaled until it reaches the tag's height, and turned by the camera yaw.
+     * NaN when the ray never reaches the tag's height (e.g. the tag is at the camera's height,
+     * or above it while the ray points down), so the frame is dropped.
      */
     private Translation2d getCameraToTag() {
-        return new Translation2d(getDistanceFromCamera(),
-            new Rotation2d(Math.toRadians(-tx) + offset.getRotation().getZ()));
+        double pitch = offset.getRotation().getY();
+        double tanTx = Math.tan(Math.toRadians(tx));
+        double tanTy = Math.tan(Math.toRadians(ty));
+
+        double forward = Math.cos(pitch) - tanTy * Math.sin(pitch);
+        double left = -tanTx;
+        double up = Math.sin(pitch) + tanTy * Math.cos(pitch);
+
+        double scale = (tag.getZ() - offset.getZ()) / up;
+        if (!(scale > 0)) {
+            return new Translation2d(Double.NaN, Double.NaN);
+        }
+        return new Translation2d(scale * forward, scale * left)
+            .rotateBy(new Rotation2d(offset.getRotation().getZ()));
     }
 
-    /**
-     * Distance from the camera to the tag on the floor plane:
-     * {@code |tagZ - cameraZ| / tan(cameraPitch + ty)} is the distance straight ahead of the
-     * camera, and dividing by {@code cos(tx)} adds the sideways part. Pitch is positive = up.
-     * Not finite when {@code cameraPitch + ty} is 0 (tag at the camera's height).
-     */
+    /** Distance from the camera to the tag on the floor plane (for the dashboard). */
     private double getDistanceFromCamera() {
-        double deltaHeight = tag.getZ() - offset.getZ();
-        double alpha = offset.getRotation().getY() + Math.toRadians(ty);
-        double distance = Math.abs(deltaHeight / Math.tan(alpha)) / Math.cos(Math.toRadians(tx));
-
-        return distance;
+        return getCameraToTag().getNorm();
     }
 
     @Override
