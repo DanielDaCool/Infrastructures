@@ -292,8 +292,14 @@ so it must be **anchored** to the fused estimate first.
 - At startup and after every disconnect, RobotPose anchors it to the current estimate
   automatically.
 - After an anchor, frames are ignored for 0.25 s (QuestNav doesn't acknowledge the reset).
+  This is checked per frame, by its capture time.
 - `resetPose` and `setYaw` re-anchor it too.
 - Offset is robot center → headset.
+- Every unread frame of the loop that is tracking is used, each at its own capture time
+  (not only the newest). Only x and y are measured; the heading is copied from the estimate
+  at that time and sent with an infinite std dev.
+- The newest frames are often a few ms newer than the newest odometry sample. A frame up to
+  50 ms newer is added to that sample; one further ahead is dropped.
 
 ## Dashboard
 

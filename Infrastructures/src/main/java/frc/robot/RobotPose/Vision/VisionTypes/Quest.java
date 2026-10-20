@@ -1,11 +1,18 @@
 package frc.robot.RobotPose.Vision.VisionTypes;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.OptionalInt;
+import java.util.function.DoubleFunction;
 
+import edu.wpi.first.math.Matrix;
 import edu.wpi.first.math.VecBuilder;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Pose3d;
+import edu.wpi.first.math.geometry.Rotation2d;
+import edu.wpi.first.math.geometry.Transform3d;
+import edu.wpi.first.math.numbers.N1;
+import edu.wpi.first.math.numbers.N3;
 import edu.wpi.first.util.sendable.SendableBuilder;
 import edu.wpi.first.wpilibj.Alert;
 import edu.wpi.first.wpilibj.Alert.AlertType;
@@ -35,17 +42,22 @@ import gg.questnav.questnav.QuestNav;
  * does {@link #shouldUpdate()} allow its measurements.</li>
  * </ul>
  *
- * <p>Only the newest unread frame each loop is used, and only if it is tracking. Its
- * position is converted from the headset to the robot center with the config offset; the
- * heading is copied from the estimate at the frame's time, so only x/y are measured (theta
- * is sent with an infinite std dev, like the Limelights).
+ * <p>Every unread frame of the loop that is tracking and was captured after the settle time
+ * becomes its own measurement, at its own capture time. Its position is converted from the
+ * headset to the robot center with the config offset; the heading is copied from the
+ * estimate at the frame's time, so only x/y are measured (theta is sent with an infinite std
+ * dev, like the Limelights).
+ *
+ * <p>The newest frames can be a few ms newer than the newest odometry sample (RobotPose adds
+ * odometry before reading vision). The estimator adds a frame up to 50 ms newer than that
+ * sample to the sample itself, and drops frames further ahead
+ * (see {@code DemaciaPoseEstimator.addVisionMeasurement}).
  */
 public class Quest extends BaseVisionSource {
     private final QuestNav questNav;
 
-    /** Capture time of {@link #pose} (QuestNav's data timestamp, FPGA time). */
-    private double timestampSeconds;
-    private PoseFrame[] poseFrames;
+    /** This loop's measurements, oldest first; see {@link #toMeasurements}. */
+    private List<TimestampedVisionMeasurement> measurements = List.of();
 
     /** True once frames from after the last anchor are arriving; see class docs. */
     private boolean hasUpdatedQuestIntialPose;
@@ -53,7 +65,7 @@ public class Quest extends BaseVisionSource {
     private boolean hasQuestDisconnected;
     /** Whether the newest frame read was tracking. */
     private boolean isTracking;
-    /** Whether this loop's periodic() got a new tracking frame. */
+    /** Whether this loop's periodic() got at least one usable frame. */
     private boolean hasNewPose;
     /** FPGA time of the last {@link #setPose}; infinite until the first one. */
     private double poseResetTimestamp = Double.POSITIVE_INFINITY;
@@ -99,7 +111,7 @@ public class Quest extends BaseVisionSource {
 
     /**
      * @return True if the Quest is connected, has been anchored and settled, and this loop
-     *         got a new tracking frame.
+     *         got at least one usable frame.
      */
     @Override
     public boolean shouldUpdate() {
@@ -107,14 +119,13 @@ public class Quest extends BaseVisionSource {
     }
 
     /**
-     * @return The measurement from this loop's newest frame, with the config x/y std devs.
-     *         The theta std dev is infinite because the heading was copied from the
-     *         estimate, not measured. Only valid when {@link #shouldUpdate()} is true.
+     * @return One measurement per usable frame of this loop, oldest first, with the config
+     *         x/y std devs. The theta std dev is infinite because the heading was copied from
+     *         the estimate, not measured. Only valid when {@link #shouldUpdate()} is true.
      */
     @Override
     public List<TimestampedVisionMeasurement> getPoseEstimates() {
-        return List.of(new TimestampedVisionMeasurement(pose, timestampSeconds, 
-                VecBuilder.fill(std.get(0, 0), std.get(1, 0), Double.POSITIVE_INFINITY)));
+        return measurements;
     }
 
     @Override
@@ -130,35 +141,33 @@ public class Quest extends BaseVisionSource {
     }
 
     /**
-     * Runs QuestNav's own update (it must run every loop), reads all unread frames, and
-     * builds {@link #pose} from the newest one if it is tracking. Also updates the anchor
-     * state: marks the Quest settled once a frame from after the settle time arrives, and
-     * marks it disconnected (so it gets re-anchored) if the connection drops.
+     * Runs QuestNav's own update (it must run every loop), reads all unread frames, and turns
+     * every usable one into a measurement (see {@link #toMeasurements}). {@link #pose} is the
+     * newest of them. Also updates the anchor state: marks the Quest settled once a frame from
+     * after the settle time arrives, and marks it disconnected (so it gets re-anchored) if the
+     * connection drops.
      */
     @Override
     public void periodic() {
         super.periodic();
-        
+
         questNav.commandPeriodic();
 
-        poseFrames = questNav.getAllUnreadPoseFrames();
-        hasNewPose = false;
+        PoseFrame[] poseFrames = questNav.getAllUnreadPoseFrames();
 
         if (poseFrames.length > 0) {
             isTracking = poseFrames[poseFrames.length - 1].isTracking();
         }
 
-        if (poseFrames.length > 0 && isTracking) {
-            timestampSeconds = poseFrames[poseFrames.length - 1].dataTimestamp();
+        // Heading at each frame's capture time, not now.
+        measurements = toMeasurements(poseFrames, offset, std,
+                poseResetTimestamp + QUEST_RESET_SETTLE_SECONDS,
+                timestamp -> RobotPose.getInstance().getEstimatedPoseAt(timestamp).getRotation());
+        hasNewPose = !measurements.isEmpty();
 
-            // Heading at the frame's capture time, not now.
-            pose = new Pose2d(poseFrames[poseFrames.length - 1].questPose3d()
-                .transformBy(offset.inverse()).toPose2d().getTranslation(), 
-                RobotPose.getInstance().getEstimatedPoseAt(timestampSeconds).getRotation());
-
-            hasNewPose = true;
-
-            if (!hasQuestDisconnected && timestampSeconds > poseResetTimestamp + QUEST_RESET_SETTLE_SECONDS) {
+        if (hasNewPose) {
+            pose = measurements.get(measurements.size() - 1).pose();
+            if (!hasQuestDisconnected) {
                 hasUpdatedQuestIntialPose = true;
             }
         }
@@ -173,6 +182,35 @@ public class Quest extends BaseVisionSource {
         if (isConnected() && battery.isPresent() && battery.getAsInt() <= LOW_BATTERY_PERCENT) {
             lowBatteryAlert.set(true);
         }
+    }
+
+    /**
+     * Turns QuestNav frames into measurements of the robot center. A frame is used only if it
+     * is tracking and was captured after {@code settledAfterSeconds}; the others are skipped.
+     *
+     * @param frames              Frames as QuestNav returns them, oldest first.
+     * @param offset              Robot center to headset (the config offset).
+     * @param std                 Config std devs; only x and y are used, theta is infinite.
+     * @param settledAfterSeconds Last anchor time plus {@link #QUEST_RESET_SETTLE_SECONDS}
+     *                            (infinite before the first anchor, so nothing is used).
+     * @param headingAt           The estimated heading at an FPGA time.
+     * @return One measurement per used frame, in the same order, each at its own capture time.
+     */
+    static List<TimestampedVisionMeasurement> toMeasurements(PoseFrame[] frames, Transform3d offset,
+            Matrix<N3, N1> std, double settledAfterSeconds, DoubleFunction<Rotation2d> headingAt) {
+        List<TimestampedVisionMeasurement> result = new ArrayList<>();
+        for (PoseFrame frame : frames) {
+            double timestamp = frame.dataTimestamp();
+            // Written so a NaN timestamp is skipped too.
+            if (!frame.isTracking() || !(timestamp > settledAfterSeconds)) {
+                continue;
+            }
+            Pose2d robotPose = new Pose2d(frame.questPose3d().transformBy(offset.inverse())
+                    .toPose2d().getTranslation(), headingAt.apply(timestamp));
+            result.add(new TimestampedVisionMeasurement(robotPose, timestamp,
+                    VecBuilder.fill(std.get(0, 0), std.get(1, 0), Double.POSITIVE_INFINITY)));
+        }
+        return result;
     }
 
     /**
