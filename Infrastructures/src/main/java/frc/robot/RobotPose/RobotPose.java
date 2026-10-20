@@ -1,11 +1,15 @@
 package frc.robot.RobotPose;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.DoubleSupplier;
 import java.util.function.Supplier;
 
 import edu.wpi.first.math.Matrix;
+import edu.wpi.first.math.filter.Debouncer;
+import edu.wpi.first.math.filter.Debouncer.DebounceType;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Translation2d;
@@ -13,6 +17,8 @@ import edu.wpi.first.math.numbers.N1;
 import edu.wpi.first.math.numbers.N3;
 import edu.wpi.first.util.sendable.Sendable;
 import edu.wpi.first.util.sendable.SendableBuilder;
+import edu.wpi.first.wpilibj.Alert;
+import edu.wpi.first.wpilibj.Alert.AlertType;
 import edu.wpi.first.wpilibj.BuiltInAccelerometer;
 import edu.wpi.first.wpilibj.BuiltInAccelerometer.Range;
 import edu.wpi.first.wpilibj.smartdashboard.Field2d;
@@ -24,6 +30,7 @@ import frc.robot.RobotPose.Estimation.PhoenixOdometryThread;
 import frc.robot.RobotPose.Vision.TimestampedVisionMeasurement;
 import frc.robot.RobotPose.Vision.VisionConfig;
 import frc.robot.RobotPose.Vision.VisionSource;
+import frc.robot.RobotPose.Vision.VisionTypes.LimelightTagCamera3d;
 import frc.robot.RobotPose.Vision.VisionTypes.Quest;
 
 /**
@@ -77,6 +84,13 @@ public final class RobotPose implements Sendable {
      */
     private Translation2d lastAccelerationG = Translation2d.kZero;
 
+    /** A Quest and a 3D Limelight further apart than this (meters) disagree. */
+    private static final double SOURCE_DISAGREEMENT_METERS = 0.3;
+    /** How long they have to disagree before the alert is raised (seconds). */
+    private static final double SOURCE_DISAGREEMENT_SECONDS = 1.0;
+    /** One disagreement check per Quest and 3D Limelight pair, by "quest name/limelight name". */
+    private final Map<String, SourceDisagreement> sourceDisagreements = new HashMap<>();
+
     private RobotPose(Supplier<List<OdometryData>> odometrySamplesSupplier, Consumer<Rotation2d> gyroYawSetter,
         Translation2d[] moduleLocations, Matrix<N3, N1> stateStd, List<VisionSource> sources) {
         this.odometrySamplesSupplier = odometrySamplesSupplier;
@@ -117,7 +131,8 @@ public final class RobotPose implements Sendable {
      * </ol>
      *
      * Steps 2 and 3 are separate loops so that every source has read its device before any
-     * measurement is used.
+     * measurement is used. Before the measurements are added, every Quest is compared with every
+     * 3D Limelight (see {@link #checkQuestAgainstLimelights}).
      */
     public void periodic() {
         Translation2d accelerationFromRoboRio = getAccelerationFromRoboRio();
@@ -128,18 +143,25 @@ public final class RobotPose implements Sendable {
             source.periodic();
         }
 
+        Map<VisionSource, List<TimestampedVisionMeasurement>> measurementsBySource = new HashMap<>();
         for (VisionSource source : sources) {
             if (source instanceof Quest && ((Quest) source).hasDrifted()) {
                 ((Quest) source).setPose(poseEstimator.getEstimatedPose());
             }
             else if (source.shouldUpdate()) {
-                for (TimestampedVisionMeasurement measurement : source.getPoseEstimates()) {
-                    double errorMeters = measurement.pose().getTranslation().getDistance(
-                            poseEstimator.getPoseAt(measurement.timestampSeconds()).getTranslation());
-                    source.onMeasurementUsed(measurement, errorMeters);
-                    poseEstimator.addVisionMeasurement(measurement.pose(), measurement.timestampSeconds(),
-                            measurement.stdDevs());
-                }
+                measurementsBySource.put(source, source.getPoseEstimates());
+            }
+        }
+
+        checkQuestAgainstLimelights(measurementsBySource);
+
+        for (VisionSource source : sources) {
+            for (TimestampedVisionMeasurement measurement : measurementsBySource.getOrDefault(source, List.of())) {
+                double errorMeters = measurement.pose().getTranslation().getDistance(
+                        poseEstimator.getPoseAt(measurement.timestampSeconds()).getTranslation());
+                source.onMeasurementUsed(measurement, errorMeters);
+                poseEstimator.addVisionMeasurement(measurement.pose(), measurement.timestampSeconds(),
+                        measurement.stdDevs());
             }
         }
 
@@ -155,6 +177,71 @@ public final class RobotPose implements Sendable {
         builder.addDoubleProperty("acceleration g", () -> lastAccelerationG.getNorm(), null);
         builder.addDoubleProperty("acceleration x g", () -> lastAccelerationG.getX(), null);
         builder.addDoubleProperty("acceleration y g", () -> lastAccelerationG.getY(), null);
+    }
+
+    /**
+     * When a Quest and a 3D Limelight both have a new measurement this loop, puts the distance
+     * between their newest ones on {@code vision/<limelight name>/<quest name> distance m}, and
+     * raises an alert if it stays over {@link #SOURCE_DISAGREEMENT_METERS} for
+     * {@link #SOURCE_DISAGREEMENT_SECONDS}. The two frames are usually taken at different times,
+     * so the Quest's position is first moved by the odometry between the two capture times. A
+     * lasting disagreement means one of the offsets is wrong (or the Quest lost tracking without
+     * saying so). The alert clears when the Quest disconnects.
+     */
+    private void checkQuestAgainstLimelights(Map<VisionSource, List<TimestampedVisionMeasurement>> measurementsBySource) {
+        for (VisionSource quest : sources) {
+            if (!(quest instanceof Quest)) {
+                continue;
+            }
+            TimestampedVisionMeasurement questMeasurement = newest(measurementsBySource.get(quest));
+            for (VisionSource limelight : sources) {
+                if (!(limelight instanceof LimelightTagCamera3d)) {
+                    continue;
+                }
+                SourceDisagreement disagreement = sourceDisagreements.computeIfAbsent(
+                        quest.getName() + "/" + limelight.getName(),
+                        key -> new SourceDisagreement(quest.getName(), limelight.getName()));
+                TimestampedVisionMeasurement limelightMeasurement = newest(measurementsBySource.get(limelight));
+                if (questMeasurement != null && limelightMeasurement != null) {
+                    Translation2d motionBetweenFrames = poseEstimator.getPoseAt(limelightMeasurement.timestampSeconds())
+                            .getTranslation().minus(poseEstimator.getPoseAt(questMeasurement.timestampSeconds()).getTranslation());
+                    double distance = questMeasurement.pose().getTranslation().plus(motionBetweenFrames)
+                            .getDistance(limelightMeasurement.pose().getTranslation());
+                    SmartDashboard.putNumber("vision/" + limelight.getName() + "/" + quest.getName() + " distance m", distance);
+                    disagreement.update(distance > SOURCE_DISAGREEMENT_METERS);
+                } else if (!quest.isConnected()) {
+                    disagreement.update(false);
+                }
+            }
+        }
+    }
+
+    /** @return The measurement with the latest capture time, or null if there is none. */
+    private static TimestampedVisionMeasurement newest(List<TimestampedVisionMeasurement> measurements) {
+        TimestampedVisionMeasurement newest = null;
+        if (measurements != null) {
+            for (TimestampedVisionMeasurement measurement : measurements) {
+                if (newest == null || measurement.timestampSeconds() > newest.timestampSeconds()) {
+                    newest = measurement;
+                }
+            }
+        }
+        return newest;
+    }
+
+    /** Alert for one Quest and 3D Limelight pair; see {@link #checkQuestAgainstLimelights}. */
+    private static final class SourceDisagreement {
+        private final Debouncer debouncer = new Debouncer(SOURCE_DISAGREEMENT_SECONDS, DebounceType.kRising);
+        private final Alert alert;
+
+        private SourceDisagreement(String questName, String limelightName) {
+            alert = new Alert(questName + " and " + limelightName + " disagree by more than "
+                    + SOURCE_DISAGREEMENT_METERS + " m", AlertType.kWarning);
+        }
+
+        private void update(boolean disagrees) {
+            alert.set(debouncer.calculate(disagrees));
+        }
     }
 
     /** Adds every odometry sample since the last call to the estimator. */

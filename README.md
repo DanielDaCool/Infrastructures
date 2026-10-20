@@ -122,6 +122,10 @@ Each `periodic()`:
 3. **Every source is checked.** A Quest that just (re)connected is re-anchored to the
    current estimate and skipped this loop. Any other source with `shouldUpdate()` true has
    its measurements added at their **capture time**.
+4. **Quest vs 3D Limelight.** Before those measurements are added, when a Quest and a
+   MegaTag2 Limelight both have a new one, their distance is logged (the Quest's position is
+   moved by the odometry between the two capture times first). If it stays over 0.3 m for
+   1 s a WPILib alert is raised: one of the offsets is probably wrong.
 
 ### Odometry (`DemaciaOdometry`)
 
@@ -302,6 +306,7 @@ All values are read lazily, only when NetworkTables publishes them.
 | `seconds since used` | Age of the last used measurement (-1 if none yet). Keeps growing = the source isn't contributing. |
 | `last error m` | Distance between the last used measurement and the estimate at its capture time. Consistently large = wrong offset or std devs too small. |
 | `field` | Field2d with the robot pose from that source's newest frame. |
+| `<quest name> distance m` | MegaTag2 Limelights only, with a Quest: distance between the two sources' newest measurements, when both had one in the same loop. |
 
 **Per type**
 
