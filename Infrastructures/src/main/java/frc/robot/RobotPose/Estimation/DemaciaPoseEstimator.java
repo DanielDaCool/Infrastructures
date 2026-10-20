@@ -57,7 +57,27 @@ public class DemaciaPoseEstimator {
     /** Odometry samples closer together than this are spread apart to keep them in order. */
     private static final double MIN_SAMPLE_SPACING_SECONDS = 1e-6;
 
+    /**
+     * Horizontal acceleration (m/s^2) above which the robot was hit. Driving can't get past about
+     * 1.2 g (traction), hits are 5-40 g (the roboRIO accelerometer reads up to 8 g). 3 g leaves
+     * room for tilt (0.26 g on the 15 deg bump) and turning the robot hard.
+     * TODO tune from logs ("pose/acceleration g").
+     */
+    public static final double COLLISION_ACCELERATION = 3 * 9.81;
+    /**
+     * How long after the last hit sample the collision lasts (seconds): the wheels take ~25 ms
+     * to spin down after the robot stops, plus about one loop, since the accelerometer is read
+     * once per loop.
+     */
+    public static final double COLLISION_HOLD_SECONDS = 0.06;
+
     private final DemaciaOdometry odometry;
+
+    /** Time of the last sample over {@link #COLLISION_ACCELERATION}. */
+    private double lastHitTime = Double.NEGATIVE_INFINITY;
+    /** Unit vector (gyro frame) the collision pushed the robot toward, taken from its first sample. */
+    private Translation2d hitDirection = Translation2d.kZero;
+    private boolean colliding = false;
 
     /** Per-axis (x meters, y meters, theta radians) squared state std devs, used as the "q" term in the per-axis gain formula below. */
     private final double[] stateVarianceByAxis = new double[3];
@@ -99,20 +119,78 @@ public class DemaciaPoseEstimator {
      *
      * <p>A sample that isn't newer than the last one is moved just after it, so the history
      * stays in the order the twists were computed.
+     *
+     * <p>Collision detection is off; see {@link #addOdometryData(List, Translation2d)}.
      */
     public void addOdometryData(List<OdometryData> samples) {
+        addOdometryData(samples, Translation2d.kZero);
+    }
+
+    /**
+     * Same as {@link #addOdometryData(List)}, with collision detection.
+     *
+     * <p><b>Collisions:</b> a loop with horizontal acceleration over
+     * {@link #COLLISION_ACCELERATION} is a hit, and the collision lasts until
+     * {@link #COLLISION_HOLD_SECONDS} after the last one. While colliding, the part of the wheel
+     * motion that goes into the hit is dropped: driving into a wall or robot, the wheels keep
+     * turning while the robot is stopped. Motion to the side of or away from the hit is kept
+     * (being hit from the side or behind, the wheels report too little, and dropping it would
+     * make that worse). The heading change from the gyro is always kept.
+     *
+     * <p>The acceleration is read once per loop, so the hit is checked once (at the current
+     * FPGA time, with the newest sample's gyro angle) and applies to every sample of the loop.
+     *
+     * <p>Not fixed here (only vision can): being shoved while stopped, pushing that goes on
+     * after the hit (no acceleration left to see), and hits shorter than the samples we read.
+     *
+     * @param samples                 Every odometry sample since the last loop, oldest first.
+     * @param accelerationFromRoboRio Horizontal acceleration of the robot from the roboRIO's
+     *                                built-in accelerometer, robot relative (x forward, y left,
+     *                                m/s^2), with the part caused by spinning removed.
+     *                                {@code Translation2d.kZero} turns collision detection off.
+     */
+    public void addOdometryData(List<OdometryData> samples, Translation2d accelerationFromRoboRio) {
         if (samples.isEmpty()) {
             return;
         }
+
+        double now = Timer.getFPGATimestamp();
+        Rotation2d newestGyroAngle = samples.get(samples.size() - 1).gyroAngle();
+        if (accelerationFromRoboRio.getNorm() > COLLISION_ACCELERATION) {
+            if (now - lastHitTime >= COLLISION_HOLD_SECONDS) {
+                // A new collision. Later samples of the same hit are the chassis ringing and can
+                // point anywhere, so the direction is only taken here.
+                hitDirection = accelerationFromRoboRio.rotateBy(newestGyroAngle)
+                        .div(accelerationFromRoboRio.getNorm());
+            }
+            lastHitTime = now;
+        }
+        colliding = now - lastHitTime < COLLISION_HOLD_SECONDS;
+
         for (OdometryData sample : samples) {
             double timestamp = sample.timestampSeconds();
             if (!updates.isEmpty() && timestamp <= updates.lastKey()) {
                 timestamp = updates.lastKey() + MIN_SAMPLE_SPACING_SECONDS;
             }
             Twist2d twist = odometry.updateOdometry(sample.gyroAngle(), sample.swerveModules());
+            if (colliding) {
+                twist = dropMotionIntoHit(twist, sample.gyroAngle());
+            }
             updates.put(timestamp, new PoseUpdate(twist, new ArrayList<>()));
         }
         update();
+    }
+
+    /** Scales the twist's translation by 1 - (how much it points into the hit), in [0, 1]. */
+    private Twist2d dropMotionIntoHit(Twist2d twist, Rotation2d gyroAngle) {
+        Translation2d motion = new Translation2d(twist.dx, twist.dy).rotateBy(gyroAngle);
+        double length = motion.getNorm();
+        if (length == 0) {
+            return twist;
+        }
+        double intoHit = -(motion.getX() * hitDirection.getX() + motion.getY() * hitDirection.getY()) / length;
+        double scale = 1 - Math.max(0, intoHit);
+        return new Twist2d(twist.dx * scale, twist.dy * scale, twist.dtheta);
     }
 
     /**
@@ -225,6 +303,11 @@ public class DemaciaPoseEstimator {
         return latestPose;
     }
 
+    /** @return True while a collision is limiting the wheel translation. */
+    public boolean isColliding() {
+        return colliding;
+    }
+
     /**
      * Returns the estimated pose at a past timestamp: the history is replayed up to it and the
      * odometry twist that spans it is interpolated. Timestamps newer than the latest odometry
@@ -261,6 +344,8 @@ public class DemaciaPoseEstimator {
         updates.clear();
         initialPose = pose;
         latestPose = pose;
+        lastHitTime = Double.NEGATIVE_INFINITY;
+        colliding = false;
     }
 
 

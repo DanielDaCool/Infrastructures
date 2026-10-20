@@ -48,6 +48,15 @@ class DemaciaPoseEstimatorTest {
         return new OdometryData(timestamp, Rotation2d.kZero, modules);
     }
 
+    /** All modules pointing {@code wheelAngle} (robot relative), having driven {@code distance} meters. */
+    private static OdometryData sample(double timestamp, double distance, Rotation2d wheelAngle) {
+        SwerveModulePosition[] modules = new SwerveModulePosition[4];
+        for (int i = 0; i < 4; i++) {
+            modules[i] = new SwerveModulePosition(distance, wheelAngle);
+        }
+        return new OdometryData(timestamp, Rotation2d.kZero, modules);
+    }
+
     @Test
     void firstSampleDoesNotMoveTheRobot() {
         estimator.addOdometryData(List.of(straightSample(0, 7.0)));
@@ -100,5 +109,47 @@ class DemaciaPoseEstimatorTest {
         estimator.addVisionMeasurement(new Pose2d(5, 0, Rotation2d.kZero), 1.2,
             VecBuilder.fill(0, 0, Double.POSITIVE_INFINITY));
         assertEquals(0.01, estimator.getEstimatedPose().getX(), 1e-9);
+    }
+
+    @Test
+    void motionIntoAHitIsDropped() {
+        SimHooks.stepTiming(1.0);
+        estimator.addOdometryData(List.of(straightSample(1.0, 0)));
+        SimHooks.stepTiming(0.02);
+        // Driving forward into a wall: the hit pushes the robot backward (-x), over 3 g.
+        estimator.addOdometryData(List.of(straightSample(1.02, 0.1)), new Translation2d(-40, 0));
+        assertEquals(0, estimator.getEstimatedPose().getX(), 1e-9);
+        assertEquals(true, estimator.isColliding());
+    }
+
+    @Test
+    void motionToTheSideOfAHitIsKept() {
+        SimHooks.stepTiming(1.0);
+        estimator.addOdometryData(List.of(sample(1.0, 0, Rotation2d.kCCW_Pi_2)));
+        SimHooks.stepTiming(0.02);
+        // Driving left (+y) while hit from the front: the motion is perpendicular to the hit.
+        estimator.addOdometryData(List.of(sample(1.02, 0.1, Rotation2d.kCCW_Pi_2)), new Translation2d(-40, 0));
+        assertEquals(0.1, estimator.getEstimatedPose().getY(), 1e-9);
+    }
+
+    @Test
+    void collisionEndsAfterTheHoldTime() {
+        SimHooks.stepTiming(1.0);
+        estimator.addOdometryData(List.of(straightSample(1.0, 0)));
+        SimHooks.stepTiming(0.02);
+        estimator.addOdometryData(List.of(straightSample(1.02, 0.1)), new Translation2d(-40, 0));
+        SimHooks.stepTiming(DemaciaPoseEstimator.COLLISION_HOLD_SECONDS + 0.01);
+        estimator.addOdometryData(List.of(straightSample(1.09, 0.2)), Translation2d.kZero);
+        assertEquals(false, estimator.isColliding());
+        assertEquals(0.1, estimator.getEstimatedPose().getX(), 1e-9);
+    }
+
+    @Test
+    void accelerationBelowTheThresholdIsNotAHit() {
+        SimHooks.stepTiming(1.0);
+        estimator.addOdometryData(List.of(straightSample(1.0, 0)));
+        SimHooks.stepTiming(0.02);
+        estimator.addOdometryData(List.of(straightSample(1.02, 0.1)), new Translation2d(-9.81, 0));
+        assertEquals(0.1, estimator.getEstimatedPose().getX(), 1e-9);
     }
 }
