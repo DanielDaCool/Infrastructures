@@ -181,16 +181,23 @@ public class DemaciaPoseEstimator {
         update();
     }
 
-    /** Scales the twist's translation by 1 - (how much it points into the hit), in [0, 1]. */
+    /**
+     * Removes the part of the twist's translation that goes into the hit (against
+     * {@link #hitDirection}, the direction the robot was pushed). The part to the side or away
+     * from the hit, and the rotation, are kept.
+     *
+     * @param twist     Robot-relative motion of one sample.
+     * @param gyroAngle Gyro angle of that sample, to turn the hit direction to the robot frame.
+     */
     private Twist2d dropMotionIntoHit(Twist2d twist, Rotation2d gyroAngle) {
-        Translation2d motion = new Translation2d(twist.dx, twist.dy).rotateBy(gyroAngle);
-        double length = motion.getNorm();
-        if (length == 0) {
+        Translation2d hitRobot = hitDirection.rotateBy(gyroAngle.unaryMinus());
+        // Negative when the motion goes into the hit.
+        double alongHit = twist.dx * hitRobot.getX() + twist.dy * hitRobot.getY();
+        if (alongHit >= 0) {
             return twist;
         }
-        double intoHit = -(motion.getX() * hitDirection.getX() + motion.getY() * hitDirection.getY()) / length;
-        double scale = 1 - Math.max(0, intoHit);
-        return new Twist2d(twist.dx * scale, twist.dy * scale, twist.dtheta);
+        return new Twist2d(twist.dx - alongHit * hitRobot.getX(), twist.dy - alongHit * hitRobot.getY(),
+                twist.dtheta);
     }
 
     /**
