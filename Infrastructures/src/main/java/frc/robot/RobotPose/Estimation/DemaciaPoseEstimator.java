@@ -254,9 +254,10 @@ public class DemaciaPoseEstimator {
      * Resets the pose and clears the whole history (including pending vision).
      *
      * @param pose      The new field pose.
+     * @param gyroAngle The raw gyro reading that corresponds to pose's heading.
      */
-    public void resetPose(Pose2d pose, Rotation2d angle) {
-        odometry.resetPose(pose, angle);
+    public void resetPose(Pose2d pose, Rotation2d gyroAngle) {
+        odometry.resetPose(pose, gyroAngle);
         updates.clear();
         initialPose = pose;
         latestPose = pose;

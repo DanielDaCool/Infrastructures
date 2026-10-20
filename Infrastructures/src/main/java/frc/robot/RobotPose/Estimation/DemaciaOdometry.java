@@ -151,10 +151,11 @@ public class DemaciaOdometry {
      * heading is kept on the next update instead of being replaced by the raw gyro.
      *
      * @param newPose   The new field pose.
+     * @param gyroAngle The raw gyro reading that corresponds to newPose's heading.
      */
-    public void resetPose(Pose2d newPose, Rotation2d angle) {
+    public void resetPose(Pose2d newPose, Rotation2d gyroAngle) {
         this.pose = newPose;
-        this.gyroOffset = newPose.getRotation().minus(angle);
+        this.gyroOffset = newPose.getRotation().minus(gyroAngle);
     }
 
     /** @return The pure-odometry pose (no vision corrections). */
