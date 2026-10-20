@@ -14,7 +14,7 @@ It is kept in sync with the kinematics and `SwerveAccelerationLimiter` in Demaci
 | `SwerveAccelerationLimiter.java` | Limits how fast the field-relative velocity setpoint changes (skid, forward and tilt limits). |
 | `AccelLimitedSwerve.java` | The class a robot uses: runs the limiter and the kinematics once per loop and keeps the speeds it sent. |
 | `KinematicsConstants.java` | `MAX_ALLOWED_MODULE_VELOCITY` (desaturation), `MIN_VELOCITY` (below this the robot stands), loop time. |
-| `KinematicsUtilities.java`, `ChassisAccel.java` | Older helpers (`toSwerveModuleStatesWithAccel`, `Limits.limitVelocities`). Not used by `AccelLimitedSwerve`. |
+| `KinematicsUtilities.java` | Small vector helpers (`limitVector`, `isInRange`, ...). |
 
 Every module location is in the **WPILib robot frame**: x forward, y left, rotations CCW
 positive, meters from the robot center. Speeds are m/s and rad/s, CCW positive.

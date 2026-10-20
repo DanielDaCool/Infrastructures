@@ -32,11 +32,9 @@ public class DemaciaKinematics {
     private Translation2d[] modulePositionOnTheRobot;
     private Translation2d center; // average of the module positions
     private double sumSquaredDistance; // sum of the squared module distances from the center
-    private ChassisSpeeds lastWantedSpeeds;
 
     public DemaciaKinematics(Translation2d... modulePositionOnTheRobot) {
         this.modulePositionOnTheRobot = modulePositionOnTheRobot;
-        lastWantedSpeeds = new ChassisSpeeds();
 
         double sumX = 0, sumY = 0;
         for (Translation2d position : modulePositionOnTheRobot) {
@@ -118,28 +116,6 @@ public class DemaciaKinematics {
         }
 
         return factorModuleVelocities(swerveStates);
-    }
-
-    public SwerveModuleState[] toSwerveModuleStatesWithAccel(ChassisSpeeds wantedSpeeds){
-        return toSwerveModuleStatesWithAccel(wantedSpeeds, KinematicsUtilities.getAccelFromDelta(wantedSpeeds, lastWantedSpeeds));
-
-    }
-
-    /**
-     * Module states for the speeds the robot should have at the end of this loop (wantedSpeeds
-     * plus one loop of wantedAccel), through {@link #toSwerveModuleStates}.
-     *
-     * @param wantedSpeeds robot-relative speeds
-     * @param wantedAccel  robot-relative acceleration
-     */
-    public SwerveModuleState[] toSwerveModuleStatesWithAccel(ChassisSpeeds wantedSpeeds, ChassisAccel wantedAccel) {
-        ChassisSpeeds nextSpeeds = new ChassisSpeeds(
-                wantedSpeeds.vxMetersPerSecond + wantedAccel.accelX() * CYCLE_DT,
-                wantedSpeeds.vyMetersPerSecond + wantedAccel.accelY() * CYCLE_DT,
-                wantedSpeeds.omegaRadiansPerSecond + wantedAccel.accelOmega() * CYCLE_DT);
-
-        lastWantedSpeeds = wantedSpeeds;
-        return toSwerveModuleStates(nextSpeeds);
     }
 
     private SwerveModuleState[] factorModuleVelocities(SwerveModuleState[] swerveStates) {
