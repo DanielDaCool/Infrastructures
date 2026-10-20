@@ -139,18 +139,14 @@ public class DemaciaKinematics {
 
     private SwerveModuleState[] factorModuleVelocities(SwerveModuleState[] swerveStates) {
         double maxVelocityCalculated = 0;
-        for (int i = 0; i < swerveStates.length; i++) {
-            double cur = Math.abs(swerveStates[i].speedMetersPerSecond);
-            if (cur == 0)
-                return swerveStates;
-            if (cur > maxVelocityCalculated)
-                maxVelocityCalculated = cur;
+        for (SwerveModuleState state : swerveStates) {
+            maxVelocityCalculated = Math.max(maxVelocityCalculated, Math.abs(state.speedMetersPerSecond));
         }
-        double factor = MAX_ALLOWED_MODULE_VELOCITY / maxVelocityCalculated;
-
-        if (factor >= 1)
+        // a module at 0 stays 0 when scaled, so only skip when no module is too fast
+        if (maxVelocityCalculated <= MAX_ALLOWED_MODULE_VELOCITY)
             return swerveStates;
 
+        double factor = MAX_ALLOWED_MODULE_VELOCITY / maxVelocityCalculated;
         for (SwerveModuleState state : swerveStates) {
             state.speedMetersPerSecond = state.speedMetersPerSecond * factor;
         }
