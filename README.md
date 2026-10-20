@@ -4,8 +4,9 @@ Field-pose estimation for a swerve robot: odometry from the gyro and swerve modu
 with vision from Limelights (2D or MegaTag2) and a Meta Quest (QuestNav).
 
 The code lives in [`Infrastructures/src/main/java/frc/robot/RobotPose`](Infrastructures/src/main/java/frc/robot/RobotPose).
-It is kept in sync with `frc.demacia.RobotPose` in DemaciaCode (estimation from `robot-pose-fixes`,
-vision from `mechanism`), with the DemaciaCode-only
+It is kept in sync with `frc.demacia.RobotPose` in DemaciaCode (estimation, collision detection and
+the Limelight fixes from `odometry-accelerometer-testing` at `f536d31`, the Quest battery alert and
+the rest of the vision code from `mechanism` at `ed68a5c`), with the DemaciaCode-only
 dependencies (`Chassis`, `Log`, `ElasticGenerator`) removed so it works in any project.
 
 ## Contents
@@ -13,6 +14,7 @@ dependencies (`Chassis`, `Log`, `ElasticGenerator`) removed so it works in any p
 | Path | What it is |
 |---|---|
 | `RobotPose.java` | The one class the rest of the robot uses. Singleton. Runs everything each loop. |
+| `RoboRioOrientation.java` | How the roboRIO is mounted, for collision detection (optional). |
 | `Estimation/DemaciaOdometry.java` | Swerve odometry (gyro + module positions → twist). |
 | `Estimation/DemaciaPoseEstimator.java` | Fuses odometry and vision with a replayed history (same approach as 6328's estimator). |
 | `Estimation/PhoenixOdometryThread.java` | Optional: reads the gyro and modules at 250 Hz (CAN FD) / 100 Hz (CAN 2.0) on a separate thread. |
@@ -102,6 +104,7 @@ the real chassis.
 | `resetPose(pose)` | Sets position and heading. The gyro is **not** written; an offset is stored instead. Clears the vision history and re-anchors the Quest. |
 | `setYaw(angle)` | Sets the heading only and **writes it to the gyro** (through `gyroYawSetter`). Keeps the position. |
 | `getGyroAngle()` | Raw gyro reading of the newest odometry sample. Not the field heading after a `resetPose`; use `getEstimatedPose()` for that. |
+| `enableCollisionDetection(orientation, position, yawRate)` | Optional. Turns on collision detection (see below). |
 
 ## How it works
 
@@ -131,6 +134,32 @@ Each `periodic()`:
 - Per field axis (x, y, θ), measurements at the same time are combined by inverse variance,
   then the estimate moves by `K * residual`, with `K = q / (q + sqrt(q * r))` (q = odometry
   variance, r = measurement variance).
+
+### Collision detection (optional)
+
+Driving into a wall or a robot, the wheels keep turning while the robot is stopped, so odometry
+counts motion that didn't happen. With collision detection on, a loop where the roboRIO's
+built-in accelerometer reads more than `COLLISION_ACCELERATION` (3 g) horizontally is a hit,
+and for `COLLISION_HOLD_SECONDS` (60 ms) after the last hit the part of the wheel motion that
+goes **into** the hit is dropped. Motion to the side or away from it is kept, and the heading
+always comes from the gyro.
+
+It is **off** unless you turn it on, because the roboRIO mounting has to be measured on each robot:
+
+```java
+RobotPose.getInstance().enableCollisionDetection(
+    RoboRioOrientation.LABEL_LEFT_X_FRONT,   // where the label faces, where its X axis points
+    new Translation2d(-0.10, 0.05),          // roboRIO position from the robot center (m)
+    () -> Math.toRadians(pigeon.getAngularVelocityZWorld().getValueAsDouble())); // yaw rate, rad/s
+```
+
+- The yaw rate removes the w² · r an off-center roboRIO reads while spinning.
+- Check the orientation (disabled, on the floor): `pose/acceleration x g` and `y g` read about 0
+  at rest, lifting the robot's front makes `x g` positive, lifting its left side makes `y g` positive.
+- The 3 g threshold is not tuned yet; tune it from `pose/acceleration g`.
+- With 250 Hz odometry the accelerometer is still read once per loop, so a hit applies to every
+  sample of that loop.
+- In simulation the accelerometer reads 0, so nothing is detected.
 
 ## 250 Hz odometry
 
@@ -250,6 +279,8 @@ All values are read lazily, only when NetworkTables publishes them.
 |---|---|
 | `pose/x`, `pose/y`, `pose/heading deg` | The fused pose. |
 | `pose/field` | Field2d with the fused pose. |
+| `pose/colliding` | True while a collision is limiting the wheel motion (only with collision detection on). |
+| `pose/acceleration g`, `x g`, `y g` | Horizontal roboRIO acceleration, robot relative (0 while collision detection is off). |
 | `pose/reset pose` | Button: `resetPose` to the origin. |
 | `chassis/reset gyro` | Button: `setYaw(0°)`. |
 | `chassis/reset gyro 180` | Button: `setYaw(180°)`. |
@@ -269,7 +300,7 @@ All values are read lazily, only when NetworkTables publishes them.
 |---|---|
 | 2D Limelight | `is see`, `tag id`, `tag distance m` (of the last tag used). |
 | MegaTag2 Limelight | `is see`, `tag count`, `avg tag distance m`. |
-| Quest | `should update`, `is tracking`, `is anchored`, `battery`, and a `Reset Quest Pose` button (re-anchors the Quest to the current estimate). |
+| Quest | `should update`, `is tracking`, `is anchored`, `battery`, and a `Reset Quest Pose` button (re-anchors the Quest to the current estimate). A WPILib alert is raised once the battery is at or below 20%. |
 
 ## Adding a new kind of vision source
 
