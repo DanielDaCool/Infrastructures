@@ -333,7 +333,7 @@ All values are read lazily, only when NetworkTables publishes them.
 |---|---|
 | 2D Limelight | `is see` (`tv`), `tag id`, `tag distance m` (of the last tag used). |
 | MegaTag2 Limelight | `is see`, `tag count`, `avg tag distance m`, `source pose sent` (forward, side, up m; roll, pitch, yaw deg, in the Limelight's frame). |
-| Quest | `should update`, `is tracking`, `is anchored`, `battery`, and a `Reset Quest Pose` button (re-anchors the Quest to the current estimate). A WPILib alert is raised once the battery is at or below 20%. |
+| Quest | `should update`, `is tracking`, `is anchored`, `battery`, and a `Reset Quest Pose` button (re-anchors the Quest to the current estimate). A WPILib alert is on while the Quest is connected, has sent its device data, and its battery is at or below 20% (QuestNav reads 0% until the device data arrives, which is ignored). |
 
 ## Adding a new kind of vision source
 

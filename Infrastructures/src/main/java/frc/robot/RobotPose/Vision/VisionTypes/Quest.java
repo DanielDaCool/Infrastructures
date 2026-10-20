@@ -13,6 +13,8 @@ import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Transform3d;
 import edu.wpi.first.math.numbers.N1;
 import edu.wpi.first.math.numbers.N3;
+import edu.wpi.first.networktables.GenericSubscriber;
+import edu.wpi.first.networktables.NetworkTableInstance;
 import edu.wpi.first.util.sendable.SendableBuilder;
 import edu.wpi.first.wpilibj.Alert;
 import edu.wpi.first.wpilibj.Alert.AlertType;
@@ -78,9 +80,18 @@ public class Quest extends BaseVisionSource {
 
     /** Battery percent at or below which {@link #lowBatteryAlert} is raised. */
     private static final int LOW_BATTERY_PERCENT = 20;
-    /** Raised once the battery is low, and stays on for the rest of the run. */
+    /**
+     * On while the Quest is connected, has sent its device data, and its battery is at or
+     * below {@link #LOW_BATTERY_PERCENT}. Updated every loop, so it clears after a battery swap.
+     */
     private final Alert lowBatteryAlert = new Alert(
             name + " battery is at or below " + LOW_BATTERY_PERCENT + " percent", AlertType.kWarning);
+    /**
+     * QuestNav's device data topic, only to see whether it has ever been received. QuestNav's
+     * battery percent reads 0 (not empty) until then.
+     */
+    private final GenericSubscriber deviceDataSubscriber = NetworkTableInstance.getDefault()
+            .getTable("QuestNav").getTopic("deviceData").genericSubscribe();
 
     /**
      * @param config The Quest's config. offset is robot center to headset:
@@ -145,7 +156,7 @@ public class Quest extends BaseVisionSource {
      * every usable one into a measurement (see {@link #toMeasurements}). {@link #pose} is the
      * newest of them. Also updates the anchor state: marks the Quest settled once a frame from
      * after the settle time arrives, and marks it disconnected (so it gets re-anchored) if the
-     * connection drops.
+     * connection drops. Then updates the battery alert.
      */
     @Override
     public void periodic() {
@@ -177,11 +188,8 @@ public class Quest extends BaseVisionSource {
             hasUpdatedQuestIntialPose = false;
         }
 
-        // The battery percent is empty until the Quest reports it; that isn't a low battery.
-        OptionalInt battery = questNav.getBatteryPercent();
-        if (isConnected() && battery.isPresent() && battery.getAsInt() <= LOW_BATTERY_PERCENT) {
-            lowBatteryAlert.set(true);
-        }
+        lowBatteryAlert.set(isBatteryLow(isConnected(), deviceDataSubscriber.getLastChange() != 0,
+                questNav.getBatteryPercent()));
     }
 
     /**
@@ -211,6 +219,18 @@ public class Quest extends BaseVisionSource {
                     VecBuilder.fill(std.get(0, 0), std.get(1, 0), Double.POSITIVE_INFINITY)));
         }
         return result;
+    }
+
+    /**
+     * @param connected         Whether the Quest is connected.
+     * @param deviceDataArrived Whether QuestNav's device data has been received at least once.
+     *                          Before that QuestNav reports a battery of 0.
+     * @param battery           QuestNav's battery percent.
+     * @return Whether the low battery alert should be on.
+     */
+    static boolean isBatteryLow(boolean connected, boolean deviceDataArrived, OptionalInt battery) {
+        return connected && deviceDataArrived && battery.isPresent()
+                && battery.getAsInt() <= LOW_BATTERY_PERCENT;
     }
 
     /**
