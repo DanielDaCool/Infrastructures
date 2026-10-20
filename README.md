@@ -170,6 +170,9 @@ Each `calculate`:
 6. **Store.** The states are read back into robot speeds, the discretize is undone (the chord
    of one loop's arc, over dt) and they are turned field-relative; the next loop starts there.
 
+A heading that is NaN or infinite (gyro glitch) is replaced by the last heading before the
+limiter runs. A gyro that stays NaN freezes the heading.
+
 The stored speeds are field-relative on purpose: kept robot-relative, a robot turning while
 driving would see its last speeds turn with it every loop, and the limiter could not keep up.
 

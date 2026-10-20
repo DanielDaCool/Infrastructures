@@ -32,6 +32,9 @@ import edu.wpi.first.math.kinematics.SwerveModuleState;
  * turned by omega * dt / 2. They are not kept robot-relative: then a robot turning while driving
  * would see its last speeds turn with it every loop, and the limiter could not keep up with a
  * fast turn.
+ *
+ * <p>A heading that is NaN or infinite (gyro glitch) is replaced by the last heading. A gyro that
+ * stays NaN freezes the heading.
  */
 public class AccelLimitedSwerve {
 
@@ -54,17 +57,25 @@ public class AccelLimitedSwerve {
      * desaturated and discretized. Call once per loop.
      *
      * @param wantedFieldRel wanted field-relative speeds [m/s, rad/s]
-     * @param heading        robot heading (gyro angle), CCW positive
+     * @param heading        robot heading (gyro angle), CCW positive. NaN or infinite uses the
+     *                       last heading
      * @return module states to send. When the robot should stand, every module gets speed 0 and
      *         keeps its last angle
      */
     public SwerveModuleState[] calculate(ChassisSpeeds wantedFieldRel, Rotation2d heading) {
+        heading = finiteOrLast(heading);
         return send(limiter.calculate(wantedFieldRel, sentSpeedsFieldRel, heading), heading);
     }
 
     /** Same as {@link #calculate(ChassisSpeeds, Rotation2d)} with a given dt [s], for tests. */
     SwerveModuleState[] calculate(ChassisSpeeds wantedFieldRel, Rotation2d heading, double dt) {
+        heading = finiteOrLast(heading);
         return send(SwerveAccelerationLimiter.calculate(wantedFieldRel, sentSpeedsFieldRel, heading, dt), heading);
+    }
+
+    /** The heading, or the last heading when it is NaN or infinite (gyro glitch). */
+    private Rotation2d finiteOrLast(Rotation2d heading) {
+        return Double.isFinite(heading.getCos()) && Double.isFinite(heading.getSin()) ? heading : lastHeading;
     }
 
     private SwerveModuleState[] send(ChassisSpeeds limitedFieldRel, Rotation2d heading) {
@@ -132,6 +143,8 @@ public class AccelLimitedSwerve {
      * @param newYaw the yaw after the reset
      */
     public void onYawReset(Rotation2d oldYaw, Rotation2d newYaw) {
+        oldYaw = finiteOrLast(oldYaw);
+        newYaw = finiteOrLast(newYaw);
         sentSpeedsFieldRel = ChassisSpeeds.fromRobotRelativeSpeeds(
                 ChassisSpeeds.fromFieldRelativeSpeeds(sentSpeedsFieldRel, oldYaw), newYaw);
         lastHeading = newYaw;
