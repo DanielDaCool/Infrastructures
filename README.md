@@ -3,8 +3,10 @@
 Swerve kinematics and a velocity-setpoint acceleration limiter for a swerve robot.
 
 The code lives in [`Infrastructures/src/main/java/frc/robot/Kinematics`](Infrastructures/src/main/java/frc/robot/Kinematics).
-It is kept in sync with the kinematics and `SwerveAccelerationLimiter` in DemaciaCode, with no
-`Chassis`, `Log` or `ElasticGenerator` dependencies, so it works in any project.
+It started from the kinematics and `SwerveAccelerationLimiter` in DemaciaCode
+(`kinematics-acceleration-limit-testing` a54f5a4), with no `Chassis`, `Log` or
+`ElasticGenerator` dependencies, so it works in any project. The kinematics math was then fixed
+here and no longer matches DemaciaCode (see [Differences from DemaciaCode](#differences-from-demaciacode)).
 
 ## Contents
 
@@ -178,6 +180,108 @@ driving would see its last speeds turn with it every loop, and the limiter could
 
 `DemaciaKinematics` has no lead-angle term (see its class javadoc); `AccelLimitedSwerve`
 discretizes instead.
+
+## Using `DemaciaKinematics` on its own
+
+Without the limiter (e.g. robot-relative driving or a path follower), discretize first, as
+WPILib does:
+
+```java
+ChassisSpeeds discrete = ChassisSpeeds.discretize(robotRelSpeeds, KinematicsConstants.CYCLE_DT);
+SwerveModuleState[] states = kinematics.toSwerveModuleStates(discrete); // desaturated
+setModuleStates(states);
+```
+
+Then don't set `limiterUsedLastLoop`, so the next limited command re-syncs.
+
+Measured robot speeds:
+
+```java
+ChassisSpeeds robotRel = kinematics.toChassisSpeeds(getModuleStates(), getGyroRateRadPerSec());
+// or, without a gyro rate, omega from the modules too (least squares):
+ChassisSpeeds robotRelNoGyro = kinematics.toChassisSpeeds(getModuleStates());
+```
+
+## API
+
+| Class | Method | What it does |
+|---|---|---|
+| `AccelLimitedSwerve` | `AccelLimitedSwerve(DemaciaKinematics)` | One per drivetrain. |
+| | `calculate(wantedFieldRel, heading)` | Limit, desaturate, discretize; returns the module states. Once per loop. |
+| | `resetTo(measuredFieldRel[, measuredStates])` | Start the next loop from measured speeds (and keep those module angles while standing). |
+| | `onYawReset(oldYaw, newYaw)` | Re-express the stored speeds after the gyro yaw is set. |
+| | `getSentSpeedsFieldRel()` / `getSentSpeedsRobotRel()` | What was sent last loop (mean velocity). |
+| `DemaciaKinematics` | `DemaciaKinematics(Translation2d...)` | Module locations, robot frame, module order. |
+| | `toSwerveModuleStates(robotRelSpeeds)` | Module states, desaturated to `MAX_ALLOWED_MODULE_VELOCITY`. No discretize. |
+| | `toChassisSpeeds(states, omegaFromGyro)` | Robot speeds from module states, omega from the gyro. |
+| | `toChassisSpeeds(states)` | Same, omega from the modules (least squares). |
+| | `getModuleCount()` | Number of modules. |
+| `SwerveAccelerationLimiter` | `calculate(wanted, lastCommanded, heading)` | The limiter alone (field-relative, dt from the clock). `AccelLimitedSwerve` calls it; use it directly only if you keep `lastCommanded` yourself. |
+
+## Tuning the limits
+
+All in `SwerveAccelerationLimiter` (m/s²) and `KinematicsConstants`. Start low and raise them.
+
+| Constant | What it limits | How to find it |
+|---|---|---|
+| `MAX_SKID_ACCEL` | Total velocity change (traction) | Full stick from rest on carpet, raise until the wheels slip (logged module speed jumps above the robot speed), then back off ~20%. About μ·g; 8 is a safe start for most treads. |
+| `MAX_FORWARD_ACCEL` | Speed-up at rest | Highest acceleration the drive motors give at low speed without browning out; the limit falls linearly to 0 at `FREE_SPEED`. |
+| `FREE_SPEED` | Where the motors run out of torque | Free speed of the drive: motor free rpm / gear ratio · wheel circumference. |
+| `MAX_TILT_ACCEL_FRONT` / `_SIDE` | Tipping forward/back and sideways | Raise until the robot lifts a wheel when stopping hard / swerving at speed, then back off. Lower with a high center of mass or an extended mechanism. |
+| `MAX_ALLOWED_MODULE_VELOCITY` | Desaturation | The fastest a module can really drive (a bit under the free speed). |
+| `MIN_VELOCITY` | Below this the robot stands | Just above stick noise after the controller deadband. |
+| `CYCLE_DT` | Discretize time | The robot loop period (0.02 s). |
+
+## Differences from DemaciaCode
+
+The DemaciaCode versions had sign and math bugs (DemaciaCode issues #22–#25). Here:
+
+- **Inverse kinematics** follows WPILib: a module at (x, y) moves at (vx − ω·y, vy + ω·x).
+  DemaciaCode has `−vy + ω·r·cos` (strafe mirrored, rotation non-rigid) on some branches and
+  `vy − ω·r·cos` (rotation reversed) on others.
+- **Forward kinematics** is the exact least-squares inverse; DemaciaCode added a rotation term
+  that used the wheel angle (wrong while rotating, and different depending on which modules are
+  flipped).
+- **No lead-angle term** (`ω·0.02` added to each module angle); `AccelLimitedSwerve`
+  discretizes the whole command instead.
+- **Desaturation** no longer skips when one module is at 0.
+- **The limiter loop** (DemaciaCode keeps it in `Chassis`) is `AccelLimitedSwerve` here: the
+  stored speeds are read back with the same convention as the command (no mirrored vy), a gyro
+  reset re-expresses them, a re-sync keeps the module angles, and a stop holds the last angles.
+- Removed: `ChassisAccel`, `toSwerveModuleStatesWithAccel` and `Limits.limitVelocities` (unused).
+
+Copying code back to DemaciaCode means taking these fixes with it.
+
+## Tests
+
+```bash
+cd Infrastructures
+./gradlew test
+```
+
+| Test | Checks |
+|---|---|
+| `DemaciaKinematicsTest.moduleStatesMatchWpilib` | Module states equal WPILib's formula. |
+| `forwardIsTheInverseOfInverse`, `forwardIsTheInverseForAnOffCenterLayout` | Forward kinematics undoes the inverse, also with the modules not centered. |
+| `desaturatesWhenOneModuleIsAtZero` | Desaturation with a module at 0. |
+| `zeroSpeedsGiveZeroModules` | Zero speeds give zero modules. |
+| `AccelLimitedSwerveTest.reachesTheWantedSpeedFromRest` | Ramps up to the wanted speed. |
+| `convergesWhenTheRobotIsTurned`, `convergesWhileSpinning` | Reaches the field-relative target at any heading and while spinning. |
+| `yawResetDoesNotJump` | A gyro reset doesn't step the command. |
+| `stoppingKeepsTheModuleAngles` | A stop holds the module angles. |
+| `resetStartsFromTheMeasuredSpeeds` | `resetTo` starts from the measured speeds. |
+
+## Checking it on the robot
+
+Watch the commanded vs. measured speeds on the dashboard. From DemaciaCode issue #19:
+
+- Standing still 10 s: command stays 0, no creep.
+- Full stick from rest: smooth, no slip. Let go at full speed: stops without skid or tipping.
+- Full forward, then full backward; same for strafing left and right: no jump.
+- Full speed, snap the stick 90°: the robot curves into the new direction.
+- Drive while spinning: the path is the same as without spinning (checks the discretize).
+- Switch between limited and unlimited driving while moving, disable and enable while moving,
+  reset the gyro while moving: no jump.
 
 ## Troubleshooting
 
