@@ -78,6 +78,12 @@ public class DemaciaPoseEstimator {
     /** Unit vector (gyro frame) the collision pushed the robot toward, taken from its first sample. */
     private Translation2d hitDirection = Translation2d.kZero;
     private boolean colliding = false;
+    /**
+     * FPGA time of the last {@link #resetPose}. Samples measured before it are not applied:
+     * their motion happened before the reset pose, and after a gyro reset their gyro reading
+     * can still be the old one (a sample already on its way from the odometry thread).
+     */
+    private double resetTimestampSeconds = Double.NEGATIVE_INFINITY;
 
     /** Per-axis (x meters, y meters, theta radians) squared state std devs, used as the "q" term in the per-axis gain formula below. */
     private final double[] stateVarianceByAxis = new double[3];
@@ -168,6 +174,11 @@ public class DemaciaPoseEstimator {
         colliding = now - lastHitTime < COLLISION_HOLD_SECONDS;
 
         for (OdometryData sample : samples) {
+            if (sample.timestampSeconds() < resetTimestampSeconds) {
+                // Measured before the last reset: only move the module baseline.
+                odometry.setModulePositions(sample.swerveModules());
+                continue;
+            }
             double timestamp = sample.timestampSeconds();
             if (!updates.isEmpty() && timestamp <= updates.lastKey()) {
                 timestamp = updates.lastKey() + MIN_SAMPLE_SPACING_SECONDS;
@@ -353,6 +364,7 @@ public class DemaciaPoseEstimator {
         latestPose = pose;
         lastHitTime = Double.NEGATIVE_INFINITY;
         colliding = false;
+        resetTimestampSeconds = Timer.getFPGATimestamp();
     }
 
 

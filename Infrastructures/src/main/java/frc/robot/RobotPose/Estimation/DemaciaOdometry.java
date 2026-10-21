@@ -147,6 +147,21 @@ public class DemaciaOdometry {
     }
 
     /**
+     * Takes these module readings as the baseline for the next update without moving the pose,
+     * e.g. for a sample measured before a reset (its motion happened before the reset pose).
+     *
+     * @param modulePositions Module readings, same order as the module locations.
+     */
+    public void setModulePositions(SwerveModulePosition[] modulePositions) {
+        if (lastModulePositions == null) {
+            lastModulePositions = new SwerveModulePosition[modulePositions.length];
+        }
+        for (int i = 0; i < modulePositions.length; i++) {
+            lastModulePositions[i] = modulePositions[i].copy();
+        }
+    }
+
+    /**
      * Resets the pose. The gyro reading at the moment of the reset is needed so the new
      * heading is kept on the next update instead of being replaced by the raw gyro.
      *
