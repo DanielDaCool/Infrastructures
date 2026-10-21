@@ -98,6 +98,18 @@ integration, hand derivations).
   "tilted up = negative pitch". That would change the meaning of existing 2D configs.
 - **Decision (owner):** keep "positive pitch = up" for the 2D Limelight and document it as an
   explicit exception to the frame contract. No behaviour change; C2's fix uses the existing sign.
+- **Docs check (2026-10-21):**
+  - Limelight "Estimating Distance" tutorial (current docs): `d = (h2 - h1) / tan(a1 + a2)` with
+    `a2 = ty` and the sample `limelightMountAngleDegrees = 25.0` for a camera looking up at a
+    target above it, so the Limelight convention for the 2D mount angle is **positive = tilted
+    up**. That is what this class uses.
+  - WPILib coordinate system (current docs): NWU axes (x forward, y left, z up), rotations CCW
+    positive looking down each positive axis. A rotation about +y (left) with that rule turns +x
+    toward −z, so **positive WPILib pitch = tilted down**. Executed with robotpy-wpimath
+    2026.2.2: `Translation3d(1,0,0).rotateBy(Rotation3d(0, 20°, 0))` = (0.940, 0, −0.342).
+  - So the two documents use opposite signs, and the 2D class follows Limelight's. The decision
+    stands; the javadoc and README must keep saying that the 2D Limelight pitch is the one
+    exception, entered as "positive = up", while the 3D Limelight and Quest use WPILib pitch.
 
 ### E1 – collision handling scales instead of removing the into-hit part (Medium/Low)
 
@@ -133,7 +145,10 @@ integration, hand derivations).
   up when the newest sample is the 1 µs-spaced duplicate, and has an aΔ²/2 error).
   Either fix changes the expected value of the tracked test
   `visionSlightlyNewerThanTheLatestSampleIsUsed`, which asserts the biased behaviour.
-- **Decision (owner):** not fixed for now; it stays documented here.
+- **Decision (owner, confirmed 2026-10-21):** kept as is. The bias is small (mean 2–7 mm, peaks
+  1–2.4 cm at 4 m/s), only Quest frames hit it, and the test
+  `visionSlightlyNewerThanTheLatestSampleIsUsed` documents the current behaviour. Revisit with
+  option A if the Quest std dev is lowered enough for a 1–2 cm bias to matter.
 
 ### K1 – no discretize in `AccelLimitedSwerve` (Medium)
 
@@ -177,6 +192,8 @@ which also flips roll and yaw and keeps pitch. This came from handoff item 1 (De
   same contradiction with no official answer.
 - Both reviewers lean (60–65%) toward "no mirror", but the documentation is not decisive, so the
   code was **not** changed. The pitch sign Limelight expects is also unsettled.
+- **Status (2026-10-21):** the owner will run the robot check below and set `sourceFrame()` from
+  its result.
 - Robot check: mount a camera off-center (y ≠ 0) and yawed, put a tag at a known spot, and see
   which convention makes the MegaTag2 pose stop moving when the robot turns in place. Reading
   `camerapose_robotspace` back only echoes the input.
@@ -266,9 +283,29 @@ Final checks:
 Not tested on a robot: the 2D tx/ty pinhole model, the collision behaviour, K1 on the real
 drivetrain.
 
+## E2. Later fix (2026-10-21)
+
+| ID | Severity | Branch | Commit | Message |
+|---|---|---|---|---|
+| R1 | Medium | RobotPose | `1f1917f` | skip odometry samples measured before a pose or gyro reset |
+
+- **Where:** `DemaciaPoseEstimator.addOdometryData` / `resetPose`, `DemaciaOdometry.setModulePositions`.
+- **Why it was wrong:** with `PhoenixOdometryThread`, a sample the gyro measured before
+  `setYaw`/`resetPose` can still be on its way (not yet in the thread's queue) when the reset
+  runs. It was applied after the reset with the old gyro reading, so the heading jumped by the
+  old-to-new difference for one sample (180° after "reset gyro 180") and its motion was put on
+  top of the reset pose.
+- **Fix:** the estimator stores the FPGA time of the reset and skips samples measured before it,
+  only moving the module baseline so their motion isn't counted later.
+- **Evidence:** executed model of the heading update: before 0°, 180°, 180° after a reset to
+  180°; after the fix 180°, 180°. Not compiled (the environment couldn't reach WPILib/CTRE
+  maven); no committed test (new tests stay untracked). Run `./gradlew build test`.
+
 ## F. Remaining risks
 
-- U1 is open: the 3D Limelight pose sent may have the wrong side/roll/yaw (and possibly pitch) sign.
+- U1 is open (owner will check on the robot): the 3D Limelight pose sent may have the wrong side/roll/yaw (and possibly pitch) sign.
+- E2 is kept by decision: Quest frames ahead of odometry keep a small v·Δ bias.
+- R1 (`1f1917f`) has not been compiled yet.
 - C3 changes what a 2D config's pitch means; any existing robot config must flip its 2D pitch sign.
 - C2 assumes the pinhole tx/ty model and the crosshair at the principal point.
 - E1 still depends on one accelerometer read per loop for the hit direction.
