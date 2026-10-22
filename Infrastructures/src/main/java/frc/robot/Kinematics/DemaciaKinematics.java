@@ -35,7 +35,8 @@ import static frc.robot.Kinematics.KinematicsConstants.*;
  * (cosine scaling) instead of pushing the robot off the path;</li>
  * <li>a standing robot keeps its module angles (no snap to 0).</li>
  * </ul>
- * Optional: {@link #getDriveAccelerations()} for the drive motor's acceleration feed-forward.
+ * Optional: {@link #getDriveAccelerations()} and {@link #getSteerVelocities()} for the drive and steer
+ * feed-forwards.
  *
  * <p>Stateful: call one of the {@code toSwerveModuleStates} methods once per loop.
  * {@link #toWpilibModuleStates} is the plain (stateless) WPILib inverse kinematics.
@@ -48,6 +49,7 @@ public class DemaciaKinematics {
     private Rotation2d[] lastAngles; // angles sent last loop
     private double[] lastVx, lastVy; // module velocity vectors sent last loop [m/s]
     private double[] driveAccelerations; // [m/s^2]
+    private double[] steerVelocities; // [rad/s]
     private Translation2d center; // average of the module positions
     private double sumSquaredDistance; // sum of the squared module distances from the center
 
@@ -59,6 +61,7 @@ public class DemaciaKinematics {
         lastVx = new double[n];
         lastVy = new double[n];
         driveAccelerations = new double[n];
+        steerVelocities = new double[n];
 
         double sumX = 0, sumY = 0;
         for (Translation2d position : modulePositionOnTheRobot) {
@@ -169,6 +172,20 @@ public class DemaciaKinematics {
         return driveAccelerations.clone();
     }
 
+    /**
+     * The steer velocity of each module for the states returned last: the change of the commanded
+     * angle over one loop, clamped to {@link KinematicsConstants#MAX_STEER_RATE}. Send it as the steer
+     * motor's velocity feed-forward when the steer runs {@code PositionVoltage} (Phoenix 6
+     * {@code PositionVoltage.withVelocity}, in rotations/s, or {@code kV * velocity} volts); with
+     * MotionMagic don't use it. Only with {@link #toSwerveModuleStates(ChassisSpeeds, SwerveModuleState[])}.
+     *
+     * @return steer velocities [rad/s], counter-clockwise positive, in the same order as the module
+     *         positions
+     */
+    public double[] getSteerVelocities() {
+        return steerVelocities.clone();
+    }
+
     /** Desaturate, discretize over the loop and the latency, inverse kinematics; stand still when slow. */
     private SwerveModuleState[] plan(ChassisSpeeds wantedSpeeds) {
         // the chassis sends omega clockwise-positive; the math below is WPILib (counter-clockwise)
@@ -186,7 +203,7 @@ public class DemaciaKinematics {
         return toWpilibModuleStates(ChassisSpeeds.discretize(desaturated, CYCLE_DT + 2 * LATENCY));
     }
 
-    /** Keeps what is sent for the next loop and computes the drive accelerations. */
+    /** Keeps what is sent for the next loop and computes the feed-forwards. */
     private SwerveModuleState[] send(SwerveModuleState[] states) {
         for (int i = 0; i < states.length; i++) {
             double cos = states[i].angle.getCos();
@@ -197,6 +214,8 @@ public class DemaciaKinematics {
             driveAccelerations[i] = MathUtil.clamp(acceleration, -MAX_DRIVE_ACCEL, MAX_DRIVE_ACCEL);
             lastVx[i] = speed * cos;
             lastVy[i] = speed * sin;
+            steerVelocities[i] = MathUtil.clamp(states[i].angle.minus(lastAngles[i]).getRadians() / CYCLE_DT,
+                    -MAX_STEER_RATE, MAX_STEER_RATE);
             lastAngles[i] = states[i].angle;
         }
         return states;

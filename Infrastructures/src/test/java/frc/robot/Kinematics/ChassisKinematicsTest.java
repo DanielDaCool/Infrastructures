@@ -102,4 +102,16 @@ class ChassisKinematicsTest {
                 .speedMetersPerSecond, EPSILON);
         assertEquals(0, kinematics.getDriveAccelerations()[0], EPSILON);
     }
+
+    @Test
+    void steerVelocitiesFromTheCommands() {
+        kinematics.toSwerveModuleStates(new ChassisSpeeds(1, 0, 0), measured(0));
+        // 0.1 rad in one loop = 5 rad/s
+        kinematics.toSwerveModuleStates(new ChassisSpeeds(Math.cos(0.1), Math.sin(0.1), 0), measured(0));
+        assertEquals(0.1 / CYCLE_DT, kinematics.getSteerVelocities()[0], 1e-6);
+        kinematics.toSwerveModuleStates(new ChassisSpeeds(0, 1, 0), measured(0));
+        assertEquals(MAX_STEER_RATE, kinematics.getSteerVelocities()[0], EPSILON); // clamped
+        kinematics.toSwerveModuleStates(new ChassisSpeeds(), measured(90));
+        assertEquals(0, kinematics.getSteerVelocities()[0], EPSILON); // standing holds the angle
+    }
 }

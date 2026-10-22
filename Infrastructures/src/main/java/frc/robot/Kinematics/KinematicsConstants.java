@@ -16,5 +16,6 @@ public class KinematicsConstants {
     // Measure on the robot [s]
     public static final double LATENCY = 0.035;
     public static final double MAX_DRIVE_ACCEL = 20.0; // clamp of the drive acceleration feed-forward [m/s^2]
+    public static final double MAX_STEER_RATE = 12.0; // clamp of the steer velocity feed-forward: free steer speed [rad/s]
 
 }
