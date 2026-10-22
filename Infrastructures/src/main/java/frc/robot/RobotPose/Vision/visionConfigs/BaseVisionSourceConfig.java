@@ -60,7 +60,11 @@ public abstract class BaseVisionSourceConfig {
      * (meters, radians), in the WPILib robot frame (x forward, y left, z up, CCW positive).
      */
     public Transform3d offset;
-    /** Base measurement std devs (x meters, y meters, theta radians). */
+    /**
+     * Base measurement std devs (x meters, y meters, theta radians). For the Limelights the x
+     * value is the smallest x/y std dev (it grows with the tag distance, tested with 0.02); for
+     * the Quest it is the smallest std dev of its thinned frames (see {@link QuestConfig}).
+     */
     public Matrix<N3, N1> std;
     public VisionSourceType visionSourceType = VisionSourceType.Limelight2d;
 

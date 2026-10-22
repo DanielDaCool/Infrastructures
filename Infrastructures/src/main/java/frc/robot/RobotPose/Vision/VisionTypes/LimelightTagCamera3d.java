@@ -20,6 +20,13 @@ import frc.robot.RobotPose.Vision.visionConfigs.LimelightTagCamera3dConfig;
  * sees, using the robot heading we send it each loop. Only x and y are used; MegaTag2's yaw is
  * just the heading we sent.
  *
+ * <p>A frame is not used if the robot turned faster than {@link #MAX_YAW_RATE_RADIANS_PER_SECOND}
+ * in the {@link #YAW_RATE_WINDOW_SECONDS} before it, or if the heading the Limelight used differs
+ * from our heading at the frame time by more than {@link #MAX_HEADING_ERROR_RADIANS} (the
+ * Limelight solved it with an old heading: after a gyro reset, while spinning, or with a wrong
+ * camera yaw). The x/y std dev grows with the tag distance and shrinks with the tag count (see
+ * {@link BaseVisionSource#distanceStdDev}); the config x std dev is its minimum.
+ *
  * <p>The camera's position on the robot (the config offset, converted to the Limelight's
  * frame) is sent to the Limelight once, at construction.
  */
@@ -38,6 +45,18 @@ public class LimelightTagCamera3d extends BaseVisionSource {
 
     /** Disconnected if the heartbeat hasn't changed for this long. */
     private static final double CAMERA_STALE_TIMEOUT_SECONDS = 0.5;
+
+    /**
+     * Frames taken while the robot turned faster than this (rad/s) are not used: the heading
+     * the Limelight used is up to one loop old. Tune by logging the error against the yaw rate.
+     */
+    public static final double MAX_YAW_RATE_RADIANS_PER_SECOND = 2.0;
+    /** The fastest yaw rate is taken over this long before the frame (seconds). */
+    public static final double YAW_RATE_WINDOW_SECONDS = 0.1;
+    /** Frames whose heading differs from ours at the frame time by more than this are not used. */
+    public static final double MAX_HEADING_ERROR_RADIANS = Math.toRadians(3);
+    /** Frames rejected by the yaw rate or heading check since startup (for the dashboard). */
+    private int rejectedFrames;
 
     /**
      * Sends the config offset to the Limelight as its camera pose in robot space (meters,
@@ -102,8 +121,9 @@ public class LimelightTagCamera3d extends BaseVisionSource {
             return List.of();
         }
         // MegaTag2's yaw is the heading we sent with SetRobotOrientation, not a measurement.
+        double xyStd = distanceStdDev(std.get(0, 0), poseEstimate.avgTagDist, poseEstimate.tagCount);
         return List.of(new TimestampedVisionMeasurement(poseEstimate.pose, poseEstimate.timestampSeconds,
-                VecBuilder.fill(std.get(0, 0), std.get(1, 0), Double.POSITIVE_INFINITY)));
+                VecBuilder.fill(xyStd, xyStd, Double.POSITIVE_INFINITY)));
     }
 
     /**
@@ -129,7 +149,25 @@ public class LimelightTagCamera3d extends BaseVisionSource {
         if (hasNewPose) {
             pose = poseEstimate.pose;
             lastReportedTimestampSeconds = poseEstimate.timestampSeconds;
+            RobotPose robotPose = RobotPose.getInstance();
+            if (!isUsable(pose.getRotation(),
+                    robotPose.getEstimatedPoseAt(poseEstimate.timestampSeconds).getRotation(),
+                    robotPose.getPeakYawRate(poseEstimate.timestampSeconds, YAW_RATE_WINDOW_SECONDS))) {
+                hasNewPose = false;
+                rejectedFrames++;
+            }
         }
+    }
+
+    /**
+     * @param megaTagHeading     The heading in the MegaTag2 pose (the one the Limelight used).
+     * @param headingAtFrame     Our estimated heading at the frame time.
+     * @param peakYawRate        The fastest yaw rate before the frame (rad/s).
+     * @return Whether a MegaTag2 frame can be used (see the class docs).
+     */
+    static boolean isUsable(Rotation2d megaTagHeading, Rotation2d headingAtFrame, double peakYawRate) {
+        return peakYawRate <= MAX_YAW_RATE_RADIANS_PER_SECOND
+                && Math.abs(megaTagHeading.minus(headingAtFrame).getRadians()) <= MAX_HEADING_ERROR_RADIANS;
     }
 
     @Override
@@ -138,5 +176,6 @@ public class LimelightTagCamera3d extends BaseVisionSource {
         builder.addBooleanProperty("is see", () -> shouldUpdate(), null);
         builder.addIntegerProperty("tag count", () -> poseEstimate == null ? 0 : poseEstimate.tagCount, null);
         builder.addDoubleProperty("avg tag distance m", () -> poseEstimate == null ? 0 : poseEstimate.avgTagDist, null);
+        builder.addIntegerProperty("frames rejected (spin or heading)", () -> rejectedFrames, null);
     }
 }
