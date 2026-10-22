@@ -4,6 +4,7 @@
 
 package frc.robot.Kinematics;
 
+import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Translation2d;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
@@ -116,6 +117,141 @@ public class DemaciaKinematics {
         }
 
         return factorModuleVelocities(swerveStates);
+    }
+
+    private static final double REVERSE_BAND = Math.toRadians(10); // hysteresis around the 90 degree reverse limit
+    private static final double MIN_REVERSE_SPEED = 1e-3; // a slower module has no direction to decide with [m/s]
+
+    /**
+     * Module commands for robot speeds that are already discretized: the module states
+     * (desaturated, as {@link #toSwerveModuleStates}), then per module
+     * <ol>
+     * <li>the reverse decision against the previous commanded angle, with a 10 degree
+     * hysteresis (below);</li>
+     * <li>cosine scaling of the speed against the measured angle advanced by its latency;</li>
+     * <li>the drive acceleration feed-forward (change of the planned speed over dt, clamped) and,
+     * when enabled, the steer velocity feed-forward (change of the commanded angle over dt,
+     * clamped).</li>
+     * </ol>
+     * Stateless: the state is in {@code previous} and {@code reversed}, which the caller keeps
+     * (see {@link AccelLimitedSwerve}).
+     *
+     * <p>Reverse decision: a module reverses (angle + 180 degrees, speed negated) when its target
+     * is more than 90 degrees from its previous commanded angle. A module within 10 degrees of
+     * that limit does not decide alone: the modules in the band take the majority decision, and
+     * on a tie each keeps its own previous reversed flag, so a robot driving with the modules
+     * near 90 degrees does not flip some wheels and not others. A module with no speed keeps its
+     * previous angle.
+     *
+     * <p>A NaN or infinite measured angle or steer velocity makes that module use its previous
+     * commanded angle as the measured angle and a steer velocity of 0, so no cosine scaling is
+     * done on garbage.
+     *
+     * @param discretizedRobotRel     robot-relative speeds, discretized by the caller
+     * @param measuredAngles          measured module angles
+     * @param measuredSteerVelocities measured steer velocities [rad/s]
+     * @param previous                the commands sent last loop; the speed and angle are the
+     *                                ones after reversing and scaling
+     * @param reversed                IN/OUT: whether each module was reversed last loop. Read for
+     *                                the tie break, and set to this loop's decision
+     * @param config                  latencies and limits
+     * @param dt                      loop time [s]
+     * @return the commands, in the order of the module positions
+     * @throws IllegalArgumentException when an array does not have one entry per module or dt is
+     *                                  not positive and finite
+     */
+    public ModuleCommand[] toModuleCommands(ChassisSpeeds discretizedRobotRel, Rotation2d[] measuredAngles,
+            double[] measuredSteerVelocities, ModuleCommand[] previous, boolean[] reversed,
+            ModuleCommandConfig config, double dt) {
+        int n = modulePositionOnTheRobot.length;
+        if (measuredAngles.length != n || measuredSteerVelocities.length != n || previous.length != n
+                || reversed.length != n) {
+            throw new IllegalArgumentException("every array needs one entry per module (" + n + ")");
+        }
+        if (!(dt > 0 && Double.isFinite(dt))) {
+            throw new IllegalArgumentException("dt must be finite and > 0: " + dt);
+        }
+        SwerveModuleState[] targets = toSwerveModuleStates(discretizedRobotRel);
+
+        // reverse decision against the previous commanded angle
+        boolean[] flip = new boolean[n];
+        boolean[] inBand = new boolean[n];
+        int bandCount = 0, bandFlips = 0;
+        for (int i = 0; i < n; i++) {
+            double off = Math.abs(targets[i].angle.minus(previous[i].angle()).getRadians());
+            flip[i] = off > Math.PI / 2;
+            inBand[i] = Math.abs(off - Math.PI / 2) <= REVERSE_BAND
+                    && Math.abs(targets[i].speedMetersPerSecond) > MIN_REVERSE_SPEED;
+            if (inBand[i]) {
+                bandCount++;
+                if (flip[i]) {
+                    bandFlips++;
+                }
+            }
+        }
+        for (int i = 0; i < n; i++) {
+            if (inBand[i]) {
+                flip[i] = 2 * bandFlips != bandCount ? 2 * bandFlips > bandCount : reversed[i];
+            }
+        }
+
+        ModuleCommand[] commands = new ModuleCommand[n];
+        for (int i = 0; i < n; i++) {
+            Rotation2d angle = targets[i].angle;
+            double speed = targets[i].speedMetersPerSecond;
+            if (Math.abs(speed) <= MIN_MODULE_VELOCITY) {
+                angle = previous[i].angle(); // no direction: keep the angle
+                flip[i] = reversed[i];
+                speed = 0;
+            } else if (flip[i]) {
+                angle = new Rotation2d(-angle.getCos(), -angle.getSin());
+                speed = -speed;
+            }
+            reversed[i] = flip[i];
+
+            // cosine scaling against the measured angle advanced by its latency
+            Rotation2d measured = measuredAngles[i];
+            double steerVelocity = measuredSteerVelocities[i];
+            Rotation2d advanced;
+            if (measured != null && Double.isFinite(measured.getCos()) && Double.isFinite(measured.getSin())
+                    && Double.isFinite(steerVelocity)) {
+                advanced = measured.plus(new Rotation2d(steerVelocity * config.measuredAngleLatencySeconds()));
+            } else {
+                advanced = previous[i].angle();
+            }
+            speed *= Math.max(0, angle.minus(advanced).getCos());
+
+            double maxAccel = config.maxDriveAccelMetersPerSecondSquared();
+            double acceleration = MathUtil.clamp((speed - previous[i].speedMetersPerSecond()) / dt, -maxAccel,
+                    maxAccel);
+            double steerFeedforward = 0;
+            if (config.steerVelocityFeedforward()) {
+                double maxRate = config.maxSteerRateRadiansPerSecond();
+                steerFeedforward = MathUtil.clamp(angle.minus(previous[i].angle()).getRadians() / dt, -maxRate,
+                        maxRate);
+            }
+            commands[i] = new ModuleCommand(angle, speed, acceleration, steerFeedforward);
+        }
+        return commands;
+    }
+
+    /**
+     * Commands for a robot that should stand: every module keeps its previous angle, speed 0, and
+     * the drive acceleration feed-forward brakes from the previous speed (clamped).
+     *
+     * @param previous the commands sent last loop
+     * @param config   limits
+     * @param dt       loop time [s]
+     */
+    public static ModuleCommand[] toStandingCommands(ModuleCommand[] previous, ModuleCommandConfig config,
+            double dt) {
+        ModuleCommand[] commands = new ModuleCommand[previous.length];
+        double maxAccel = config.maxDriveAccelMetersPerSecondSquared();
+        for (int i = 0; i < commands.length; i++) {
+            commands[i] = new ModuleCommand(previous[i].angle(), 0,
+                    MathUtil.clamp(-previous[i].speedMetersPerSecond() / dt, -maxAccel, maxAccel), 0);
+        }
+        return commands;
     }
 
     private SwerveModuleState[] factorModuleVelocities(SwerveModuleState[] swerveStates) {
