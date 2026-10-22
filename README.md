@@ -56,12 +56,51 @@ rest, a stick snapped faster than the steer) doesn't push the robot off the path
 `SwerveModule.setState` stays as it is (it won't reverse the state again, the state is already
 within 90° of the module).
 
-**Optional, the drive acceleration feed-forward:** `demaciaKinematics.getDriveAccelerations()`
-after the call above gives each module's planned acceleration [m/s²]. Sending it to the drive motor
-(Phoenix 6 `VelocityVoltage.withAcceleration`, in rotations/s², or `kA · a`) makes the drive
-follow speed changes without lag. It needs a small change in `SwerveModule` (an acceleration
-argument to `setDriveVelocity`), so it is not part of the drop-in. Use it only with the
-two-argument call.
+**Recommended, the feed-forwards (a few lines in `SwerveModule` and `Chassis`):** after the
+two-argument call, `getDriveAccelerations()` [m/s²] and `getSteerVelocities()` [rad/s] give each
+module's planned drive acceleration and steer velocity. The motor classes already take them
+(`setVelocityWithAcceleration` uses the drive's kA, `setPositionVoltage(position, feedForward)`
+takes volts). In `SwerveModule`, a copy of `setState` with two more arguments:
+
+```java
+public void setState(SwerveModuleState state, double acceleration, double steerVelocity) {
+    double diff = MathUtil.angleModulus(state.angle.getRadians() - steerMotor.getCurrentPosition());
+    // no reverse here: the two-argument toSwerveModuleStates already turned the state to within 90 degrees
+    steerMotor.setPositionVoltage(steerMotor.getCurrentPosition() + diff, STEER_KV * steerVelocity);
+    driveMotor.setVelocityWithAcceleration(
+        state.speedMetersPerSecond - steerMotor.getCurrentVelocity() * config.SteerVelToDriveVel,
+        () -> acceleration);
+}
+```
+
+(`STEER_KV`: the steer's kV in volts per rad/s; leave the steer feed-forward out with a MotionMagic
+steer.) In `Chassis.setVelocities`:
+
+```java
+SwerveModuleState[] states = demaciaKinematics.toSwerveModuleStates(speeds, getModuleStates());
+double[] accelerations = demaciaKinematics.getDriveAccelerations();
+double[] steerVelocities = demaciaKinematics.getSteerVelocities();
+for (int i = 0; i < states.length; i++) {
+    modules[i].setState(states[i], accelerations[i], steerVelocities[i]);
+}
+```
+
+Use the feed-forwards only with the two-argument call: if the module reversed the state again,
+their signs would be wrong.
+
+How much each step gives (simulation, not a robot: mean path error over the core scenarios, both
+steer types; heading disturbance in degrees):
+
+| What the chassis does | Path error | Heading |
+|---|---|---|
+| Old kinematics, WPILib style | 36.3 cm | 8.0° |
+| Import only | 23.8 cm | 8.2° |
+| + measured states + drive feed-forward | 14.8 cm | 8.0° |
+| + steer feed-forward (`PositionVoltage` steer, as in DemaciaCode) | 11.6 cm | 7.0° |
+
+With a `PositionVoltage` steer the steer feed-forward is worth as much as the drive feed-forward
+(path error 18.0 → 11.5 cm); with MotionMagic it does nothing. The latency compensation uses the
+commanded omega, not the gyro; in the simulation that is as good as the gyro rate (14.8 vs 15.3 cm).
 
 Set on the robot (`KinematicsConstants`):
 
@@ -70,6 +109,7 @@ Set on the robot (`KinematicsConstants`):
 | `LATENCY` | From the command to the wheels moving: command latency + gyro latency + half a loop | Drive a straight line while spinning at a constant rate and raise it until the path is straight | 0.035 s |
 | `MAX_ALLOWED_MODULE_VELOCITY` | Desaturation | The fastest a module really drives (DemaciaCode has 4) | 4.5 m/s |
 | `MAX_DRIVE_ACCEL` | Clamp of the acceleration feed-forward | The acceleration where the wheels still don't slip | 20 m/s² |
+| `MAX_STEER_RATE` | Clamp of the steer velocity feed-forward | Free steer speed: a large steer step, peak steer velocity | 12 rad/s |
 
 Check on the robot after the import change: the robot spins **the same way** as before for the
 same stick/trajectory (the omega sign is the one the old kinematics used on `main`; the
@@ -244,10 +284,12 @@ discretizes instead.
 |---|---|
 | Discretize over `CYCLE_DT + 2·LATENCY` (commanded omega) | The robot turns during the loop and the command arrives late; without it a robot that drives and spins curves off its path |
 | Reverse and cosine scale against the measured angle (two-argument call) | A module that still points the wrong way gets ~0 speed instead of scrubbing |
-| Drive acceleration feed-forward (`getDriveAccelerations`, optional) | The drive velocity loop lags the setpoint |
+| Drive acceleration feed-forward (`getDriveAccelerations`) | The drive velocity loop lags the setpoint |
+| Steer velocity feed-forward (`getSteerVelocities`, `PositionVoltage` steer) | A position-only steer lags a moving angle |
 | Hold the angles when standing | Modules don't snap to 0 when the robot stops |
 
-Evidence so far is from a simulation, not a robot. Tune on the robot. Known weak spot: a module
+The numbers are in [Quick start](#quick-start-the-demaciacode-chassis); they come from a simulation, not a robot. Tune on the robot. Also weaker than
+the full model: the heading while spinning fast (the reverse decision is against the measured angle, with no hysteresis). Known weak spot: a module
 with a locked steer makes the robot yaw (cosine scaling stops that wheel, the other three drive on).
 
 ## Using `DemaciaKinematics` on its own
@@ -284,6 +326,7 @@ ChassisSpeeds robotRelNoGyro = kinematics.toChassisSpeeds(getModuleStates());
 | | `toSwerveModuleStates(robotRelSpeeds)` | For the chassis (omega clockwise-positive): desaturate, discretize over `CYCLE_DT + 2·LATENCY`, inverse, desaturate; keeps the angles when standing. Once per loop. |
 | | `toSwerveModuleStates(robotRelSpeeds, measuredStates)` | Same, then reverse against the measured angle and cosine scale. |
 | | `getDriveAccelerations()` | Drive acceleration feed-forward of the last states [m/s²], clamped to `MAX_DRIVE_ACCEL`. |
+| | `getSteerVelocities()` | Steer velocity feed-forward of the last states [rad/s], clamped to `MAX_STEER_RATE`. |
 | | `toWpilibModuleStates(robotRelSpeeds)` | Plain WPILib inverse (omega CCW), desaturated to `MAX_ALLOWED_MODULE_VELOCITY`. No discretize, no state. |
 | | `toChassisSpeeds(states, omegaFromGyro)` | Robot speeds from module states, omega from the gyro. |
 | | `toChassisSpeeds(states)` | Same, omega from the modules (least squares). |
@@ -352,6 +395,7 @@ cd Infrastructures
 | `standingKeepsTheAngles` | A stop holds the module angles. |
 | `cosineScalingAgainstTheMeasuredAngle`, `reversesWhenTheMeasuredAngleIsMoreThan90DegreesAway` | Cosine scaling and the reverse decision against the measured angle. |
 | `driveAccelerationsFromTheCommands` | Acceleration feed-forward value, clamp, and a reversed wheel. |
+| `steerVelocitiesFromTheCommands` | Steer feed-forward value, clamp, and 0 when standing. |
 
 ## Checking it on the robot
 
