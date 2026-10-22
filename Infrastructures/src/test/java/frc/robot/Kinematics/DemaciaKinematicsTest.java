@@ -31,7 +31,7 @@ class DemaciaKinematicsTest {
     @Test
     void moduleStatesMatchWpilib() {
         for (ChassisSpeeds speeds : SPEEDS) {
-            SwerveModuleState[] states = kinematics.toSwerveModuleStates(speeds);
+            SwerveModuleState[] states = kinematics.toWpilibModuleStates(speeds);
             for (int i = 0; i < 4; i++) {
                 // WPILib: module at (x, y) moves at (vx - omega * y, vy + omega * x)
                 double vx = speeds.vxMetersPerSecond - speeds.omegaRadiansPerSecond * MODULE_LOCATIONS[i].getY();
@@ -46,7 +46,7 @@ class DemaciaKinematicsTest {
     @Test
     void forwardIsTheInverseOfInverse() {
         for (ChassisSpeeds speeds : SPEEDS) {
-            SwerveModuleState[] states = kinematics.toSwerveModuleStates(speeds);
+            SwerveModuleState[] states = kinematics.toWpilibModuleStates(speeds);
 
             ChassisSpeeds withGyro = kinematics.toChassisSpeeds(states, speeds.omegaRadiansPerSecond);
             assertEquals(speeds.vxMetersPerSecond, withGyro.vxMetersPerSecond, EPSILON, speeds + " vx");
@@ -68,7 +68,7 @@ class DemaciaKinematicsTest {
         DemaciaKinematics offCenterKinematics = new DemaciaKinematics(offCenter);
         ChassisSpeeds speeds = new ChassisSpeeds(1.5, -1, 3);
 
-        ChassisSpeeds result = offCenterKinematics.toChassisSpeeds(offCenterKinematics.toSwerveModuleStates(speeds));
+        ChassisSpeeds result = offCenterKinematics.toChassisSpeeds(offCenterKinematics.toWpilibModuleStates(speeds));
         assertEquals(1.5, result.vxMetersPerSecond, EPSILON);
         assertEquals(-1, result.vyMetersPerSecond, EPSILON);
         assertEquals(3, result.omegaRadiansPerSecond, EPSILON);
@@ -80,7 +80,7 @@ class DemaciaKinematicsTest {
         double omega = 20;
         Translation2d frontLeft = MODULE_LOCATIONS[0];
         ChassisSpeeds speeds = new ChassisSpeeds(omega * frontLeft.getY(), -omega * frontLeft.getX(), omega);
-        SwerveModuleState[] states = kinematics.toSwerveModuleStates(speeds);
+        SwerveModuleState[] states = kinematics.toWpilibModuleStates(speeds);
 
         assertEquals(0, states[0].speedMetersPerSecond, EPSILON);
         double max = 0;
@@ -97,7 +97,7 @@ class DemaciaKinematicsTest {
 
     @Test
     void zeroSpeedsGiveZeroModules() {
-        for (SwerveModuleState state : kinematics.toSwerveModuleStates(new ChassisSpeeds())) {
+        for (SwerveModuleState state : kinematics.toWpilibModuleStates(new ChassisSpeeds())) {
             assertEquals(0, state.speedMetersPerSecond, EPSILON);
             assertEquals(Rotation2d.kZero.getRadians(), state.angle.getRadians(), EPSILON);
         }

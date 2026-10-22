@@ -12,4 +12,9 @@ public class KinematicsConstants {
     
     public static final double MIN_VELOCITY = 0.01; // slower is 0
 
+    // from the command to the wheels moving: CAN/motor command latency + gyro latency + half a loop.
+    // Measure on the robot [s]
+    public static final double LATENCY = 0.035;
+    public static final double MAX_DRIVE_ACCEL = 20.0; // clamp of the drive acceleration feed-forward [m/s^2]
+
 }
