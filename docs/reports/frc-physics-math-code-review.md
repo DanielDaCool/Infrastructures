@@ -322,7 +322,7 @@ From the simulation study (fresh seeds, see README "What changed"). Commits on `
   after a reset.
 - **Evidence:** compiled and run with javac against stand-in WPILib/CTRE/QuestNav stubs (real
   WPILib 2026.2.1 geometry sources), 44 JUnit tests pass; the Java estimator reproduces the
-  simulation's reference (`est_k.py`) to 0.17 mm on 5 scenarios. Not built with Gradle, not run
+  simulation's reference implementation to 0.17 mm on 5 scenarios. Not built with Gradle, not run
   on a robot. Run `./gradlew build test`.
 
 ## F. Remaining risks
