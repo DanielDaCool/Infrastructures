@@ -30,6 +30,7 @@ import edu.wpi.first.wpilibj2.command.InstantCommand;
 import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator;
 import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator.MeasurementKind;
 import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator.OdometryData;
+import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator.VisionResult;
 import frc.robot.RobotPose.Estimation.PhoenixOdometryThread;
 import frc.robot.RobotPose.Vision.TimestampedVisionMeasurement;
 import frc.robot.RobotPose.Vision.VisionConfig;
@@ -176,8 +177,12 @@ public final class RobotPose implements Sendable {
                 double errorMeters = measurement.pose().getTranslation().getDistance(
                         poseEstimator.getPoseAt(measurement.timestampSeconds()).getTranslation());
                 source.onMeasurementUsed(measurement, errorMeters);
-                poseEstimator.addVisionMeasurement(measurement.pose(), measurement.timestampSeconds(),
-                        measurement.stdDevs(), source instanceof Quest ? MeasurementKind.QUEST : MeasurementKind.CAMERA);
+                VisionResult result = poseEstimator.addVisionMeasurement(measurement.pose(),
+                        measurement.timestampSeconds(), measurement.stdDevs(),
+                        source instanceof Quest ? MeasurementKind.QUEST : MeasurementKind.CAMERA);
+                if (result == VisionResult.REALIGN_QUEST) {
+                    ((Quest) source).shiftOffset(poseEstimator.getQuestRealignment());
+                }
             }
         }
 

@@ -5,14 +5,14 @@ import java.util.List;
 import java.util.OptionalInt;
 import java.util.function.DoubleFunction;
 
-import edu.wpi.first.math.Matrix;
 import edu.wpi.first.math.VecBuilder;
+import edu.wpi.first.math.filter.Debouncer;
+import edu.wpi.first.math.filter.Debouncer.DebounceType;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Pose3d;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Transform3d;
-import edu.wpi.first.math.numbers.N1;
-import edu.wpi.first.math.numbers.N3;
+import edu.wpi.first.math.geometry.Translation2d;
 import edu.wpi.first.networktables.GenericSubscriber;
 import edu.wpi.first.networktables.NetworkTableInstance;
 import edu.wpi.first.util.sendable.SendableBuilder;
@@ -45,10 +45,16 @@ import gg.questnav.questnav.QuestNav;
  * </ul>
  *
  * <p>Every unread frame of the loop that is tracking and was captured after the settle time
- * becomes its own measurement, at its own capture time. Its position is converted from the
- * headset to the robot center with the config offset; the heading is copied from the
- * estimate at the frame's time, so only x/y are measured (theta is sent with an infinite std
- * dev, like the Limelights).
+ * goes through a {@link QuestFrameFilter} (jumps and lost tracking: ignore and re-align;
+ * thinned to one frame per {@code QuestConfig.periodSeconds}), and each frame it keeps becomes
+ * a measurement at its own capture time: QuestNav's timestamp (publish time) minus
+ * {@code QuestConfig.latencySeconds}. Its position is converted from the headset to the robot
+ * center with the config offset; the heading is copied from the estimate at the frame's time,
+ * so only x/y are measured (theta is sent with an infinite std dev, like the Limelights). The
+ * x/y std dev is {@code QuestConfig.thinnedStd} (or the config std, if bigger).
+ *
+ * <p>A disconnect only counts after {@link #DISCONNECT_DEBOUNCE_SECONDS}, so a short Wi-Fi
+ * hiccup doesn't re-anchor the Quest.
  *
  * <p>The newest frames can be a few ms newer than the newest odometry sample (RobotPose adds
  * odometry before reading vision). The estimator adds a frame up to 50 ms newer than that
@@ -57,6 +63,13 @@ import gg.questnav.questnav.QuestNav;
  */
 public class Quest extends BaseVisionSource {
     private final QuestNav questNav;
+    private final QuestConfig config;
+    private final QuestFrameFilter frameFilter;
+    /** Connected, with drops shorter than {@link #DISCONNECT_DEBOUNCE_SECONDS} ignored. */
+    private final Debouncer connectedDebouncer;
+
+    /** The Quest must stay disconnected this long before it is re-anchored (seconds). */
+    public static final double DISCONNECT_DEBOUNCE_SECONDS = 0.5;
 
     /** This loop's measurements, oldest first; see {@link #toMeasurements}. */
     private List<TimestampedVisionMeasurement> measurements = List.of();
@@ -101,6 +114,10 @@ public class Quest extends BaseVisionSource {
      */
     public Quest(QuestConfig config) {
         super(config);
+        this.config = config;
+        frameFilter = new QuestFrameFilter(config.jumpMeters, config.gapSeconds, config.blackoutSeconds,
+                config.periodSeconds);
+        connectedDebouncer = new Debouncer(DISCONNECT_DEBOUNCE_SECONDS, DebounceType.kFalling);
         hasUpdatedQuestIntialPose = false;
         hasQuestDisconnected = true;
         questNav = new QuestNav();
@@ -170,10 +187,10 @@ public class Quest extends BaseVisionSource {
             isTracking = poseFrames[poseFrames.length - 1].isTracking();
         }
 
-        // Heading at each frame's capture time, not now.
-        measurements = toMeasurements(poseFrames, offset, std,
-                poseResetTimestamp + QUEST_RESET_SETTLE_SECONDS,
-                timestamp -> RobotPose.getInstance().getEstimatedPoseAt(timestamp).getRotation());
+        RobotPose robotPose = RobotPose.getInstance();
+        measurements = toMeasurements(poseFrames, offset, Math.max(std.get(0, 0), config.thinnedStd),
+                config.latencySeconds, poseResetTimestamp + QUEST_RESET_SETTLE_SECONDS, frameFilter,
+                robotPose::getEstimatedPoseAt, robotPose::getOdometryMotion);
         hasNewPose = !measurements.isEmpty();
 
         if (hasNewPose) {
@@ -183,7 +200,7 @@ public class Quest extends BaseVisionSource {
             }
         }
 
-        if (!hasQuestDisconnected && !isConnected()) {
+        if (!connectedDebouncer.calculate(isConnected()) && !hasQuestDisconnected) {
             hasQuestDisconnected = true;
             hasUpdatedQuestIntialPose = false;
         }
@@ -194,31 +211,50 @@ public class Quest extends BaseVisionSource {
 
     /**
      * Turns QuestNav frames into measurements of the robot center. A frame is used only if it
-     * is tracking and was captured after {@code settledAfterSeconds}; the others are skipped.
+     * is tracking, was captured after {@code settledAfterSeconds}, and the filter keeps it.
      *
      * @param frames              Frames as QuestNav returns them, oldest first.
      * @param offset              Robot center to headset (the config offset).
-     * @param std                 Config std devs; only x and y are used, theta is infinite.
+     * @param xyStd               x/y std dev of the measurements; theta is infinite.
+     * @param latencySeconds      Subtracted from QuestNav's (publish time) timestamp.
      * @param settledAfterSeconds Last anchor time plus {@link #QUEST_RESET_SETTLE_SECONDS}
      *                            (infinite before the first anchor, so nothing is used).
-     * @param headingAt           The estimated heading at an FPGA time.
+     * @param filter              Jump handling and thinning; moves the position onto the fused pose.
+     * @param estimateAt          The estimated pose at an FPGA time (heading and re-alignment).
+     * @param odometryMotion      The odometry motion between two FPGA times (jump check).
      * @return One measurement per used frame, in the same order, each at its own capture time.
      */
     static List<TimestampedVisionMeasurement> toMeasurements(PoseFrame[] frames, Transform3d offset,
-            Matrix<N3, N1> std, double settledAfterSeconds, DoubleFunction<Rotation2d> headingAt) {
+            double xyStd, double latencySeconds, double settledAfterSeconds, QuestFrameFilter filter,
+            DoubleFunction<Pose2d> estimateAt, QuestFrameFilter.OdometryMotion odometryMotion) {
         List<TimestampedVisionMeasurement> result = new ArrayList<>();
         for (PoseFrame frame : frames) {
-            double timestamp = frame.dataTimestamp();
+            double timestamp = frame.dataTimestamp() - latencySeconds;
             // Written so a NaN timestamp is skipped too.
             if (!frame.isTracking() || !(timestamp > settledAfterSeconds)) {
                 continue;
             }
-            Pose2d robotPose = new Pose2d(frame.questPose3d().transformBy(offset.inverse())
-                    .toPose2d().getTranslation(), headingAt.apply(timestamp));
-            result.add(new TimestampedVisionMeasurement(robotPose, timestamp,
-                    VecBuilder.fill(std.get(0, 0), std.get(1, 0), Double.POSITIVE_INFINITY)));
+            Translation2d questPosition = frame.questPose3d().transformBy(offset.inverse())
+                    .toPose2d().getTranslation();
+            Translation2d position = filter.filter(timestamp, questPosition,
+                    t -> estimateAt.apply(t).getTranslation(), odometryMotion);
+            if (position == null) {
+                continue;
+            }
+            Rotation2d heading = estimateAt.apply(timestamp).getRotation();
+            result.add(new TimestampedVisionMeasurement(new Pose2d(position, heading), timestamp,
+                    VecBuilder.fill(xyStd, xyStd, Double.POSITIVE_INFINITY)));
         }
         return result;
+    }
+
+    /**
+     * Shifts where the Quest's frames are placed on the field, after the estimator found that
+     * they agree with each other but not with the estimate (see
+     * {@code DemaciaPoseEstimator.VisionResult.REALIGN_QUEST}).
+     */
+    public void shiftOffset(Translation2d shift) {
+        frameFilter.shiftOffset(shift);
     }
 
     /**
@@ -253,6 +289,7 @@ public class Quest extends BaseVisionSource {
         Pose3d robotPose3d = new Pose3d(currentFusedPose);
         Pose3d questPose = robotPose3d.transformBy(offset);
         questNav.setPose(questPose);
+        frameFilter.reset();
 
         poseResetTimestamp = Timer.getFPGATimestamp();
         hasUpdatedQuestIntialPose = false;
