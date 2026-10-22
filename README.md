@@ -196,7 +196,7 @@ additions on top of the same limiter, desaturate and discretize:
 | Drive acceleration feed-forward from the plan (`(speed − previous speed) / dt`, clamped) | The drive velocity loop lags the setpoint; the feed-forward leads it | Largest: without it fullspin goes from 1.4 to 51 cm, spin25_4 1.3 to 17 cm, figure-8 9.5 to 15 cm |
 | Steer velocity feed-forward (optional, `PositionVoltage` steer only) | A position-only steer lags a moving angle | With a `PositionVoltage` steer: figure-8 with spin 9 to 23 cm, spin25_4 2.3 to 39 cm when it is missing. With MotionMagic leave it off |
 
-The gains are from a simulation (council/simple.md), not from a robot. Tune on the robot.
+The gains are from a simulation, not from a robot. Tune on the robot.
 
 ### Wiring
 
