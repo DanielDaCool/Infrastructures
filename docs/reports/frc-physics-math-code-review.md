@@ -301,14 +301,40 @@ drivetrain.
   180°; after the fix 180°, 180°. Not compiled (the environment couldn't reach WPILib/CTRE
   maven); no committed test (new tests stay untracked). Run `./gradlew build test`.
 
+## E3. Pose estimator and odometry update (2026-10-22)
+
+From the simulation study (fresh seeds, see README "What changed"). Commits on `RobotPose`:
+
+| ID | Commit | Message |
+|---|---|---|
+| O1 | `697b33a` | skip nan odometry samples and modules whose encoder jumped, remove the unused module weights |
+| P1 | `3cde284` | move the estimate back to each vision frame instead of replaying the history, trust that follows the uncertainty, jump filter with escape, slip and collision detector |
+| O2 | `e8eb55f` | let the odometry thread reader move each signal to the sample time, alert when a signal stops updating |
+| P2 | `6a99b01` | add getFuturePose, an initialize overload with adaptiveTrust, a vision source registration hook, log the uncertainty and detector flags |
+| V1 | `af81635` | trust limelight frames by tag distance and count, drop megatag2 frames taken while spinning or with another heading |
+| V2 | `2cd53dd` | quest: subtract the configured latency, ignore and re-align after a jump or lost tracking, thin to 10 hz, debounce disconnects |
+
+- **E1 follow-up:** the collision threshold is 5 g (3 g gave 5x more false hits with an
+  off-center roboRIO) and the hold 0.15 s. The drop into the hit is only used with
+  `adaptiveTrust` off; with it on, the slip/collision detector raises the uncertainty instead.
+- **E2:** still kept by decision (frames up to 50 ms ahead go on the newest sample).
+- **R1:** kept for odometry samples; vision frames are now also dropped until the first sample
+  after a reset.
+- **Evidence:** compiled and run with javac against stand-in WPILib/CTRE/QuestNav stubs (real
+  WPILib 2026.2.1 geometry sources), 44 JUnit tests pass; the Java estimator reproduces the
+  simulation's reference (`est_k.py`) to 0.17 mm on 5 scenarios. Not built with Gradle, not run
+  on a robot. Run `./gradlew build test`.
+
 ## F. Remaining risks
 
 - U1 is open (owner will check on the robot): the 3D Limelight pose sent may have the wrong side/roll/yaw (and possibly pitch) sign.
 - E2 is kept by decision: Quest frames ahead of odometry keep a small v·Δ bias.
-- R1 (`1f1917f`) has not been compiled yet.
+- R1 and the 2026-10-22 update (E3) were compiled against stubs only, not with Gradle.
+- `adaptiveTrust` depends on the slip/collision detector; the push test must show it fires, or
+  turn `adaptiveTrust` off.
 - C3 changes what a 2D config's pitch means; any existing robot config must flip its 2D pitch sign.
 - C2 assumes the pinhole tx/ty model and the crosshair at the principal point.
-- E1 still depends on one accelerometer read per loop for the hit direction.
+- E1 and the detector still depend on one accelerometer read per loop.
 - Nothing here was run on a robot.
 
 ## G. Verdict

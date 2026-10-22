@@ -16,7 +16,7 @@ dependencies (`Chassis`, `Log`, `ElasticGenerator`) removed so it works in any p
 | `RobotPose.java` | The one class the rest of the robot uses. Singleton. Runs everything each loop. |
 | `RoboRioOrientation.java` | How the roboRIO is mounted, for collision detection (optional). |
 | `Estimation/DemaciaOdometry.java` | Swerve odometry (gyro + module positions → twist). |
-| `Estimation/DemaciaPoseEstimator.java` | Fuses odometry and vision with a replayed history (same approach as 6328's estimator). |
+| `Estimation/DemaciaPoseEstimator.java` | Fuses odometry and vision: moves the estimate back to each frame, trust follows the uncertainty, jump filter, slip/collision detector. |
 | `Estimation/PhoenixOdometryThread.java` | Optional: reads the gyro and modules at 250 Hz (CAN FD) / 100 Hz (CAN 2.0) on a separate thread. |
 | `Vision/VisionSource.java` | Interface every vision source implements. |
 | `Vision/BaseVisionSource.java` | Base class for sources: config values and dashboard entries. |
@@ -25,18 +25,47 @@ dependencies (`Chassis`, `Log`, `ElasticGenerator`) removed so it works in any p
 | `Vision/VisionTypes/LimelightTagCamera2d.java` | Limelight in 2D mode (tx/ty to one tag). |
 | `Vision/VisionTypes/LimelightTagCamera3d.java` | Limelight using MegaTag2. |
 | `Vision/VisionTypes/Quest.java` | Meta Quest running QuestNav. |
+| `Vision/VisionTypes/QuestFrameFilter.java` | Which Quest frames are used: jump / lost tracking handling, re-alignment, 10 Hz thinning. |
 | `Vision/visionConfigs/*Config.java` | One config class per source type. |
 | `Vision/LimelightHelpers.java` | Limelight's official helper library. |
 
 Vendor dependencies: `questnavlib` (for the Quest), Phoenix 6 (for `PhoenixOdometryThread`)
 and WPILib New Commands.
 
+## What changed (2026-10-22) and why
+
+All numbers are from simulation (no robot yet), on fresh seeds that were never used for tuning:
+10 seeds x 17 scenarios x 14 conditions (latency, noise, Limelight outliers, Quest bias,
+traction, accelerometer noise). Mean position error: **6.2 cm** now, 21.2 cm before, 20.5 cm
+for WPILib's estimator wired the way the team wires it; never lost for more than 5 s (before:
+43-45 runs). Most of the gain from 20 to 10 cm comes from how the frames are handled (the
+first four Vision lines below); WPILib's estimator fed the same filtered frames gets 10.2 cm.
+
+| Change | Why (simulation) |
+|---|---|
+| Vision frames move the estimate back to their time, correct it, move it forward (no more replay of 1.5 s per frame) | about 100x less work per frame (estimate, not measured; the "problematic cpu" commit); within mm of a full replay; using frames at their capture time is worth 50 % of the error |
+| Trust follows the uncertainty (`adaptiveTrust`, P grows with distance and time, frames weighted against it) | 10.1 cm (fixed WPILib gain + the other fixes) to 6.2 cm; recovery after slip/hit 0.54 s (was 1.86 s) |
+| Jump filter with escape (15 of the last 25 frames rejected but agreeing are accepted), off while disabled | removing the escape costs +76 % and 10-11 lock-outs; a robot carried while disabled is followed |
+| Slip/collision detector: wheel vs roboRIO acceleration, hits over 5 g, wheels pinned into a hit | removing it costs +70 %; without it `adaptiveTrust` is worse than the fixed gain, so turn `adaptiveTrust` off if the push test fails |
+| Safety: NaN/inf, outside the field, too old/new, before the first sample after a reset | never triggered in simulation; a few lines each |
+| Odometry: NaN/inf samples skipped, a module whose encoder jumps > 0.5 m left out | one NaN made the pose NaN forever; an encoder reboot added 1.06-2.5 m for good, now 1 cm |
+| Collision threshold 3 g to 5 g, hold 60 ms to 0.15 s (wheel motion into a hit dropped, only with `adaptiveTrust` off) | 5x fewer false hits (+5.0 to +1.1 cm), same detections; hold 0.15 s: 96 to 66 cm in a pin |
+| Odometry thread: reader can move each signal to the sample time (`valueAt`) | a gyro/module skew costs ~2.5 cm per ms when driving and spinning fast |
+| Odometry thread: alert while signals fail; `changeModuleWeight` removed (never called) | a dead signal stopped all samples without a sign |
+| Limelight std = max(min, 0.008 d^2 / sqrt(tags), d * 0.01) | removing it costs +30 % |
+| MegaTag2 frames dropped when spinning > 2 rad/s (peak over 0.1 s) or heading off by > 3 deg | guards gyro resets, stale heading and a wrong camera yaw (+2-5 %) |
+| Quest: latency subtracted, jump / lost tracking: ignore 0.5 s and re-align, thinned to 10 Hz with std 0.2, disconnects debounced 0.5 s | Quest-jump error 49 cm to 3.4 cm; without thinning +53 % and 26-28 lock-outs |
+| `getFuturePose(t)` from the odometry velocity | a vision correction no longer reads as speed (estimate velocity doubles the 0.5 s error) |
+| `initialize` overload with `adaptiveTrust`, `BaseVisionSource.setOnCreate` | drop-in for the team chassis (below) |
+
 ## Quick start
 
 ### 1. Describe the vision sources
 
 Each source has a config: a **name**, an **offset** (robot center → device, meters/radians)
-and **std devs** (x m, y m, θ rad) saying how much to trust it.
+and **std devs** (x m, y m, θ rad). For the Limelights the x std dev is the **smallest** std
+dev (it grows with the tag distance; tested with 0.02). For the Quest the std dev of its used
+frames is `QuestConfig.thinnedStd` (0.2) unless the config std is bigger.
 
 Every offset is in the **WPILib robot frame**: x forward, y left, z up, rotations CCW
 positive. This holds for every source type. A device that uses another frame gets the offset
@@ -53,12 +82,12 @@ public final class VisionConstants {
     public static final LimelightTagCamera2dConfig BACK_2D = new LimelightTagCamera2dConfig(
         "back",
         new Transform3d(-0.25, 0, 0.40, new Rotation3d(0, Math.toRadians(20), Math.PI)),
-        VecBuilder.fill(0.5, 0.5, Double.POSITIVE_INFINITY));
+        VecBuilder.fill(0.02, 0.02, Double.POSITIVE_INFINITY));
 
     public static final LimelightTagCamera3dConfig FRONT_3D = new LimelightTagCamera3dConfig(
         "front",
         new Transform3d(0.30, 0, 0.35, new Rotation3d(0, Math.toRadians(15), 0)),
-        VecBuilder.fill(0.3, 0.3, Double.POSITIVE_INFINITY));
+        VecBuilder.fill(0.02, 0.02, Double.POSITIVE_INFINITY));
 
     public static final QuestConfig QUEST = new QuestConfig(
         "quest",
@@ -81,8 +110,9 @@ RobotPose.initialize(
     () -> List.of(new OdometryData(chassis.getGyroAngle(), chassis.getModulePositions())),
     angle -> gyro.setYaw(angle.getDegrees()),        // used by setYaw()
     chassis.getModuleLocations(),                    // same order as the module positions
-    VecBuilder.fill(0.1, 0.1, 0),                    // odometry std devs (x m, y m, θ rad)
+    VecBuilder.fill(0.05, 0.05, 0),                  // odometry std devs (x, y: only with adaptiveTrust off)
     VisionConstants.VISION_CONFIG);
+RobotPose.getInstance().enableCollisionDetection(...); // the slip/collision detector (see below)
 ```
 
 By default `resetPose` doesn't write the gyro, so anything that reads the gyro directly (e.g.
@@ -124,7 +154,10 @@ the real chassis.
 | `resetPose(pose)` | Sets position and heading. Clears the vision history and re-anchors the Quest. The gyro is **not** written (an offset is stored instead) unless a pose reset gyro setter was passed to `initialize`. |
 | `setYaw(angle)` | Sets the heading only and **writes it to the gyro** (through `gyroYawSetter`). Keeps the position. |
 | `getGyroAngle()` | Raw gyro reading of the newest odometry sample. Not the field heading after a `resetPose`; use `getEstimatedPose()` for that. |
-| `enableCollisionDetection(orientation, position, yawRate)` | Optional. Turns on collision detection (see below). |
+| `getFuturePose(t)` | Pose in t seconds (0-1) at the current odometry velocity, same heading. |
+| `enableCollisionDetection(orientation, position, yawRate)` | Turns on the slip/collision detector (see below). Needed for `adaptiveTrust`. |
+| `setAdaptiveTrust(on)` | Trust that follows the uncertainty (default on); off = fixed trust at the odometry std devs. |
+| `BaseVisionSource.setOnCreate(callback)` | Gets every vision source, already created or later (e.g. for a dashboard generator). |
 
 ## How it works
 
@@ -136,7 +169,8 @@ Each `periodic()`:
    sends the current heading here.
 3. **Every source is checked.** A Quest that just (re)connected is re-anchored to the
    current estimate and skipped this loop. Any other source with `shouldUpdate()` true has
-   its measurements added at their **capture time**.
+   its measurements added at their **capture time**. If the estimator says the Quest frames
+   agree with each other but not with the estimate, the Quest's offset is shifted instead.
 4. **Quest vs 3D Limelight.** Before those measurements are added, when a Quest and a
    MegaTag2 Limelight both have a new one, their distance is logged (the Quest's position is
    moved by the odometry between the two capture times first). If it stays over 0.3 m for
@@ -146,27 +180,50 @@ Each `periodic()`:
 
 - Each module's motion during one loop is treated as a circular arc (its wheel angle
   changed during the loop); the chord of that arc is its displacement.
-- The robot's displacement is a weighted average of the modules. Weights start equal and
-  can be changed with `changeModuleWeight` (e.g. to trust a slipping module less).
+- The robot's displacement is the average of the modules.
 - The heading always comes from the gyro, never from the wheels.
+- A sample with a NaN or infinite value moves nothing (the next good one covers the motion).
+  A module whose distance jumps more than 0.5 m in one sample (encoder reboot) is left out of
+  that sample.
 
 ### Fusion (`DemaciaPoseEstimator`)
 
-- The estimator keeps a 1.5 s history of odometry twists. A vision measurement is inserted at
-  its capture time (splitting a twist if needed) and the history is replayed from there, so
-  late measurements are applied where they were taken and several corrections add up.
-- Per field axis (x, y, θ), measurements at the same time are combined by inverse variance,
-  then the estimate moves by `K * residual`, with `K = q / (q + sqrt(q * r))` (q = odometry
-  variance, r = measurement variance).
+- Each odometry sample moves the estimate and goes into a 1.5 s history of odometry-only
+  poses. A vision frame taken at time t: the estimate is moved back to t by the odometry since
+  then, corrected, and moved forward again. One step per frame; frames out of order land
+  within a few mm of a full replay.
+- **Trust follows the uncertainty** (`adaptiveTrust`, default): one variance P for x and y.
+  It grows by `VARIANCE_PER_METER * distance + VARIANCE_PER_SECOND * dt` per sample and jumps
+  when the slip/collision detector fires. A frame with variance R moves the estimate by
+  `K = P / (P + R)` of the way and P becomes `(1 - K) P`, never below (1 cm)². A late frame is
+  compared with the P it had at its time. After a reset P = (10 cm)².
+- **Jump filter:** a frame whose distance from the estimate is unlikely for P + R (chi², 99.9 %)
+  is rejected. When 15 of the last 25 frames of one kind (cameras together, Quest separately)
+  were rejected but agree within 0.3 m, the estimate is the one that is wrong: P is raised to
+  cover them and the frame is used (for the Quest, its offset is shifted). Off while disabled
+  (the robot may be carried).
+- **`adaptiveTrust` off:** P stays at the odometry std devs and `K = q / (q + sqrt(q r))`
+  (WPILib's gain); the jump filter and escape stay. 9.6 cm in simulation instead of 6.2.
+- Dropped: NaN/inf, more than 0.5 m outside the field, taken before the first sample after a
+  reset, older than the history, more than 50 ms newer than the newest sample.
+- θ: only changed by a frame with a finite θ std dev, with the θ odometry std dev as a fixed
+  gain (none of the current sources measure heading).
 
-### Collision detection (optional)
+### Slip/collision detector
 
-Driving into a wall or a robot, the wheels keep turning while the robot is stopped, so odometry
-counts motion that didn't happen. With collision detection on, a loop where the roboRIO's
-built-in accelerometer reads more than `COLLISION_ACCELERATION` (3 g) horizontally is a hit,
-and for `COLLISION_HOLD_SECONDS` (60 ms) after the last hit the part of the wheel motion that
-goes **into** the hit is dropped. Motion to the side or away from it is kept, and the heading
-always comes from the gyro.
+Wheels slip, robots get pushed and driven into, and odometry counts motion that didn't happen
+(or misses motion that did). The detector compares the wheel acceleration (odometry) with the
+roboRIO's built-in accelerometer once per loop:
+
+- **Slip / push:** the smoothed difference over 1.5 m/s² is integrated into a slip velocity;
+  the position error it builds up is added to P (`pose/slipping`).
+- **Hit:** over `COLLISION_ACCELERATION` (5 g) adds (15 cm)² to P; for 2 s after it, wheel
+  motion into the hit faster than 0.3 m/s is added to P too (`pose/pinned`): the wheels of a
+  pinned robot keep turning.
+- With `adaptiveTrust` off it only sets the flags; instead, for `COLLISION_HOLD_SECONDS`
+  (0.15 s) after a hit the part of the wheel motion that goes **into** the hit is dropped
+  (motion to the side or away is kept). With `adaptiveTrust` on this drop is not used: in
+  simulation it made the defense scenario worse (11.5 to 15.0 cm).
 
 It is **off** unless you turn it on, because the roboRIO mounting has to be measured on each robot:
 
@@ -180,10 +237,12 @@ RobotPose.getInstance().enableCollisionDetection(
 - The yaw rate removes the w² · r an off-center roboRIO reads while spinning.
 - Check the orientation (disabled, on the floor): `pose/acceleration x g` and `y g` read about 0
   at rest, lifting the robot's front makes `x g` positive, lifting its left side makes `y g` positive.
-- The 3 g threshold is not tuned yet; tune it from `pose/acceleration g`.
+- The 5 g threshold is not tuned on a robot yet; check it from `pose/acceleration g` (hits vs
+  hard turns and bumps).
 - With 250 Hz odometry the accelerometer is still read once per loop, so a hit applies to every
   sample of that loop.
 - In simulation the accelerometer reads 0, so nothing is detected.
+- Without it, `adaptiveTrust` has no detector: call it, or `setAdaptiveTrust(false)`.
 
 ## 250 Hz odometry
 
@@ -196,8 +255,7 @@ run (84% smaller spread than 50 Hz).
 `PhoenixOdometryThread` reads the signals on its own thread. Each cycle it waits until the
 gyro yaw and every drive/steer position have a new value (`BaseStatusSignal.waitForAll`),
 builds a sample, stamps it with the FPGA time minus the signals' CAN latency, and queues it.
-Each robot loop `RobotPose` takes the ~5 queued samples and adds them all, then replays the
-history once. The pose math stays on the main thread; the thread only reads CAN.
+Each robot loop `RobotPose` takes the ~5 queued samples and adds them all. The pose math stays on the main thread; the thread only reads CAN.
 
 | Bus | Frequency | How it waits |
 |---|---|---|
@@ -232,15 +290,29 @@ RobotPose.initialize(odometryThread::getNewSamples, ...);
   math your module does (e.g. a steer/drive coupling correction) goes in the reader too,
   using only these signals.
 - `getFailedCycles()` counts cycles where a signal didn't arrive in time (e.g. an unplugged
-  device).
+  device); an alert ("odometry thread: a signal stopped updating") is on while it keeps going up.
+- **Gyro vs module timing.** The gyro and the modules arrive in separate frames and can be a
+  few ms apart (about 2.5 cm of error per ms when driving 2.5 m/s and spinning 4.5 rad/s). Use
+  the constructor whose reader gets the sample time and move each position to it with its
+  velocity signal (add the velocity signals to the thread's signals):
+
+  ```java
+  new PhoenixOdometryThread(canBus, PhoenixOdometryThread.CAN_FD_FREQUENCY_HZ,
+      time -> new OdometryData(time,
+          Rotation2d.fromDegrees(PhoenixOdometryThread.valueAt(yaw, yawRate, time)), // yawRate = pigeon.getAngularVelocityZWorld().clone()
+          modules(time)),  // drive: valueAt(drive[i], driveVelocity[i], time) * WHEEL_CIRCUMFERENCE
+      yaw, yawRate, drive[0], driveVelocity[0], steer[0], ...);
+  ```
 - Vision is unchanged. A frame up to 50 ms newer than the newest odometry sample is added
   to that sample instead of being dropped (the newest sample is a few ms old).
 
 ### Choosing std devs
 
-Each vision frame moves the estimate by `K` of the way to the measurement, per axis, with
-`K = 1 / (1 + σ_vision / σ_odometry)`. Only the **ratio** matters: lowering the odometry std
-is the same as raising every vision std. Examples with odometry σ = 0.1 (WPILib's default):
+With `adaptiveTrust` on, the odometry x/y std devs are not used (P is tracked); the vision
+std devs are the minimum (Limelights) or the thinned-frame std (Quest), see Quick start §1.
+The table below is for `adaptiveTrust` off: each vision frame moves the estimate by `K` of the
+way to the measurement, per axis, with `K = 1 / (1 + σ_vision / σ_odometry)`. Only the
+**ratio** matters. Examples with odometry σ = 0.1:
 
 | Vision σ | K | Each frame |
 |---|---|---|
@@ -292,6 +364,11 @@ every loop.
   stays. A camera at y = -0.3 facing right (yaw -90°) is sent as side +0.3, yaw +90°. The six
   values sent are on `vision/<name>/source pose sent`; they should match the Limelight web UI.
 - Only x and y are used (MegaTag2's yaw is just the heading we sent).
+- A frame is dropped if the robot turned faster than 2 rad/s in the 0.1 s before it, or if
+  the heading in the frame (the one the Limelight used) differs from ours at its time by more
+  than 3° (after a gyro reset, while spinning, or with a wrong camera yaw).
+- x/y std dev = max(config x std, hypot(0.008 · d² / √tags, 0.01 · d)), d = average tag
+  distance. The 2D Limelight uses the same formula with its tag distance and one tag.
 
 ### `Quest` – Meta Quest / QuestNav
 
@@ -309,6 +386,14 @@ so it must be **anchored** to the fused estimate first.
   at that time and sent with an infinite std dev.
 - The newest frames are often a few ms newer than the newest odometry sample. A frame up to
   50 ms newer is added to that sample; one further ahead is dropped.
+- QuestNav stamps frames with the publish time; `QuestConfig.latencySeconds` (0.03) is
+  subtracted.
+- If the Quest moves more than 0.3 m differently from the odometry between two frames, or no
+  frame comes for 0.2 s (tracking lost), its frames are ignored for 0.5 s and then it is
+  re-aligned to the estimate (a software offset; the headset is not reset).
+- At most one frame per 0.1 s is used, with std 0.2: Quest errors are the same from frame to
+  frame, so 100 Hz frames must not outvote the cameras.
+- A disconnect only counts (and re-anchors) after 0.5 s.
 
 ## Dashboard
 
@@ -320,7 +405,11 @@ All values are read lazily, only when NetworkTables publishes them.
 |---|---|
 | `pose/x`, `pose/y`, `pose/heading deg` | The fused pose. |
 | `pose/field` | Field2d with the fused pose. |
-| `pose/colliding` | True while a collision is limiting the wheel motion (only with collision detection on). |
+| `pose/position std m` | sqrt(P): how unsure the estimator is (the odometry std with `adaptiveTrust` off). |
+| `pose/adaptive trust` | Whether trust follows the uncertainty. |
+| `pose/slipping`, `pose/pinned`, `pose/seconds since hit` | Slip/collision detector flags (need collision detection on). |
+| `pose/frames rejected`, `pose/escapes` | Jump filter counters since startup. |
+| `pose/colliding` | True while the wheel motion into a hit is dropped (`adaptiveTrust` off). |
 | `pose/acceleration g`, `x g`, `y g` | Horizontal roboRIO acceleration, robot relative (0 while collision detection is off). |
 | `pose/reset pose` | Button: `resetPose` to the origin. |
 | `chassis/reset gyro` | Button: `setYaw(0°)`. |
@@ -341,8 +430,68 @@ All values are read lazily, only when NetworkTables publishes them.
 | Source | Keys |
 |---|---|
 | 2D Limelight | `is see` (`tv`), `tag id`, `tag distance m` (of the last tag used). |
-| MegaTag2 Limelight | `is see`, `tag count`, `avg tag distance m`, `source pose sent` (forward, side, up m; roll, pitch, yaw deg, in the Limelight's frame). |
+| MegaTag2 Limelight | `is see`, `tag count`, `avg tag distance m`, `frames rejected (spin or heading)`, `source pose sent` (forward, side, up m; roll, pitch, yaw deg, in the Limelight's frame). |
 | Quest | `should update`, `is tracking`, `is anchored`, `battery`, and a `Reset Quest Pose` button (re-anchors the Quest to the current estimate). A WPILib alert is on while the Quest is connected, has sent its device data, and its battery is at or below 20% (QuestNav reads 0% until the device data arrives, which is ignored). |
+
+## Plugging it into the team chassis (`mechanism` / `demacia-odometry-simple-testing`)
+
+1. **Settle U1 first** (3D Limelight yaw sign, see the review report): the package sends the
+   camera yaw mirrored compared to both team branches. Check `vision/<name>/source pose sent`
+   against the Limelight web UI on the robot.
+2. Change the imports from `frc.demacia.RobotPose.*` to `frc.robot.RobotPose.*` (Chassis,
+   RobotContainer, VisionConstants, ShootingValues, ElasticGenerator).
+3. Replace the `initialize` call in RobotContainer (the package can't read `Chassis` itself):
+
+   ```java
+   var c = Chassis.getInstance();
+   RobotPose.initialize(() -> List.of(new OdometryData(c.getGyroAngle(), c.getModulePositions())),
+       c::setGyroYaw, c::setGyroYaw /* resetPose also writes the gyro */, c.getModuleLocations(),
+       RobotCChassisConstants.STATE_STD, VisionConstants.visionConfig);
+   RobotPose.getInstance().enableCollisionDetection(ROBORIO_ORIENTATION, ROBORIO_POSITION,
+       () -> Math.toRadians(pigeon.getAngularVelocityZWorld().getValueAsDouble()));
+   BaseVisionSource.setOnCreate(ElasticGenerator.getInstance()::registerVisionSource);
+   ```
+
+   Passing the second `setGyroYaw` matters: `DriveCommand` and `getChassisSpeedsFieldRel` read
+   the raw gyro, so a `resetPose` that only stored an offset would rotate field-relative driving.
+4. `getFuturePose(double)` exists (ShootingValues keeps compiling). Remove the team
+   `BaseVisionSource`'s `registerVisionSource(this)` (the hook above does it).
+5. The dashboard keys move from `chassis/field` / `chassis/reset pose` to `pose/field` /
+   `pose/reset pose`.
+6. `STATE_STD` x/y only matter with `adaptiveTrust` off. The team's MegaTag2 std 0.03 becomes the
+   minimum std (0.02 was tested); the Quest's 0.03 is raised to `thinnedStd` 0.2.
+
+## Tunables and how to measure them
+
+Defaults are the values tested in simulation.
+
+| Where | Value | Measure |
+|---|---|---|
+| `DemaciaPoseEstimator.VARIANCE_PER_METER` / `_PER_SECOND` | 0.0015 m²/m, 1e-4 m²/s | Insensitive in simulation (0.0008-0.003 within 0.3 cm). Drive a path with vision off, compare with the true end point: the error² per meter. |
+| `DemaciaPoseEstimator.COLLISION_ACCELERATION` | 5 g | `pose/acceleration g` during hard turns, bumps and hits; between the two. |
+| `DemaciaPoseEstimator.COLLISION_HOLD_SECONDS` | 0.15 s | (`adaptiveTrust` off) log hits: how long the wheels keep turning after the robot stopped. |
+| `DemaciaPoseEstimator.SLIP_ACCELERATION` | 1.5 m/s² | Push test: `pose/slipping` must fire on a shove and stay off on a hard acceleration without slip. |
+| `BaseVisionSource.STD_PER_METER_SQUARED` | 0.008 | Robot standing still at 1-5 m, 1 and 2+ tags: spread of the camera pose vs distance. |
+| config x std (Limelights) | 0.02 | Spread of the camera pose up close. |
+| `LimelightTagCamera3d.MAX_YAW_RATE_RADIANS_PER_SECOND` | 2 rad/s | Log the MegaTag2 error against the yaw rate while spinning. |
+| `QuestConfig.latencySeconds` | 0.03 s | Drive back and forth; the shift that lines the Quest position up with the odometry. |
+| `QuestConfig.thinnedStd`, `periodSeconds` | 0.2 m, 0.1 s | Tuned in simulation (insensitive 0.1-0.4 m). |
+| `QuestConfig.jumpMeters`, `gapSeconds`, `blackoutSeconds` | 0.3 m, 0.2 s, 0.5 s | Cover the Quest cameras: the jump after it re-localizes must be caught. |
+
+## Robot checks (before relying on it)
+
+1. **U1**: the 3D Limelight yaw sign (above), before switching the import.
+2. **Push / collision test** with collision detection on: shove the robot while standing,
+   push it while driving, drive into a wall. `pose/slipping`, `pose/pinned` and
+   `pose/seconds since hit` must react, and `pose/position std m` must jump. If they don't fire,
+   call `setAdaptiveTrust(false)` (or pass `false` to `initialize`): without the detector the
+   adaptive trust is worse than the fixed one.
+3. **Loop time** before/after (the replay was the suspected CPU problem).
+4. **Latencies**: Quest (`latencySeconds`), Limelight (log now − capture time), and the gyro vs
+   module offset in the odometry thread (`yaw.getTimestamp().getLatency()` minus a drive
+   signal's); over 1 ms, use `valueAt`.
+5. **Wheel calibration drive**: drive a taped 5-10 m straight line, compare with the odometry
+   and correct the wheel circumference (1 % of wheel size = 1 % of distance).
 
 ## Adding a new kind of vision source
 
@@ -359,6 +508,7 @@ All values are read lazily, only when NetworkTables publishes them.
 | Pose drifts when driving straight | Module locations in the wrong order, or wheel diameter / gear ratio wrong in module positions. |
 | Pose rotates the wrong way | Gyro sign: the angle must be CCW-positive. |
 | Pose jumps to vision every frame | A vision std dev is 0. |
+| Vision is rejected for a long time (`pose/frames rejected` climbing) | An offset is wrong, or the pose was reset to a wrong place. After 15 agreeing frames the estimator accepts them by itself; while disabled nothing is rejected. |
 | Vision never changes the pose | `seconds since used` keeps growing: check `is Connected` / `is see` (Quest: `is tracking`, `is anchored`). If it stays small: std devs are ∞, or odometry std is 0 on that axis. |
 | Vision keeps pulling the pose around | Large `last error m` on one source: its offset is wrong, or its std devs are too small. |
 | 2D camera is off by meters when turned | Wrong offset yaw, or camera height/pitch wrong. |
