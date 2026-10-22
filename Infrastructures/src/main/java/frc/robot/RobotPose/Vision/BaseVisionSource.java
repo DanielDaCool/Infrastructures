@@ -1,5 +1,9 @@
 package frc.robot.RobotPose.Vision;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.Consumer;
+
 import edu.wpi.first.math.Matrix;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Transform3d;
@@ -17,6 +21,11 @@ import frc.robot.RobotPose.Vision.visionConfigs.BaseVisionSourceConfig;
  * entries ({@code vision/<name>} and {@code vision/<name>/field}).
  */
 public abstract class BaseVisionSource implements VisionSource, Sendable {
+    /** Every source created so far, for {@link #setOnCreate}. */
+    private static final List<VisionSource> createdSources = new ArrayList<>();
+    /** Called with every source when it is created; see {@link #setOnCreate}. */
+    private static Consumer<VisionSource> onCreate = source -> { };
+
     /** Name from the config. */
     protected final String name;
     /** Where the device is mounted relative to the robot center (robot to device). */
@@ -44,6 +53,21 @@ public abstract class BaseVisionSource implements VisionSource, Sendable {
 
         addLog();
         SmartDashboard.putData("vision/" + name, this);
+        createdSources.add(this);
+        onCreate.accept(this);
+    }
+
+    /**
+     * Registers a callback that gets every vision source: the ones already created right away,
+     * and every later one when it is created (from the base constructor, before the subclass
+     * constructor has run, so only store the reference). For example
+     * {@code BaseVisionSource.setOnCreate(ElasticGenerator.getInstance()::registerVisionSource)}.
+     */
+    public static synchronized void setOnCreate(Consumer<VisionSource> callback) {
+        onCreate = callback;
+        for (VisionSource source : createdSources) {
+            callback.accept(source);
+        }
     }
 
     /** Puts dashboard entries. Subclasses can override to add their own (call super). */
