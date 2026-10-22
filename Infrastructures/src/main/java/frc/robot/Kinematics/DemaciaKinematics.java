@@ -186,6 +186,20 @@ public class DemaciaKinematics {
         return steerVelocities.clone();
     }
 
+    /**
+     * Robot speeds cut by one common factor so no module is faster than MAX_ALLOWED_MODULE_VELOCITY:
+     * translation and rotation slow down together, so the robot keeps the wanted path. Use it on the
+     * wanted speeds before an acceleration limiter, so the limiter ramps to speeds the modules can
+     * drive (otherwise the robot spins at full speed and drives much slower than proportional). The
+     * sign of omega doesn't matter.
+     *
+     * @param robotRelSpeeds robot-relative speeds
+     * @return the same speeds, scaled down if a module would be too fast
+     */
+    public ChassisSpeeds desaturate(ChassisSpeeds robotRelSpeeds) {
+        return toChassisSpeeds(toWpilibModuleStates(robotRelSpeeds));
+    }
+
     /** Desaturate, discretize over the loop and the latency, inverse kinematics; stand still when slow. */
     private SwerveModuleState[] plan(ChassisSpeeds wantedSpeeds) {
         // the chassis sends omega clockwise-positive; the math below is WPILib (counter-clockwise)
@@ -199,7 +213,7 @@ public class DemaciaKinematics {
             }
             return standing;
         }
-        ChassisSpeeds desaturated = toChassisSpeeds(toWpilibModuleStates(speeds));
+        ChassisSpeeds desaturated = desaturate(speeds);
         return toWpilibModuleStates(ChassisSpeeds.discretize(desaturated, CYCLE_DT + 2 * LATENCY));
     }
 

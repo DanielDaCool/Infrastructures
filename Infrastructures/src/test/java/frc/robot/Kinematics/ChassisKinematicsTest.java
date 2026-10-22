@@ -114,4 +114,18 @@ class ChassisKinematicsTest {
         kinematics.toSwerveModuleStates(new ChassisSpeeds(), measured(90));
         assertEquals(0, kinematics.getSteerVelocities()[0], EPSILON); // standing holds the angle
     }
+
+    @Test
+    void desaturateKeepsTheRatio() {
+        ChassisSpeeds cut = kinematics.desaturate(new ChassisSpeeds(5, 0, 4));
+        assertEquals(5.0 / 4.0, cut.vxMetersPerSecond / cut.omegaRadiansPerSecond, EPSILON);
+        assertEquals(0, cut.vyMetersPerSecond, EPSILON);
+        double fastest = 0;
+        for (SwerveModuleState state : kinematics.toWpilibModuleStates(cut)) {
+            fastest = Math.max(fastest, Math.abs(state.speedMetersPerSecond));
+        }
+        assertEquals(MAX_ALLOWED_MODULE_VELOCITY, fastest, 1e-6);
+        // slow enough: unchanged
+        assertEquals(1, kinematics.desaturate(new ChassisSpeeds(1, 0, 1)).vxMetersPerSecond, EPSILON);
+    }
 }

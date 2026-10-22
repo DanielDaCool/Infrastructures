@@ -65,6 +65,21 @@ class AccelLimitedSwerveTest {
     }
 
     @Test
+    void driveAndSpinSlowDownTogether() {
+        // too fast for the modules: translation and rotation must be cut by the same factor
+        ChassisSpeeds wanted = new ChassisSpeeds(5, 0, 4);
+        Rotation2d heading = Rotation2d.kZero;
+        for (int loop = 0; loop < 200; loop++) {
+            drive.calculate(wanted, heading, DT);
+            heading = heading.plus(Rotation2d.fromRadians(drive.getSentSpeedsFieldRel().omegaRadiansPerSecond * DT));
+        }
+        ChassisSpeeds sent = drive.getSentSpeedsFieldRel();
+        double translation = Math.hypot(sent.vxMetersPerSecond, sent.vyMetersPerSecond);
+        assertEquals(5.0 / 4.0, translation / sent.omegaRadiansPerSecond, 0.03,
+                "sent " + translation + " m/s, " + sent.omegaRadiansPerSecond + " rad/s");
+    }
+
+    @Test
     void yawResetDoesNotJump() {
         driveUntil(new ChassisSpeeds(3, 0, 0), Rotation2d.kZero, 100);
         ChassisSpeeds before = drive.getSentSpeedsRobotRel();

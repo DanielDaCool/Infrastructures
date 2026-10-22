@@ -70,7 +70,20 @@ public class AccelLimitedSwerve {
     /** Same as {@link #calculate(ChassisSpeeds, Rotation2d)} with a given dt [s], for tests. */
     SwerveModuleState[] calculate(ChassisSpeeds wantedFieldRel, Rotation2d heading, double dt) {
         heading = finiteOrLast(heading);
-        return send(SwerveAccelerationLimiter.calculate(wantedFieldRel, sentSpeedsFieldRel, heading, dt), heading);
+        return send(SwerveAccelerationLimiter.calculate(desaturate(wantedFieldRel, heading), sentSpeedsFieldRel,
+                heading, dt), heading);
+    }
+
+    /**
+     * The wanted speeds cut by one common factor so no module is faster than
+     * MAX_ALLOWED_MODULE_VELOCITY: translation and rotation slow down together and the path is
+     * kept. Done before the limiter so it ramps to speeds the modules can drive; otherwise the
+     * desaturation after it cuts the translation it just added every loop, while omega (not
+     * limited) stays high, and the robot drives much slower than proportional while spinning.
+     */
+    private ChassisSpeeds desaturate(ChassisSpeeds wantedFieldRel, Rotation2d heading) {
+        ChassisSpeeds robotRel = ChassisSpeeds.fromFieldRelativeSpeeds(wantedFieldRel, heading);
+        return ChassisSpeeds.fromRobotRelativeSpeeds(kinematics.desaturate(robotRel), heading);
     }
 
     /** The heading, or the last heading when it is NaN or infinite (gyro glitch). */
@@ -94,7 +107,7 @@ public class AccelLimitedSwerve {
         }
 
         // desaturate first, then discretize the speeds the modules can really drive
-        ChassisSpeeds desaturated = kinematics.toChassisSpeeds(kinematics.toWpilibModuleStates(robotRel));
+        ChassisSpeeds desaturated = kinematics.desaturate(robotRel);
         states = kinematics.toWpilibModuleStates(ChassisSpeeds.discretize(desaturated, CYCLE_DT));
         for (int i = 0; i < states.length; i++) {
             lastAngles[i] = states[i].angle;

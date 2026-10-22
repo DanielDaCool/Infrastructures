@@ -119,6 +119,28 @@ same stick/trajectory (the omega sign is the one the old kinematics used on `mai
 Call one of the `toSwerveModuleStates` methods **once per loop**: they keep the last angles and
 speeds for the standing hold and the feed-forward.
 
+### Driving slower than it should while spinning (acceleration limiter)
+
+When the robot drives and spins fast, a module would need `v + ω·r`, more than it can do, so all
+modules are cut by one common factor (`desaturate`): driving and spinning slow down **together**
+and the path is kept. A chassis with its own acceleration limiter (e.g. `Chassis` on
+`kinematics-acceleration-limit-testing`) breaks this: the limiter ramps from the speeds sent last
+loop, which the desaturation already cut, and only adds a small step per loop, while omega isn't
+limited. Every loop the desaturation takes back more translation than the limiter adds, so the
+robot spins at almost full speed and drives much slower (simulation: 5 m/s + 4 rad/s wanted gives
+2.5 m/s and 3.8 rad/s instead of 3.0 m/s and 2.4 rad/s).
+
+The fix is to desaturate the wanted speeds **before** the limiter, one line before
+`accelLimiter.calculate(...)`:
+
+```java
+fieldSpeeds = ChassisSpeeds.fromRobotRelativeSpeeds(
+    demaciaKinematics.desaturate(ChassisSpeeds.fromFieldRelativeSpeeds(fieldSpeeds, heading)), heading);
+```
+
+`AccelLimitedSwerve` already does this. The DemaciaCode chassis on `main` has no limiter, so it
+doesn't need it.
+
 ## Using the acceleration limiter (`AccelLimitedSwerve`)
 
 Not needed for the DemaciaCode chassis.
@@ -330,6 +352,7 @@ ChassisSpeeds robotRelNoGyro = kinematics.toChassisSpeeds(getModuleStates());
 | | `toWpilibModuleStates(robotRelSpeeds)` | Plain WPILib inverse (omega CCW), desaturated to `MAX_ALLOWED_MODULE_VELOCITY`. No discretize, no state. |
 | | `toChassisSpeeds(states, omegaFromGyro)` | Robot speeds from module states, omega from the gyro. |
 | | `toChassisSpeeds(states)` | Same, omega from the modules (least squares). |
+| | `desaturate(robotRelSpeeds)` | Robot speeds cut by one common factor so no module is faster than `MAX_ALLOWED_MODULE_VELOCITY` (translation and rotation together). |
 | | `getModuleCount()` | Number of modules. |
 | `SwerveAccelerationLimiter` | `calculate(wanted, lastCommanded, heading)` | The limiter alone (field-relative, dt from the clock). `AccelLimitedSwerve` calls it; use it directly only if you keep `lastCommanded` yourself. |
 
@@ -386,6 +409,7 @@ cd Infrastructures
 | `desaturatesWhenOneModuleIsAtZero` | Desaturation with a module at 0. |
 | `zeroSpeedsGiveZeroModules` | Zero speeds give zero modules. |
 | `AccelLimitedSwerveTest.reachesTheWantedSpeedFromRest` | Ramps up to the wanted speed. |
+| `driveAndSpinSlowDownTogether` | Too fast for the modules: the limiter loop keeps the translation/rotation ratio. |
 | `convergesWhenTheRobotIsTurned`, `convergesWhileSpinning` | Reaches the field-relative target at any heading and while spinning. |
 | `yawResetDoesNotJump` | A gyro reset doesn't step the command. |
 | `stoppingKeepsTheModuleAngles` | A stop holds the module angles. |
@@ -396,6 +420,7 @@ cd Infrastructures
 | `cosineScalingAgainstTheMeasuredAngle`, `reversesWhenTheMeasuredAngleIsMoreThan90DegreesAway` | Cosine scaling and the reverse decision against the measured angle. |
 | `driveAccelerationsFromTheCommands` | Acceleration feed-forward value, clamp, and a reversed wheel. |
 | `steerVelocitiesFromTheCommands` | Steer feed-forward value, clamp, and 0 when standing. |
+| `desaturateKeepsTheRatio` | `desaturate` keeps the ratio and the module limit. |
 
 ## Checking it on the robot
 
