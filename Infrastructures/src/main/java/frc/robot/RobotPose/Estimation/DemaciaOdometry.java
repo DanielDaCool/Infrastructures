@@ -4,6 +4,8 @@
 
 package frc.robot.RobotPose.Estimation;
 
+import java.util.Arrays;
+
 import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
@@ -19,16 +21,24 @@ import edu.wpi.first.math.kinematics.SwerveModulePosition;
  * <ul>
  * <li>Each module's path over one loop is treated as a circular arc (its wheel angle changed
  * during the loop), and the straight-line chord of that arc is used as its displacement.</li>
- * <li>The robot displacement is a weighted average of the module displacements, and the
- * weights can be changed at runtime with {@link #changeModuleWeight} (e.g. to trust a
- * slipping module less).</li>
+ * <li>The robot displacement is the average of the module displacements.</li>
  * <li>The heading always comes from the gyro, never from the wheels.</li>
+ * <li>Bad readings are not used (see {@link #updateOdometry}): a sample with a NaN or
+ * infinite value moves nothing, and a module whose distance jumps by more than
+ * {@link #MAX_MODULE_STEP_METERS} in one sample (an encoder that rebooted to 0) is left out
+ * of that sample.</li>
  * </ul>
  *
  * <p>This class only does odometry. {@link DemaciaPoseEstimator} owns it and uses the twist
  * returned by {@link #updateOdometry} each loop.
  */
 public class DemaciaOdometry {
+
+    /**
+     * A module can't drive this far between two samples (5 m/s for 0.1 s), so a bigger step is
+     * an encoder that rebooted or glitched.
+     */
+    public static final double MAX_MODULE_STEP_METERS = 0.5;
 
     /** Pure-odometry pose (no vision). */
     private Pose2d pose;
@@ -38,8 +48,8 @@ public class DemaciaOdometry {
     private SwerveModulePosition[] lastModulePositions;
     /** Robot-relative chord of each module this loop (meters). Reused every update. */
     private Translation2d[] moduleDisplacements;
-    /** Each module's weight in the displacement average; always sums to 1. Starts equal. */
-    private double[] modulesWeights;
+    /** Each module's weight in the displacement average this update; sums to 1. */
+    private final double[] modulesWeights;
     /** Module locations relative to the robot centre (meters). */
     private final Translation2d[] moduleLocations;
 
@@ -66,6 +76,13 @@ public class DemaciaOdometry {
      * Updates the odometry with new gyro and module readings.
      *
      * <ol>
+     * <li>If any gyro or module value is NaN or infinite, nothing moves and the readings are
+     * not stored, so the next good sample covers the motion. (Once a NaN got into the pose it
+     * stayed there for good.)</li>
+     * <li>A module whose distance changed by more than {@link #MAX_MODULE_STEP_METERS} gets
+     * weight 0 for this update (its new reading still becomes the baseline), as long as at
+     * least two modules are left. A rebooted encoder used to add its whole odometer to the
+     * pose (about 1 m).</li>
      * <li>Each module's displacement since the last update (robot-relative chord, see
      * {@link #calculateModuleDisplacement}).</li>
      * <li>dtheta from the gyro (with the reset offset), wrapped to [-pi, pi].</li>
@@ -82,6 +99,10 @@ public class DemaciaOdometry {
      * @return The robot-relative motion of this update (dx, dy in meters, dtheta in radians).
      */
     public Twist2d updateOdometry(Rotation2d gyroAngle, SwerveModulePosition[] modulePositions) {
+        if (!isFinite(gyroAngle, modulePositions)) {
+            return new Twist2d();
+        }
+        updateWeights(modulePositions);
         if (lastModulePositions == null) {
             lastModulePositions = new SwerveModulePosition[modulePositions.length];
         } else {
@@ -105,6 +126,43 @@ public class DemaciaOdometry {
         }
 
         return twist;
+    }
+
+    /** @return Whether the gyro angle and every module distance and angle are finite. */
+    private static boolean isFinite(Rotation2d gyroAngle, SwerveModulePosition[] modulePositions) {
+        if (!Double.isFinite(gyroAngle.getRadians())) {
+            return false;
+        }
+        for (SwerveModulePosition position : modulePositions) {
+            if (position == null || !Double.isFinite(position.distanceMeters)
+                    || !Double.isFinite(position.angle.getRadians())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Equal weights, except that modules whose distance jumped by more than
+     * {@link #MAX_MODULE_STEP_METERS} since the last update get 0 (if at least two are left).
+     */
+    private void updateWeights(SwerveModulePosition[] modulePositions) {
+        int goodModules = 0;
+        boolean[] good = new boolean[modulesWeights.length];
+        for (int i = 0; i < modulesWeights.length; i++) {
+            good[i] = lastModulePositions == null || Math.abs(modulePositions[i].distanceMeters
+                    - lastModulePositions[i].distanceMeters) <= MAX_MODULE_STEP_METERS;
+            if (good[i]) {
+                goodModules++;
+            }
+        }
+        if (goodModules < 2) {
+            goodModules = modulesWeights.length;
+            Arrays.fill(good, true);
+        }
+        for (int i = 0; i < modulesWeights.length; i++) {
+            modulesWeights[i] = good[i] ? 1.0 / goodModules : 0.0;
+        }
     }
 
     /**
@@ -176,34 +234,5 @@ public class DemaciaOdometry {
     /** @return The pure-odometry pose (no vision corrections). */
     public Pose2d getOdometryPose() {
         return this.pose;
-    }
-
-    /**
-     * Sets a module's weight in the robot-displacement average, then renormalizes every
-     * other module's weight so the full array still sums to 1. 
-     *
-     * @param index     The index of the module whose weight is being changed.
-     * @param newWeight The new weight for that module, clamped to [0, 1].
-     */
-    public void changeModuleWeight(int index, double newWeight) {
-        double clampedNewWeight = MathUtil.clamp(newWeight, 0, 1);
-
-        double remainingWeightSum = 0;
-        for (int i = 0; i < modulesWeights.length; i++) {
-            if (i != index) {
-                remainingWeightSum += modulesWeights[i];
-            }
-        }
-
-        double weightToDistribute = 1.0 - clampedNewWeight;
-        modulesWeights[index] = clampedNewWeight;
-
-        for (int i = 0; i < modulesWeights.length; i++) {
-            if (i != index) {
-                modulesWeights[i] = remainingWeightSum > 0
-                        ? (modulesWeights[i] / remainingWeightSum) * weightToDistribute
-                        : weightToDistribute / (modulesWeights.length - 1);
-            }
-        }
     }
 }
