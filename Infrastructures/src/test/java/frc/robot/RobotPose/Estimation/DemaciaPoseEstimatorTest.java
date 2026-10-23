@@ -284,8 +284,9 @@ class DemaciaPoseEstimatorTest {
                     MeasurementKind.QUEST);
         }
         assertEquals(VisionResult.REALIGN_QUEST, result);
-        assertEquals(2.0, estimator.getQuestRealignment().getX(), 1e-12);
-        assertEquals(1.0, estimator.getQuestRealignment().getY(), 1e-12);
+        // The Quest frames are 2 m / 1 m off, so they have to move back by that.
+        assertEquals(-2.0, estimator.getQuestRealignment().getX(), 1e-12);
+        assertEquals(-1.0, estimator.getQuestRealignment().getY(), 1e-12);
         assertEquals(0, estimator.getEstimatedPose().getX(), 1e-12);
     }
 

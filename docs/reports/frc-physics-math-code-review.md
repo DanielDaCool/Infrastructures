@@ -317,6 +317,11 @@ From the simulation study (fresh seeds, see README "What changed"). Commits on `
 - **E1 follow-up:** the collision threshold is 5 g (3 g gave 5x more false hits with an
   off-center roboRIO) and the hold 0.15 s. The drop into the hit is only used with
   `adaptiveTrust` off; with it on, the slip/collision detector raises the uncertainty instead.
+- **Q1 (found by the end-to-end tests, fixed):** when the Quest frames escaped the jump filter,
+  the Quest offset was shifted by their distance from the estimate in the wrong direction, so
+  their error doubled instead of going to 0 (after a wrong start pose: 1.17 m, then 2.3 m,
+  then 4.65 m off, rejected for good). The simulation had the same sign; this path fired 0
+  times in the cross-check runs (the Quest is re-aligned mostly by its jump handling).
 - **E2:** still kept by decision (frames up to 50 ms ahead go on the newest sample).
 - **R1:** kept for odometry samples; vision frames are now also dropped until the first sample
   after a reset.

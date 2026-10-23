@@ -550,7 +550,8 @@ public class DemaciaPoseEstimator {
             }
             window.clear();
             if (kind == MeasurementKind.QUEST) {
-                questRealignment = mean;
+                // The Quest frames are `mean` away from the estimate, so they move back by it.
+                questRealignment = mean.unaryMinus();
                 return VisionResult.REALIGN_QUEST;
             }
             escapes++;
@@ -746,7 +747,10 @@ public class DemaciaPoseEstimator {
         return Math.sqrt(adaptiveTrust ? variance : stateVarianceByAxis[0]);
     }
 
-    /** @return How far to shift the Quest after {@link VisionResult#REALIGN_QUEST} (field frame, meters). */
+    /**
+     * @return How far to shift the Quest frames after {@link VisionResult#REALIGN_QUEST} so they
+     *         agree with the estimate: minus their mean distance from it (field frame, meters).
+     */
     public Translation2d getQuestRealignment() {
         return questRealignment;
     }
