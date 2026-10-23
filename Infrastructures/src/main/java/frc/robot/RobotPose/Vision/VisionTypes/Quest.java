@@ -113,6 +113,16 @@ public class Quest extends BaseVisionSource {
      *               for the dashboard.
      */
     public Quest(QuestConfig config) {
+        this(config, new QuestNav());
+    }
+
+    /**
+     * Same as {@link #Quest(QuestConfig)}, with a given QuestNav (e.g. a fake one in tests).
+     *
+     * @param config   The Quest's config.
+     * @param questNav The QuestNav to read; it is used only by this source.
+     */
+    public Quest(QuestConfig config, QuestNav questNav) {
         super(config);
         this.config = config;
         frameFilter = new QuestFrameFilter(config.jumpMeters, config.gapSeconds, config.blackoutSeconds,
@@ -120,7 +130,7 @@ public class Quest extends BaseVisionSource {
         connectedDebouncer = new Debouncer(DISCONNECT_DEBOUNCE_SECONDS, DebounceType.kFalling);
         hasUpdatedQuestIntialPose = false;
         hasQuestDisconnected = true;
-        questNav = new QuestNav();
+        this.questNav = questNav;
         questNav.commandPeriodic();
     }
 
