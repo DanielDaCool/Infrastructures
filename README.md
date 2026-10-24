@@ -48,9 +48,8 @@ Add a `setState` with two more values to `SwerveModule`:
 public void setState(SwerveModuleState state, double acceleration, double steerVelocity) {
     double diff = MathUtil.angleModulus(state.angle.getRadians() - steerMotor.getCurrentPosition());
     steerMotor.setPositionVoltage(steerMotor.getCurrentPosition() + diff, STEER_KV * steerVelocity);
-    driveMotor.setVelocityWithAcceleration(
-        state.speedMetersPerSecond - steerMotor.getCurrentVelocity() * config.SteerVelToDriveVel,
-        () -> acceleration);
+    // the module already corrects the drive for the steer coupling (SteerVelToDriveVel)
+    driveMotor.setVelocityWithAcceleration(state.speedMetersPerSecond, () -> acceleration);
 }
 ```
 

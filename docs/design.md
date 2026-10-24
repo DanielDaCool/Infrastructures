@@ -71,9 +71,8 @@ public void setState(SwerveModuleState state, double acceleration, double steerV
     double diff = MathUtil.angleModulus(state.angle.getRadians() - steerMotor.getCurrentPosition());
     // no reverse here: the two-argument toSwerveModuleStates already turned the state to within 90 degrees
     steerMotor.setPositionVoltage(steerMotor.getCurrentPosition() + diff, STEER_KV * steerVelocity);
-    driveMotor.setVelocityWithAcceleration(
-        state.speedMetersPerSecond - steerMotor.getCurrentVelocity() * config.SteerVelToDriveVel,
-        () -> acceleration);
+    // the module already corrects the drive for the steer coupling (SteerVelToDriveVel)
+    driveMotor.setVelocityWithAcceleration(state.speedMetersPerSecond, () -> acceleration);
 }
 ```
 
