@@ -46,7 +46,10 @@ meters: **x forward, y left, z up**. Angles in radians, counter-clockwise positi
 A 2D Limelight (`LimelightTagCamera2dConfig`) is the one exception: its pitch is positive
 when the camera is tilted **up**.
 
-### 2. Start it (once, in `RobotContainer`)
+### 2. Start it (once)
+
+In `Robot`'s constructor or in `RobotContainer`, **after the chassis is created** (it reads the
+gyro and the modules). Not in `Main.java`: that runs before WPILib starts.
 
 ```java
 RobotPose.initialize(
