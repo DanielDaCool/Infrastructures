@@ -101,24 +101,6 @@ Pose2d pose = RobotPose.getInstance().getEstimatedPose();
    `BaseVisionSource.setOnCreate(ElasticGenerator.getInstance()::registerVisionSource);`.
 4. The dashboard keys moved from `chassis/...` to `pose/...`.
 
-## Before the first match
-
-Do these once, in order, and again after big changes to the robot:
-
-1. **Wheels:** drive a taped 5 m straight line with the cameras covered. If the pose says 4.9 m,
-   your wheel size is 2 % off: fix the wheel circumference.
-2. **Gyro:** spin the robot 10 turns and stop at the same heading. The gyro should read 3600°.
-   Turning left must be positive.
-3. **Camera pitch:** park about 1 m from a tag, centered. Adjust the camera pitch until the pose
-   distance matches a tape measure.
-4. **Camera position:** spin slowly in place in front of a tag. If the camera's pose (on
-   `vision/<name>/field`) draws a circle, the camera's x/y on the robot is wrong. Fix it until it
-   stays on one spot.
-5. **Quest:** same spin test for the Quest offset.
-6. **Check:** drive around for a minute and stop on a taped mark. The pose should be a few cm off.
-
-Full procedure with the reasons: [docs/design.md](docs/design.md#calibration-step-by-step).
-
 ## Dashboard
 
 | Key | What to look for |
@@ -139,6 +121,6 @@ Full procedure with the reasons: [docs/design.md](docs/design.md#calibration-ste
 | Pose jumps around | A camera's trust is 0 (`VecBuilder.fill(0, ...)`) – use a small number instead. |
 | Cameras are ignored for a long time | A camera offset is wrong, or the pose was reset to a wrong place. After a few seconds of cameras agreeing it fixes itself. |
 | Cameras never change the pose | Check `is Connected` and that the camera sees tags (Quest: `is tracking`). |
-| One camera keeps pulling the pose | Its offset on the robot is wrong (see "Before the first match"). |
+| One camera keeps pulling the pose | Its offset on the robot is wrong (see the calibration in [docs/design.md](docs/design.md#calibration-step-by-step)). |
 | 2D camera is off by meters when turning | Wrong camera yaw, height or pitch. |
 | Quest pulls the pose to (0, 0) | Don't call `QuestNav.setPose` yourself; use `resetPose` or the dashboard button. |
