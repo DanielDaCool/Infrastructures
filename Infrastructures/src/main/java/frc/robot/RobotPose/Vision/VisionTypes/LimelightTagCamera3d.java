@@ -25,7 +25,7 @@ import frc.robot.RobotPose.Vision.visionConfigs.LimelightTagCamera3dConfig;
  * from our heading at the frame time by more than {@link #MAX_HEADING_ERROR_RADIANS} (the
  * Limelight solved it with an old heading: after a gyro reset, while spinning, or with a wrong
  * camera yaw). The x/y std dev grows with the tag distance and shrinks with the tag count (see
- * {@link BaseVisionSource#distanceStdDev}); the config x std dev is its minimum.
+ * {@link BaseVisionSource#distanceStdDev}); the config std devs are not used.
  *
  * <p>The camera's position on the robot (the config offset, converted to the Limelight's
  * frame) is sent to the Limelight once, at construction.
@@ -121,7 +121,7 @@ public class LimelightTagCamera3d extends BaseVisionSource {
             return List.of();
         }
         // MegaTag2's yaw is the heading we sent with SetRobotOrientation, not a measurement.
-        double xyStd = distanceStdDev(std.get(0, 0), poseEstimate.avgTagDist, poseEstimate.tagCount);
+        double xyStd = distanceStdDev(poseEstimate.avgTagDist, poseEstimate.tagCount);
         return List.of(new TimestampedVisionMeasurement(poseEstimate.pose, poseEstimate.timestampSeconds,
                 VecBuilder.fill(xyStd, xyStd, Double.POSITIVE_INFINITY)));
     }

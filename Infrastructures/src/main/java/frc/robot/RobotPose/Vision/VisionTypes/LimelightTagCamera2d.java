@@ -49,7 +49,7 @@ import frc.robot.RobotPose.Vision.visionConfigs.LimelightTagCamera2dConfig;
  * minus the pipeline and capture latency.
  *
  * <p>The x/y std dev grows with the camera to tag distance (see
- * {@link BaseVisionSource#distanceStdDev}, one tag); the config x std dev is its minimum.
+ * {@link BaseVisionSource#distanceStdDev}, one tag); the config std devs are not used.
  *
  * <p>Reads the Limelight's NetworkTables table {@code "limelight-" + name} directly.
  */
@@ -147,7 +147,7 @@ public class LimelightTagCamera2d extends BaseVisionSource {
             return List.of();
         }
         // The heading is taken from the estimate, not measured, so it carries no information.
-        double xyStd = distanceStdDev(std.get(0, 0), lastTagDistance, 1);
+        double xyStd = distanceStdDev(lastTagDistance, 1);
         return List.of(new TimestampedVisionMeasurement(pose, timestampSeconds,
                 VecBuilder.fill(xyStd, xyStd, Double.POSITIVE_INFINITY)));
     }

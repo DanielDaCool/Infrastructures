@@ -24,7 +24,7 @@ public class QuestConfig extends BaseVisionSourceConfig {
      * on purpose: Quest errors are the same from frame to frame, so it must not outvote the
      * cameras.
      */
-    public double thinnedStd = 0.2;
+    public double thinnedStd = 0.4;
     /** At most one frame per this long is used (seconds). */
     public double periodSeconds = 0.1;
     /** The Quest moving this much differently from the odometry between two frames is a jump (meters). */

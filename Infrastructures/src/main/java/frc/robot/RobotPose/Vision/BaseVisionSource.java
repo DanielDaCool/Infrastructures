@@ -83,17 +83,20 @@ public abstract class BaseVisionSource implements VisionSource, Sendable {
     }
 
     /**
-     * Std dev (meters) of a tag camera's x/y: {@code max(minStd, hypot(STD_PER_METER_SQUARED *
-     * d^2 / sqrt(tags), d * HEADING_STD_RADIANS))}. Far tags and single tags are trusted less.
+     * Std dev (meters) of a tag camera's x/y: {@code hypot(STD_PER_METER_SQUARED * d^2 /
+     * sqrt(tags), d * HEADING_STD_RADIANS)}, at least 1 mm (0 would mean "exact"). Far tags and
+     * single tags are trusted less.
      *
-     * @param minStd         The smallest std dev (the config x std dev).
      * @param distanceMeters Average distance to the tags.
      * @param tagCount       Tags in the frame (at least 1 is assumed).
      */
-    public static double distanceStdDev(double minStd, double distanceMeters, int tagCount) {
+    public static double distanceStdDev(double distanceMeters, int tagCount) {
         double std = STD_PER_METER_SQUARED * distanceMeters * distanceMeters / Math.sqrt(Math.max(tagCount, 1));
-        return Math.max(minStd, Math.hypot(std, distanceMeters * HEADING_STD_RADIANS));
+        return Math.max(MIN_STD_METERS, Math.hypot(std, distanceMeters * HEADING_STD_RADIANS));
     }
+
+    /** Smallest tag camera std dev (meters), so a frame right at a tag isn't taken as exact. */
+    private static final double MIN_STD_METERS = 1e-3;
 
     /** Puts dashboard entries. Subclasses can override to add their own (call super). */
     protected void addLog() {

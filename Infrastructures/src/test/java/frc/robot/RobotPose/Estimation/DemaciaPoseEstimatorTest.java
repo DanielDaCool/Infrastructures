@@ -1,7 +1,6 @@
 package frc.robot.RobotPose.Estimation;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
@@ -118,56 +117,6 @@ class DemaciaPoseEstimatorTest {
         assertEquals(0.01, estimator.getEstimatedPose().getX(), 1e-9);
     }
 
-    /** A hit from the front, over {@link DemaciaPoseEstimator#COLLISION_ACCELERATION} (6 g, backward). */
-    private static final Translation2d HIT_FROM_THE_FRONT = new Translation2d(-60, 0);
-
-    @Test
-    void motionIntoAHitIsDropped() {
-        estimator.setAdaptiveTrust(false);
-        SimHooks.stepTiming(1.0);
-        estimator.addOdometryData(List.of(straightSample(1.0, 0)));
-        SimHooks.stepTiming(0.02);
-        // Driving forward into a wall: the hit pushes the robot backward (-x).
-        estimator.addOdometryData(List.of(straightSample(1.02, 0.1)), HIT_FROM_THE_FRONT);
-        assertEquals(0, estimator.getEstimatedPose().getX(), 1e-9);
-        assertEquals(true, estimator.isColliding());
-    }
-
-    @Test
-    void motionToTheSideOfAHitIsKept() {
-        estimator.setAdaptiveTrust(false);
-        SimHooks.stepTiming(1.0);
-        estimator.addOdometryData(List.of(sample(1.0, 0, Rotation2d.kCCW_Pi_2)));
-        SimHooks.stepTiming(0.02);
-        // Driving left (+y) while hit from the front: the motion is perpendicular to the hit.
-        estimator.addOdometryData(List.of(sample(1.02, 0.1, Rotation2d.kCCW_Pi_2)), HIT_FROM_THE_FRONT);
-        assertEquals(0.1, estimator.getEstimatedPose().getY(), 1e-9);
-    }
-
-    @Test
-    void collisionEndsAfterTheHoldTime() {
-        estimator.setAdaptiveTrust(false);
-        SimHooks.stepTiming(1.0);
-        estimator.addOdometryData(List.of(straightSample(1.0, 0)));
-        SimHooks.stepTiming(0.02);
-        estimator.addOdometryData(List.of(straightSample(1.02, 0.1)), HIT_FROM_THE_FRONT);
-        SimHooks.stepTiming(DemaciaPoseEstimator.COLLISION_HOLD_SECONDS + 0.01);
-        estimator.addOdometryData(List.of(straightSample(Timer.getFPGATimestamp(), 0.2)), Translation2d.kZero);
-        assertEquals(false, estimator.isColliding());
-        assertEquals(0.1, estimator.getEstimatedPose().getX(), 1e-9);
-    }
-
-    @Test
-    void accelerationBelowTheThresholdIsNotAHit() {
-        estimator.setAdaptiveTrust(false);
-        SimHooks.stepTiming(1.0);
-        estimator.addOdometryData(List.of(straightSample(1.0, 0)));
-        SimHooks.stepTiming(0.02);
-        // 4 g: a hit for the old 3 g threshold, not for 5 g.
-        estimator.addOdometryData(List.of(straightSample(1.02, 0.1)), new Translation2d(-4 * 9.81, 0));
-        assertEquals(0.1, estimator.getEstimatedPose().getX(), 1e-9);
-    }
-
     private static Matrix<N3, N1> xyStd(double std) {
         return VecBuilder.fill(std, std, Double.POSITIVE_INFINITY);
     }
@@ -189,65 +138,24 @@ class DemaciaPoseEstimatorTest {
     }
 
     /** One 20 ms loop standing still at {@code distance}; returns the sample time. */
-    private double standingLoop(double distance, Translation2d acceleration) {
+    private double standingLoop(double distance) {
         SimHooks.stepTiming(0.02);
         double now = Timer.getFPGATimestamp();
-        estimator.addOdometryData(List.of(straightSample(now, distance)), acceleration);
+        estimator.addOdometryData(List.of(straightSample(now, distance)));
         return now;
     }
 
-    private double variance() {
-        return Math.pow(estimator.getPositionStdDev(), 2);
-    }
-
-    @Test
-    void uncertaintyGrowsWithDistanceAndTimeNotWithTheSampleRate() {
-        for (int hz : new int[] {50, 250}) {
-            SimHooks.restartTiming();
-            estimator = new DemaciaPoseEstimator(MODULE_LOCATIONS, VecBuilder.fill(1, 1, 0));
-            resetAtOneSecond();
-            // 2 m in 1 s.
-            for (int i = 1; i <= hz; i++) {
-                estimator.addOdometryData(List.of(straightSample(1.0 + (double) i / hz, 2.0 * i / hz)));
-            }
-            double expected = DemaciaPoseEstimator.RESET_VARIANCE + DemaciaPoseEstimator.VARIANCE_PER_METER * 2
-                    + DemaciaPoseEstimator.VARIANCE_PER_SECOND * 1;
-            assertEquals(expected, variance(), 1e-9);
-        }
-    }
-
-    @Test
-    void visionPullsByPOverPPlusR() {
-        resetAtOneSecond();
-        double t = standingLoop(0, Translation2d.kZero);
-        double p = variance();
-        double r = 0.1 * 0.1;
-        double k = p / (p + r);
-        assertEquals(VisionResult.ACCEPTED, estimator.addVisionMeasurement(new Pose2d(0.1, 0, Rotation2d.kZero), t, xyStd(0.1)));
-        assertEquals(0.1 * k, estimator.getEstimatedPose().getX(), 1e-12);
-        assertEquals((1 - k) * p, variance(), 1e-12);
-    }
-
-    @Test
-    void aLateFrameUsesTheUncertaintyAtItsTime() {
-        resetAtOneSecond();
-        estimator.addOdometryData(List.of(straightSample(1.5, 1.0), straightSample(2.0, 2.0)));
-        double addedSince = DemaciaPoseEstimator.VARIANCE_PER_METER * 1.0 + DemaciaPoseEstimator.VARIANCE_PER_SECOND * 0.5;
-        double pNow = variance();
-        double pAtFrame = pNow - addedSince;
-        double k = pAtFrame / (pAtFrame + 0.01);
-        // The estimate was at (1, 0) at t = 1.5; the frame says y = 0.1 there.
-        estimator.addVisionMeasurement(new Pose2d(1.0, 0.1, Rotation2d.kZero), 1.5, xyStd(0.1));
-        assertEquals(0.1 * k, estimator.getEstimatedPose().getY(), 1e-12);
-        assertEquals(2.0, estimator.getEstimatedPose().getX(), 1e-12);
-        assertEquals((1 - k) * pAtFrame + addedSince, variance(), 1e-12);
+    /** An estimator with the team's state std devs (0.05 m), for the jump filter tests. */
+    private void useTeamStateStd() {
+        estimator = new DemaciaPoseEstimator(MODULE_LOCATIONS, VecBuilder.fill(0.05, 0.05, 0));
     }
 
     @Test
     void aJumpIsRejectedUntilEnoughFramesAgree() {
+        useTeamStateStd();
         resetAtOneSecond();
         for (int i = 1; i <= DemaciaPoseEstimator.ESCAPE_REJECTED_FRAMES; i++) {
-            double t = standingLoop(0, Translation2d.kZero);
+            double t = standingLoop(0);
             VisionResult result = estimator.addVisionMeasurement(new Pose2d(2.0, 0, Rotation2d.kZero), t, xyStd(0.05));
             if (i < DemaciaPoseEstimator.ESCAPE_REJECTED_FRAMES) {
                 assertEquals(VisionResult.REJECTED, result);
@@ -256,17 +164,18 @@ class DemaciaPoseEstimatorTest {
                 assertEquals(VisionResult.ACCEPTED, result);
             }
         }
-        // P was raised to the 2 m error, so the frame is taken almost fully.
-        assertEquals(2.0 * 4 / (4 + 0.05 * 0.05), estimator.getEstimatedPose().getX(), 1e-9);
+        // Then used with the normal gain: q = r, so K = 0.5.
+        assertEquals(1.0, estimator.getEstimatedPose().getX(), 1e-9);
         assertEquals(1, estimator.getEscapes());
         assertEquals(DemaciaPoseEstimator.ESCAPE_REJECTED_FRAMES, estimator.getRejectedFrames());
     }
 
     @Test
     void rejectedFramesThatDisagreeDoNotEscape() {
+        useTeamStateStd();
         resetAtOneSecond();
         for (int i = 0; i < 2 * DemaciaPoseEstimator.ESCAPE_WINDOW_FRAMES; i++) {
-            double t = standingLoop(0, Translation2d.kZero);
+            double t = standingLoop(0);
             double y = i % 2 == 0 ? 0 : 1.0;  // 1 m apart
             assertEquals(VisionResult.REJECTED,
                     estimator.addVisionMeasurement(new Pose2d(2.0, y, Rotation2d.kZero), t, xyStd(0.05)));
@@ -276,10 +185,11 @@ class DemaciaPoseEstimatorTest {
 
     @Test
     void questFramesThatEscapeRealignTheQuest() {
+        useTeamStateStd();
         resetAtOneSecond();
         VisionResult result = null;
         for (int i = 1; i <= DemaciaPoseEstimator.ESCAPE_REJECTED_FRAMES; i++) {
-            double t = standingLoop(0, Translation2d.kZero);
+            double t = standingLoop(0);
             result = estimator.addVisionMeasurement(new Pose2d(2.0, 1.0, Rotation2d.kZero), t, xyStd(0.05),
                     MeasurementKind.QUEST);
         }
@@ -292,19 +202,21 @@ class DemaciaPoseEstimatorTest {
 
     @Test
     void theJumpFilterIsOffWhileDisabled() {
+        useTeamStateStd();
         resetAtOneSecond();
         estimator.setEnabled(false);
-        double t = standingLoop(0, Translation2d.kZero);
+        double t = standingLoop(0);
         assertEquals(VisionResult.ACCEPTED,
                 estimator.addVisionMeasurement(new Pose2d(3.0, 0, Rotation2d.kZero), t, xyStd(0.05)));
-        assertTrue(estimator.getEstimatedPose().getX() > 2.0);
+        // Used with the normal gain (q = r, K = 0.5) instead of being rejected.
+        assertEquals(1.5, estimator.getEstimatedPose().getX(), 1e-9);
     }
 
     @Test
     void badFramesAreDropped() {
         estimator.setFieldSize(16.5, 8.1);
         resetAtOneSecond();
-        double t = standingLoop(0, Translation2d.kZero);
+        double t = standingLoop(0);
         assertEquals(VisionResult.DROPPED,
                 estimator.addVisionMeasurement(new Pose2d(Double.NaN, 0, Rotation2d.kZero), t, xyStd(0.05)));
         assertEquals(VisionResult.DROPPED,
@@ -315,92 +227,10 @@ class DemaciaPoseEstimatorTest {
                 estimator.addVisionMeasurement(new Pose2d(0, -0.6, Rotation2d.kZero), t, xyStd(0.05)));
         // Older than the history.
         for (int i = 0; i < 100; i++) {
-            standingLoop(0, Translation2d.kZero);
+            standingLoop(0);
         }
         assertEquals(VisionResult.DROPPED, estimator.addVisionMeasurement(Pose2d.kZero, t, xyStd(0.05)));
         assertEquals(0, estimator.getEstimatedPose().getX(), 1e-12);
-    }
-
-    @Test
-    void framesFromBeforeTheFirstSampleAfterAResetAreDropped() {
-        resetAtOneSecond();
-        standingLoop(0, Translation2d.kZero);
-        SimHooks.stepTiming(0.02);
-        double resetTime = Timer.getFPGATimestamp();
-        estimator.resetPose(new Pose2d(1, 1, Rotation2d.kZero), Rotation2d.kZero);
-        // Nothing after the reset yet.
-        assertEquals(VisionResult.DROPPED,
-                estimator.addVisionMeasurement(new Pose2d(1.01, 1, Rotation2d.kZero), resetTime, xyStd(0.05)));
-        double t = standingLoop(0, Translation2d.kZero);
-        assertEquals(VisionResult.DROPPED,
-                estimator.addVisionMeasurement(new Pose2d(1.01, 1, Rotation2d.kZero), resetTime + 0.01, xyStd(0.05)));
-        assertEquals(VisionResult.ACCEPTED,
-                estimator.addVisionMeasurement(new Pose2d(1.01, 1, Rotation2d.kZero), t, xyStd(0.05)));
-    }
-
-    @Test
-    void aResetSetsAModerateUncertainty() {
-        resetAtOneSecond();
-        estimator.addOdometryData(List.of(straightSample(2.0, 10.0)));
-        assertTrue(estimator.getPositionStdDev() > 0.15);
-        estimator.resetPose(Pose2d.kZero, Rotation2d.kZero);
-        assertEquals(0.1, estimator.getPositionStdDev(), 1e-12);
-    }
-
-    @Test
-    void withoutAdaptiveTrustTheGainIsFixed() {
-        estimator.setAdaptiveTrust(false);
-        resetAtOneSecond();
-        estimator.addOdometryData(List.of(straightSample(2.0, 10.0)));
-        assertEquals(1.0, estimator.getPositionStdDev(), 1e-12);
-        // q = 1 (state std 1), r = 1: K = q / (q + sqrt(q r)) = 0.5.
-        estimator.addVisionMeasurement(new Pose2d(10.0, 1.0, Rotation2d.kZero), 2.0, xyStd(1.0));
-        assertEquals(0.5, estimator.getEstimatedPose().getY(), 1e-12);
-        assertEquals(1.0, estimator.getPositionStdDev(), 1e-12);
-    }
-
-    @Test
-    void beingPushedWhileTheWheelsStandStillIsSlip() {
-        resetAtOneSecond();
-        double before = variance();
-        Translation2d push = new Translation2d(3.0, 0);
-        // 0.5 s of a 3 m/s^2 shove that the wheels don't feel.
-        for (int i = 0; i < 25; i++) {
-            standingLoop(0, push);
-        }
-        assertTrue(estimator.isSlipping());
-        assertTrue(variance() > before + 0.001);
-    }
-
-    @Test
-    void noSlipWhenTheWheelsAndTheAccelerometerAgree() {
-        resetAtOneSecond();
-        double before = variance();
-        for (int i = 0; i < 5; i++) {
-            standingLoop(0, new Translation2d(0.01, 0));
-        }
-        assertFalse(estimator.isSlipping());
-        assertEquals(before + 5 * 0.02 * DemaciaPoseEstimator.VARIANCE_PER_SECOND, variance(), 1e-9);
-    }
-
-    @Test
-    void aHitAddsUncertaintyAndWheelsDrivingIntoItArePinned() {
-        resetAtOneSecond();
-        double distance = 0;
-        Translation2d gentle = new Translation2d(0.01, 0);
-        for (int i = 0; i < 3; i++) {
-            distance += 0.04;  // 2 m/s
-            standingLoop(distance, gentle);
-        }
-        double before = variance();
-        distance += 0.04;
-        standingLoop(distance, HIT_FROM_THE_FRONT);
-        assertTrue(variance() >= before + DemaciaPoseEstimator.COLLISION_VARIANCE);
-        // The wheels keep driving forward into the wall.
-        distance += 0.04;
-        standingLoop(distance, gentle);
-        assertTrue(estimator.isPinned());
-        assertTrue(estimator.getSecondsSinceHit() < 0.1);
     }
 
     @Test
@@ -408,7 +238,7 @@ class DemaciaPoseEstimatorTest {
         Pose2d[] results = new Pose2d[2];
         for (int order = 0; order < 2; order++) {
             SimHooks.restartTiming();
-            estimator = new DemaciaPoseEstimator(MODULE_LOCATIONS, VecBuilder.fill(1, 1, 0));
+            estimator = new DemaciaPoseEstimator(MODULE_LOCATIONS, VecBuilder.fill(0.1, 0.1, 0));
             resetAtOneSecond();
             List<OdometryData> samples = new ArrayList<>();
             for (int i = 1; i <= 50; i++) {
@@ -427,7 +257,9 @@ class DemaciaPoseEstimatorTest {
             }
             results[order] = estimator.getEstimatedPose();
         }
-        assertEquals(0, results[0].getTranslation().getDistance(results[1].getTranslation()), 0.01);
+        // With a fixed gain the frame that arrives last weighs more (0.5 vs 0.25 here), so the
+        // order shows up as a few cm; a full replay would not depend on the arrival order.
+        assertEquals(0, results[0].getTranslation().getDistance(results[1].getTranslation()), 0.05);
     }
 
     @Test
@@ -471,5 +303,41 @@ class DemaciaPoseEstimatorTest {
         // The first sample after the reset is 1 us late (kept in order), hence 1e-5.
         assertEquals(0.5, past.getX(), 1e-5);
         assertEquals(0.1, past.getY(), 1e-9);
+    }
+
+    @Test
+    void visionPullsByWPILibsGain() {
+        resetAtOneSecond();
+        double t = standingLoop(0);
+        // q = 1 (state std 1), r = 0.25: K = q / (q + sqrt(q r)) = 2/3.
+        assertEquals(VisionResult.ACCEPTED, estimator.addVisionMeasurement(new Pose2d(0.3, 0.6, Rotation2d.kZero), t, xyStd(0.5)));
+        assertEquals(0.2, estimator.getEstimatedPose().getX(), 1e-12);
+        assertEquals(0.4, estimator.getEstimatedPose().getY(), 1e-12);
+    }
+
+    @Test
+    void framesFromBeforeAResetAreDropped() {
+        resetAtOneSecond();
+        standingLoop(0);
+        double beforeReset = standingLoop(0);
+        SimHooks.stepTiming(0.02);
+        estimator.resetPose(new Pose2d(1, 1, Rotation2d.kZero), Rotation2d.kZero);
+        assertEquals(VisionResult.DROPPED,
+                estimator.addVisionMeasurement(new Pose2d(1.01, 1, Rotation2d.kZero), beforeReset, xyStd(0.05)));
+        double t = standingLoop(0);
+        assertEquals(VisionResult.ACCEPTED,
+                estimator.addVisionMeasurement(new Pose2d(1.01, 1, Rotation2d.kZero), t, xyStd(0.05)));
+    }
+
+    @Test
+    void theJumpFilterUsesTheStateStd() {
+        useTeamStateStd();
+        resetAtOneSecond();
+        double t = standingLoop(0);
+        // 0.2 m with q + r = 0.0025 + 0.0004: chi^2 13.8 is about 0.2 m.
+        assertEquals(VisionResult.ACCEPTED,
+                estimator.addVisionMeasurement(new Pose2d(0.19, 0, Rotation2d.kZero), t, xyStd(0.02)));
+        assertEquals(VisionResult.REJECTED,
+                estimator.addVisionMeasurement(new Pose2d(0.4, 0, Rotation2d.kZero), t, xyStd(0.02)));
     }
 }

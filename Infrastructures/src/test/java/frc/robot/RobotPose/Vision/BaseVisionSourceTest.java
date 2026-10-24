@@ -50,13 +50,14 @@ class BaseVisionSourceTest {
 
     @Test
     void theStdDevGrowsWithDistanceAndShrinksWithTags() {
-        // Close: the minimum.
-        assertEquals(0.02, BaseVisionSource.distanceStdDev(0.02, 1.0, 1), 1e-12);
+        // 1 m, 1 tag: hypot(0.008, 0.01).
+        assertEquals(Math.hypot(0.008, 0.01), BaseVisionSource.distanceStdDev(1.0, 1), 1e-12);
         // 4 m, 1 tag: 0.008 * 16 = 0.128, heading part 0.04.
-        assertEquals(Math.hypot(0.128, 0.04), BaseVisionSource.distanceStdDev(0.02, 4.0, 1), 1e-12);
+        assertEquals(Math.hypot(0.128, 0.04), BaseVisionSource.distanceStdDev(4.0, 1), 1e-12);
         // 4 tags halve the distance part.
-        assertEquals(Math.hypot(0.064, 0.04), BaseVisionSource.distanceStdDev(0.02, 4.0, 4), 1e-12);
-        // No tag count reported counts as one.
-        assertEquals(BaseVisionSource.distanceStdDev(0.02, 4.0, 1), BaseVisionSource.distanceStdDev(0.02, 4.0, 0), 1e-12);
+        assertEquals(Math.hypot(0.064, 0.04), BaseVisionSource.distanceStdDev(4.0, 4), 1e-12);
+        // No tag count reported counts as one; right at a tag it is not exact.
+        assertEquals(BaseVisionSource.distanceStdDev(4.0, 1), BaseVisionSource.distanceStdDev(4.0, 0), 1e-12);
+        assertEquals(1e-3, BaseVisionSource.distanceStdDev(0, 1), 1e-12);
     }
 }

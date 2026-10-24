@@ -17,7 +17,7 @@ import edu.wpi.first.math.geometry.Translation2d;
  * <li><b>Thinning:</b> at most one frame per {@code periodSeconds} is used (the first one of
  * each period), with a larger std dev (see {@code QuestConfig}).</li>
  * </ul>
- * In simulation this took the error during a Quest jump from 49 cm to 3.4 cm, and without
+ * In simulation this took the error during a Quest jump from 49 cm to 6 cm, and without
  * thinning the Quest outvoted the cameras (26-28 runs lost for more than 5 s).
  */
 public final class QuestFrameFilter {

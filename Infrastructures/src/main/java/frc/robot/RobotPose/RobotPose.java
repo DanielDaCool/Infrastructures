@@ -4,7 +4,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
-import java.util.function.DoubleSupplier;
 import java.util.function.Supplier;
 
 import edu.wpi.first.apriltag.AprilTagFieldLayout;
@@ -21,8 +20,6 @@ import edu.wpi.first.util.sendable.Sendable;
 import edu.wpi.first.util.sendable.SendableBuilder;
 import edu.wpi.first.wpilibj.Alert;
 import edu.wpi.first.wpilibj.Alert.AlertType;
-import edu.wpi.first.wpilibj.BuiltInAccelerometer;
-import edu.wpi.first.wpilibj.BuiltInAccelerometer.Range;
 import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.smartdashboard.Field2d;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
@@ -47,9 +44,7 @@ import frc.robot.RobotPose.Vision.VisionTypes.Quest;
  * <li>whether the robot is enabled (the estimator's jump filter is off while disabled),</li>
  * <li>every odometry sample (gyro + swerve module positions) since the last loop, from the
  * supplier passed to {@link #initialize} (one sample at 50 Hz, about five with a 250 Hz
- * {@link PhoenixOdometryThread}), with the roboRIO's acceleration if collision detection
- * was turned on with {@link #enableCollisionDetection} (the slip/collision detector needs it),
- * and</li>
+ * {@link PhoenixOdometryThread}), and</li>
  * <li>every new measurement from the {@link VisionSource}s in the {@link VisionConfig}.</li>
  * </ol>
  *
@@ -81,20 +76,6 @@ public final class RobotPose implements Sendable {
     private final List<VisionSource> sources;
     /** The estimated pose on the dashboard ({@code pose/field}). */
     private final Field2d field = new Field2d();
-
-    /** The roboRIO's accelerometer, or null while collision detection is off. */
-    private BuiltInAccelerometer roboRioAccelerometer;
-    /** How the roboRIO is mounted; see {@link #enableCollisionDetection}. */
-    private RoboRioOrientation roboRioOrientation;
-    /** Where the roboRIO is relative to the robot center; see {@link #enableCollisionDetection}. */
-    private Translation2d roboRioPosition = Translation2d.kZero;
-    /** Robot yaw rate (rad/s, CCW positive); see {@link #enableCollisionDetection}. */
-    private DoubleSupplier yawRateRadiansPerSecond;
-    /**
-     * Horizontal roboRIO acceleration of the last odometry sample, robot relative, in g (logged to
-     * tune the collision threshold and check the roboRIO's mounting).
-     */
-    private Translation2d lastAccelerationG = Translation2d.kZero;
 
     /** A Quest and a 3D Limelight further apart than this (meters) disagree. */
     private static final double SOURCE_DISAGREEMENT_METERS = 0.3;
@@ -152,9 +133,7 @@ public final class RobotPose implements Sendable {
      */
     public void periodic() {
         poseEstimator.setEnabled(DriverStation.isEnabled());
-        Translation2d accelerationFromRoboRio = getAccelerationFromRoboRio();
-        addNewOdometrySamples(accelerationFromRoboRio);
-        lastAccelerationG = accelerationFromRoboRio.div(9.81);
+        addNewOdometrySamples();
 
         for (VisionSource source : sources) {
             source.periodic();
@@ -194,17 +173,8 @@ public final class RobotPose implements Sendable {
         builder.addDoubleProperty("x", () -> getEstimatedPose().getX(), null);
         builder.addDoubleProperty("y", () -> getEstimatedPose().getY(), null);
         builder.addDoubleProperty("heading deg", () -> getEstimatedPose().getRotation().getDegrees(), null);
-        builder.addBooleanProperty("adaptive trust", poseEstimator::isAdaptiveTrust, null);
-        builder.addDoubleProperty("position std m", poseEstimator::getPositionStdDev, null);
-        builder.addBooleanProperty("slipping", poseEstimator::isSlipping, null);
-        builder.addBooleanProperty("pinned", poseEstimator::isPinned, null);
-        builder.addDoubleProperty("seconds since hit", poseEstimator::getSecondsSinceHit, null);
         builder.addIntegerProperty("frames rejected", poseEstimator::getRejectedFrames, null);
         builder.addIntegerProperty("escapes", poseEstimator::getEscapes, null);
-        builder.addBooleanProperty("colliding", poseEstimator::isColliding, null);
-        builder.addDoubleProperty("acceleration g", () -> lastAccelerationG.getNorm(), null);
-        builder.addDoubleProperty("acceleration x g", () -> lastAccelerationG.getX(), null);
-        builder.addDoubleProperty("acceleration y g", () -> lastAccelerationG.getY(), null);
     }
 
     /**
@@ -274,19 +244,9 @@ public final class RobotPose implements Sendable {
 
     /** Adds every odometry sample since the last call to the estimator. */
     private void addNewOdometrySamples() {
-        addNewOdometrySamples(Translation2d.kZero);
-    }
-
-    /**
-     * Adds every odometry sample since the last call to the estimator.
-     *
-     * @param accelerationFromRoboRio This loop's acceleration for collision detection
-     *                                ({@code Translation2d.kZero} turns it off).
-     */
-    private void addNewOdometrySamples(Translation2d accelerationFromRoboRio) {
         List<OdometryData> samples = odometrySamplesSupplier.get();
         if (!samples.isEmpty()) {
-            poseEstimator.addOdometryData(samples, accelerationFromRoboRio);
+            poseEstimator.addOdometryData(samples);
             lastGyroAngle = samples.get(samples.size() - 1).gyroAngle();
         }
     }
@@ -331,15 +291,6 @@ public final class RobotPose implements Sendable {
     /** The odometry-only motion between two FPGA times, in the field frame (meters). */
     public Translation2d getOdometryMotion(double fromTimestampSeconds, double toTimestampSeconds) {
         return poseEstimator.getOdometryMotion(fromTimestampSeconds, toTimestampSeconds);
-    }
-
-    /**
-     * Turns trust that follows the uncertainty on (default) or off; see
-     * {@link DemaciaPoseEstimator#setAdaptiveTrust}. Turn it off if the push test shows that the
-     * slip/collision flags ({@code pose/slipping}, {@code pose/pinned}) don't fire.
-     */
-    public void setAdaptiveTrust(boolean adaptiveTrust) {
-        poseEstimator.setAdaptiveTrust(adaptiveTrust);
     }
 
     /**
@@ -409,63 +360,6 @@ public final class RobotPose implements Sendable {
     }
 
     /**
-     * Turns on the slip/collision detector: the roboRIO's acceleration is compared with the
-     * wheels', and slip, pushes and hits make the estimator trust vision more (with
-     * {@code adaptiveTrust} off, the wheel motion into a hit is dropped instead; see
-     * {@link DemaciaPoseEstimator#addOdometryData(List, Translation2d)}). Off unless this is
-     * called, because the mounting has to be measured on each robot. Without it,
-     * {@code adaptiveTrust} has no detector, so call this or turn {@code adaptiveTrust} off.
-     *
-     * <p>To check the orientation (disabled, on the floor): {@code pose/acceleration x g} and
-     * {@code y g} read about 0 at rest, lifting the robot's front makes {@code x g} positive,
-     * and lifting its left side makes {@code y g} positive. Tune
-     * {@link DemaciaPoseEstimator#COLLISION_ACCELERATION} from {@code pose/acceleration g}.
-     *
-     * @param orientation             How the roboRIO is mounted (see {@link RoboRioOrientation}).
-     * @param roboRioPosition         Where the roboRIO is relative to the robot center (meters,
-     *                                x forward, y left). Spinning makes an off-center roboRIO
-     *                                read w^2 * r (up to ~3 g at 20 cm), which is removed using
-     *                                this.
-     * @param yawRateRadiansPerSecond The robot's yaw rate (rad/s), e.g. from the gyro.
-     */
-    public void enableCollisionDetection(RoboRioOrientation orientation, Translation2d roboRioPosition,
-            DoubleSupplier yawRateRadiansPerSecond) {
-        if (roboRioAccelerometer == null) {
-            roboRioAccelerometer = new BuiltInAccelerometer(Range.k8G);
-        }
-        this.roboRioOrientation = orientation;
-        this.roboRioPosition = roboRioPosition;
-        this.yawRateRadiansPerSecond = yawRateRadiansPerSecond;
-    }
-
-    /**
-     * Horizontal acceleration of the robot (robot relative, m/s^2) for collision detection, from
-     * the roboRIO's built-in accelerometer, turned to the robot by the configured
-     * {@link RoboRioOrientation}. {@code Translation2d.kZero} while collision detection is off.
-     *
-     * <p>Why the roboRIO and not the Pigeon: the roboRIO reads up to 8 g, the Pigeon's
-     * acceleration signal stops at 2 g, so every hit read the same ~2 g and the threshold had to
-     * sit close to normal driving. The roboRIO is also read right now in the loop (the Pigeon's
-     * value comes over CAN, up to 10 ms old) and can't disconnect and leave a stale value. Its
-     * downside is that it's usually not at the robot center, so the w^2 * r it reads while
-     * spinning is removed (see {@link #enableCollisionDetection}).
-     *
-     * <p>In simulation it reads 0, so no collisions are detected there.
-     */
-    private Translation2d getAccelerationFromRoboRio() {
-        if (roboRioAccelerometer == null) {
-            return Translation2d.kZero;
-        }
-        Translation2d measured = roboRioOrientation.toRobotHorizontal(
-                roboRioAccelerometer.getX(), roboRioAccelerometer.getY(), roboRioAccelerometer.getZ())
-                .times(9.81);
-        // Spinning at w pulls a point at r toward the center with w^2 * r. That isn't a hit.
-        double yawRate = yawRateRadiansPerSecond.getAsDouble();
-        return measured.plus(roboRioPosition.times(yawRate * yawRate));
-    }
-
-
-    /**
      * Creates the singleton. Call once from RobotContainer, after the chassis is created.
      * A second call replaces the instance (and its history). {@link #resetPose} does not write
      * the gyro; use the overload with a pose reset gyro setter for that.
@@ -482,10 +376,9 @@ public final class RobotPose implements Sendable {
      * @param moduleLocations        Each module's position relative to the robot center
      *                               (meters), in the same order as the module positions.
      * @param stateStd               How much to trust odometry, per axis (x m, y m, theta rad).
-     *                               x and y are only used with {@code adaptiveTrust} off
-     *                               (larger values let vision correct the pose faster); theta
-     *                               for vision that measures the heading. A 0 on an axis means
-     *                               vision never changes that axis.
+     *                               Larger values let vision correct the pose faster and let
+     *                               frames further off through the jump filter. A 0 on an axis
+     *                               means vision never changes that axis.
      * @param visionConfig           The vision sources to use. They are already created when
      *                               the config is built.
      */
@@ -506,27 +399,12 @@ public final class RobotPose implements Sendable {
     public static synchronized void initialize(Supplier<List<OdometryData>> odometrySamples,
             Consumer<Rotation2d> gyroYawSetter, Consumer<Rotation2d> poseResetGyroSetter,
             Translation2d[] moduleLocations, Matrix<N3, N1> stateStd, VisionConfig visionConfig) {
-        initialize(odometrySamples, gyroYawSetter, poseResetGyroSetter, moduleLocations, stateStd, visionConfig, true);
-    }
-
-    /**
-     * Same as {@link #initialize(Supplier, Consumer, Consumer, Translation2d[], Matrix, VisionConfig)},
-     * choosing whether trust follows the uncertainty (see {@link #setAdaptiveTrust}).
-     *
-     * @param adaptiveTrust True (the default of the other overloads) to trust vision more after
-     *                      driving, slip and hits; false to keep the trust fixed at stateStd.
-     */
-    public static synchronized void initialize(Supplier<List<OdometryData>> odometrySamples,
-            Consumer<Rotation2d> gyroYawSetter, Consumer<Rotation2d> poseResetGyroSetter,
-            Translation2d[] moduleLocations, Matrix<N3, N1> stateStd, VisionConfig visionConfig,
-            boolean adaptiveTrust) {
         instance = new RobotPose(odometrySamples,
             gyroYawSetter,
             poseResetGyroSetter,
             moduleLocations,
             stateStd,
             visionConfig.getSources());
-        instance.setAdaptiveTrust(adaptiveTrust);
     }
 
     /**

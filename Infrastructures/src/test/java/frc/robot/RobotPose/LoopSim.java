@@ -24,7 +24,6 @@ import edu.wpi.first.math.kinematics.SwerveModulePosition;
 import edu.wpi.first.networktables.NetworkTable;
 import edu.wpi.first.networktables.NetworkTableInstance;
 import edu.wpi.first.wpilibj.Timer;
-import edu.wpi.first.wpilibj.simulation.BuiltInAccelerometerSim;
 import edu.wpi.first.wpilibj.simulation.DriverStationSim;
 import edu.wpi.first.wpilibj.simulation.SimHooks;
 import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator.OdometryData;
@@ -108,7 +107,6 @@ final class LoopSim {
     boolean nanNextSample = false;
 
     Pose2d truth;
-    private Translation2d fieldVelocity = Translation2d.kZero;
     private final NavigableMap<Double, Pose2d> truthHistory = new TreeMap<>();
     private final double[] moduleDistances = new double[4];
     private final Rotation2d[] moduleAngles = { Rotation2d.kZero, Rotation2d.kZero, Rotation2d.kZero, Rotation2d.kZero };
@@ -117,8 +115,6 @@ final class LoopSim {
     private final List<OdometryData> pendingSamples = new ArrayList<>();
     final List<Rotation2d> poseResetGyroWrites = new ArrayList<>();
     final List<Rotation2d> setYawWrites = new ArrayList<>();
-    private final BuiltInAccelerometerSim accelerometer = new BuiltInAccelerometerSim();
-    private final List<Translation2d> recentAccelerations = new ArrayList<>();
     final List<FakeLimelight3d> megaTag2s = new ArrayList<>();
     final List<FakeLimelight2d> limelight2ds = new ArrayList<>();
     final List<FakeQuestNav> quests = new ArrayList<>();
@@ -134,9 +130,6 @@ final class LoopSim {
         truthHistory.put(startTime, truth);
         DriverStationSim.setEnabled(true);
         DriverStationSim.notifyNewData();
-        accelerometer.setX(0);
-        accelerometer.setY(0);
-        accelerometer.setZ(1);
     }
 
     double time() {
@@ -179,17 +172,10 @@ final class LoopSim {
     private void stepOneMillisecond() {
         double dt = 0.001;
         Twist2d velocity = path.velocityAt(time() + dt / 2);
-        Translation2d previousVelocity = fieldVelocity;
         Pose2d before = truth;
         truth = truth.exp(new Twist2d(velocity.dx * dt, velocity.dy * dt, velocity.dtheta * dt));
         truth = new Pose2d(truth.getTranslation().plus(externalVelocity.apply(time() + dt / 2).times(dt)),
                 truth.getRotation());
-        fieldVelocity = truth.getTranslation().minus(before.getTranslation()).div(dt);
-        Translation2d acceleration = fieldVelocity.minus(previousVelocity).div(dt);
-        recentAccelerations.add(acceleration.rotateBy(truth.getRotation().unaryMinus()));
-        if (recentAccelerations.size() > 20) {
-            recentAccelerations.remove(0);
-        }
         for (int i = 0; i < 4; i++) {
             Translation2d location = MODULE_LOCATIONS[i];
             Translation2d moduleVelocity = new Translation2d(velocity.dx - velocity.dtheta * location.getY(),
@@ -225,16 +211,6 @@ final class LoopSim {
         if (!highRateOdometry) {
             addSample();
         }
-        // The roboRIO accelerometer (label up, X front), averaged over the last 20 ms, in g.
-        Translation2d mean = Translation2d.kZero;
-        for (Translation2d a : recentAccelerations) {
-            mean = mean.plus(a);
-        }
-        mean = mean.div(Math.max(1, recentAccelerations.size())).div(9.81);
-        // The roboRIO accelerometer reads up to 8 g.
-        mean = new Translation2d(Math.max(-8, Math.min(8, mean.getX())), Math.max(-8, Math.min(8, mean.getY())));
-        accelerometer.setX(mean.getX());
-        accelerometer.setY(mean.getY());
         RobotPose.getInstance().periodic();
         Pose2d estimate = RobotPose.getInstance().getEstimatedPose();
         errors.add(new double[] { time(), estimate.getTranslation().getDistance(truth.getTranslation()),
