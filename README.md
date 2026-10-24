@@ -449,6 +449,127 @@ All values are read lazily, only when NetworkTables publishes them.
    MegaTag2 std is no longer used (distance-based); the Quest's 0.03 is raised to `thinnedStd`
    0.4. `STATE_STD` 0.05 is what was tested.
 
+## Calibration, step by step
+
+The estimator can only be as good as its inputs. Most pose problems on real robots are a wrong
+wheel size, a wrong camera offset or a wrong latency, not the fusion. Calibrate in this order,
+because each step relies on the ones before it, and **turn vision off** (std devs ∞) until step 4.
+
+### 1. Wheels (odometry distance)
+
+- Drive a taped straight line of 5-10 m slowly (no slip), with vision off. Compare the odometry
+  distance with the tape: `new circumference = old × tape / odometry`. 1 % of wheel size is 1 % of
+  every distance, so a 2 % error is 20 cm after 10 m.
+- Repeat forwards, backwards and sideways. If sideways differs from forwards by more than ~1 %,
+  the carpet is anisotropic; use the average and let vision absorb the rest.
+- Re-check after replacing treads: worn treads shrink the wheel.
+
+### 2. Gyro (heading)
+
+- Spin the robot 10 full turns in place and stop at the start heading (use a line on the floor).
+  The gyro should read 3600° ± ~5°. A larger error is a gyro scale or mounting problem; the
+  heading is never corrected by vision in this package, so it must be right.
+- Check that CCW is positive (WPILib convention). A mirrored gyro makes the pose spiral.
+- For tilt trust: on flat carpet `OdometryData.tilt(pitch, roll)` must read about 0. A mounting
+  tilt of a few degrees would scale every sample down; zero it with the Pigeon's mount pose.
+
+### 3. Camera offsets (each camera)
+
+The offset is robot center → camera lens in the WPILib robot frame (x forward, y left, z up,
+rotations CCW positive; the 2D Limelight's pitch is positive = tilted up, see §1 of the Quick
+start). Measure x, y, z with a tape from the robot center on the floor. Angles are calibrated
+below, because a protractor is not accurate enough: 1° of pitch error is already
+decimeters at a few meters.
+
+**Pitch (2D Limelight and MegaTag2).** The 2D distance is
+`d = (tag height − camera height) / tan(camera pitch + ty)`. Its sensitivity to the pitch is
+`|∂d/∂pitch| = (Δh² + d²) / Δh` (Δh = tag height − camera height):
+
+| Δh | d = 2 m | d = 4 m |
+|---|---|---|
+| 1.0 m | 9 cm per degree | 30 cm per degree |
+| 0.5 m | 15 cm per degree | 57 cm per degree |
+
+So: the smaller the height difference and the farther the tag, the more a pitch error costs.
+Procedure (Orbit 1690's): put the robot close to a tag (≈1-1.5 m) with the tag in the image
+center (tx ≈ 0, ty ≈ 0, so roll doesn't matter yet), measure the true distance with a tape, and
+adjust the pitch until the computed distance matches. Then check at 3-4 m; if it is off there,
+the camera height is wrong, not the pitch (pitch errors grow with distance, height errors don't).
+
+**Roll.** A rolled camera mixes tx into ty, so the distance is right in the image center and
+wrong at the edges. Two checks: (a) at a fixed distance, turn the robot so the tag moves from the
+left edge to the right edge of the image: the computed distance must not change; (b) Orbit's
+check: spin the robot slowly in place in front of a tag; the estimated position must stay still.
+Adjust the roll until it does.
+
+**Yaw (and U1).** A yaw error δ moves the pose sideways by about `d · δ` (1° = 7 cm at 4 m), in
+opposite directions on the left and right of the tag. Check: stand 3 m straight in front of a tag
+and read the pose; then turn the robot ±30° (the tag still in view): the pose must not move.
+For the MegaTag2 camera this is also the **U1 check**: with the wrong yaw sign the pose is off by
+meters and the heading-agreement check (`frames rejected (spin or heading)`) rejects every frame.
+
+**x / y offset.** Spin in place slowly with a tag in view (vision still off in the estimator, but
+log the camera pose): with a wrong x/y offset the camera's robot pose traces a **circle** whose
+radius is the offset error, centered on the true position. Shrink the circle to a point by
+adjusting x and y. Do this after the angles, because a yaw error also bends the circle.
+
+### 4. Vision trust (std devs) and latency
+
+- **Std devs.** Stand still at 1, 2, 3, 4 and 5 m from tags, with 1 tag and with 2+ tags in view,
+  10 s each. The spread (std) of the camera pose at each distance gives the curve
+  `σ = STD_PER_METER_SQUARED · d² / √tags`; fit `STD_PER_METER_SQUARED` to it. Moving frames are
+  noisier, which the spin gate and the jump filter handle.
+- **Limelight latency.** The package uses the Limelight's own timestamp (capture time). Check it:
+  drive at a constant 2 m/s past a tag with vision fused; if the camera pose consistently trails
+  (or leads) the odometry along the direction of travel by x m, the timestamp is off by x / 2 s.
+  Also log `now − capture time`: it should be stable (tens of ms), not growing.
+- Now turn vision on, one source at a time, and watch `last error m` on the dashboard: it should
+  look like noise around 0, not a constant offset (wrong offset) or a lag (wrong latency).
+
+### 5. Quest
+
+- **Offset.** Spin in place slowly: the Quest's robot pose must stay still. A circle means the
+  Quest offset (x, y) in `QuestConfig` is wrong, exactly like a camera (§3, x / y).
+- **Yaw offset.** Drive a straight taped line: the Quest's path must point the same way as the
+  odometry's. An angle between them is a Quest yaw offset error.
+- **Latency.** QuestNav stamps frames with the publish time, so `QuestConfig.latencySeconds` is
+  subtracted. Drive back and forth at 2 m/s: choose the latency that lines the Quest position up
+  with the odometry (no lag in either direction).
+- **Drift check.** Drive a 2-minute pattern and return to the start mark: the Quest error at the
+  end, with tags covered, is its drift per match; the tags and the escape correct it, but a large
+  drift (> ~10 cm/min) means the Quest is not tracking well (lighting, vibration, mounting).
+
+### 6. Whole-system check
+
+Drive a full auto path and a minute of hard teleop (with a few bumps and a light push), then stop
+on a taped mark: the pose error at the end should be a few cm. Then repeat with vision covered
+for 10 s in the middle: the error should grow while covered (odometry drift) and come back within
+about a second when the tags are visible again. Log `pose/frames rejected` and `pose/escapes`:
+rejections should be rare, escapes only after real events (a big push, a wrong start pose).
+
+## How this compares with other approaches
+
+| | This package | WPILib `PoseEstimator` | 6328 (2026) | 254 (2024) | Orbit 1690 (2024 lecture) |
+|---|---|---|---|---|---|
+| Odometry | arc per sample, gyro heading, 250 Hz option, per-signal latency, NaN / encoder-jump guards, tilt trust | arc, gyro heading | arc, gyro heading, 250 Hz, tilt trust, wheel-heading fallback | CTRE | per-module arcs averaged, gyro heading |
+| Fusion | move back to the frame time, fixed gain, move forward | fixed gain, replays its buffer; an older frame deletes newer corrections | same as this package | CTRE (WPILib-like) | weights 1/FOM²; FOM grows with time, skids, collisions, speed |
+| Vision trust | `d² / √tags`, spin gate, heading-agreement check, field check, jump filter + escape | none (user's job) | `d² / tags²`, field and height checks, ambiguity | tiered by distance, spin-rate gates | geometric 2D (tx / ty + gyro) at range, MegaTag only close |
+| Slip / collisions | tilt trust; vision recovers the rest (jump filter + escape) | none | tilt trust | none | skid ratio (drop the slipping module), accelerometer vs expected motion |
+
+What was tested here and not adopted, and when it would be worth it:
+
+- **Orbit's skid detection** (translational speed of each module, max / min > 1.25 → drop the
+  slipping module): in simulation it only helps when **one** wheel slips or fails (odometry alone:
+  19-38 cm → 6-8 cm); it cannot see all four wheels slipping together, and with vision on the gain
+  is under 2 %. Worth ~35 lines if robot logs show one module disagreeing by > 25 % outside collisions.
+- **Trusting vision more after a collision** (Orbit's FOM idea; accelerometer minus expected
+  acceleration > 2 g): defense pushing 18 → 11.5 cm in simulation, but it needs the roboRIO
+  accelerometer path back (~150 lines) and lets some bad frames through right after a hit. Worth
+  it if real matches show the pose lost after pushes. Mount the roboRIO near the robot center,
+  or the spin acceleration eats most of the 2 g margin.
+- **Uncertainty tracking (variance per axis, "K")**: the most accurate in simulation (6.3 vs 7.6 cm)
+  but 17 tunables, ~20 state values and a slip detector shaped on the simulator; see "What changed".
+
 ## Tunables and how to measure them
 
 Defaults are the values tested in simulation.
