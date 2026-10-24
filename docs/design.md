@@ -2,7 +2,7 @@
 
 The student guide is the [README](../README.md). This page has everything behind it: how the
 kinematics and the limiter work, what each fix does with the simulation numbers, the full API,
-tuning, the differences from DemaciaCode and the tests.
+tuning and the differences from DemaciaCode.
 
 Swerve kinematics and a velocity-setpoint acceleration limiter for a swerve robot.
 
@@ -408,33 +408,6 @@ The DemaciaCode versions had sign and math bugs (DemaciaCode issues #22–#25). 
 - Removed: `ChassisAccel`, `toSwerveModuleStatesWithAccel` and `Limits.limitVelocities` (unused).
 
 Copying code back to DemaciaCode means taking these fixes with it.
-
-## Tests
-
-```bash
-cd Infrastructures
-./gradlew test
-```
-
-| Test | Checks |
-|---|---|
-| `DemaciaKinematicsTest.moduleStatesMatchWpilib` | `toWpilibModuleStates` equals WPILib's formula. |
-| `forwardIsTheInverseOfInverse`, `forwardIsTheInverseForAnOffCenterLayout` | Forward kinematics undoes the inverse, also with the modules not centered. |
-| `desaturatesWhenOneModuleIsAtZero` | Desaturation with a module at 0. |
-| `zeroSpeedsGiveZeroModules` | Zero speeds give zero modules. |
-| `AccelLimitedSwerveTest.reachesTheWantedSpeedFromRest` | Ramps up to the wanted speed. |
-| `driveAndSpinSlowDownTogether` | Too fast for the modules: the limiter loop keeps the translation/rotation ratio. |
-| `convergesWhenTheRobotIsTurned`, `convergesWhileSpinning` | Reaches the field-relative target at any heading and while spinning. |
-| `yawResetDoesNotJump` | A gyro reset doesn't step the command. |
-| `stoppingKeepsTheModuleAngles` | A stop holds the module angles. |
-| `resetStartsFromTheMeasuredSpeeds` | `resetTo` starts from the measured speeds. |
-| `ChassisKinematicsTest.omegaIsClockwisePositive` | `toSwerveModuleStates` takes omega clockwise-positive. |
-| `straightDrivingIsPlainKinematics`, `driveAndSpinIsDiscretizedOverTheLoopAndTheLatency` | No change when not spinning; discretize over `CYCLE_DT + 2·LATENCY` when spinning. |
-| `standingKeepsTheAngles` | A stop holds the module angles. |
-| `cosineScalingAgainstTheMeasuredAngle`, `reversesWhenTheMeasuredAngleIsMoreThan90DegreesAway` | Cosine scaling and the reverse decision against the measured angle. |
-| `driveAccelerationsFromTheCommands` | Acceleration feed-forward value, clamp, and a reversed wheel. |
-| `steerVelocitiesFromTheCommands` | Steer feed-forward value, clamp, and 0 when standing. |
-| `desaturateKeepsTheRatio` | `desaturate` keeps the ratio and the module limit. |
 
 ## Checking it on the robot
 
