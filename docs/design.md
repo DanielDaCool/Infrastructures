@@ -419,7 +419,7 @@ Defaults are the values tested in simulation.
 
 ## Plugging it into the team chassis (`mechanism` / `demacia-odometry-simple-testing`)
 
-1. **Settle U1 first** (3D Limelight yaw sign, see the review report): the package sends the
+1. **Settle U1 first** (3D Limelight yaw sign): the package sends the
    camera yaw mirrored compared to both team branches. Check `vision/<name>/source pose sent`
    against the Limelight web UI on the robot.
 2. Change the imports from `frc.demacia.RobotPose.*` to `frc.robot.RobotPose.*` (Chassis,
