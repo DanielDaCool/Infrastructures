@@ -42,8 +42,10 @@ wheel can turn) now gets less speed, so it doesn't push the robot off the path.
 ### Level 3 – feed-forwards (a few lines)
 
 Tells the motors in advance how the speed and the angle are about to change, so they don't lag.
-Add a `setState` with two more values to `SwerveModule` (a copy of its `setState` without the
-reverse, with the feed-forwards added; written for the module on `mechanism`):
+**1. In the module code (`SwerveModule.java`), not in the chassis:** add a second `setState` with
+two more values. It is a copy of the module's `setState` without the reverse, with the
+feed-forwards added (written for the module on `mechanism`). It has to be inside `SwerveModule`
+because it uses the module's own fields and methods (`isDriveStop`, `steerMotor`, `getSteerVel()`):
 
 ```java
 public void setState(SwerveModuleState state, double acceleration, double steerVelocity) {
@@ -65,7 +67,7 @@ public void setState(SwerveModuleState state, double acceleration, double steerV
 }
 ```
 
-and use it in `Chassis.setVelocities`:
+**2. In the chassis code (`Chassis.setVelocities`):** call it for each module:
 
 ```java
 SwerveModuleState[] states = demaciaKinematics.toSwerveModuleStates(speeds, getModuleStates());
