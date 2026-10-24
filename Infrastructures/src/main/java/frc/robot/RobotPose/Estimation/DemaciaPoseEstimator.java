@@ -24,7 +24,8 @@ import edu.wpi.first.wpilibj.Timer;
  * <p><b>How it works:</b>
  * <ul>
  * <li>Each odometry sample moves the estimate by its twist and is stored in a short history
- * ({@link #HISTORY_LENGTH_SECONDS}) of odometry-only poses.</li>
+ * ({@link #HISTORY_LENGTH_SECONDS}) of odometry-only poses. While the robot is tilted (on a
+ * bump or ramp), the wheel translation is trusted less (see {@link #MAX_TILT_RADIANS}).</li>
  * <li>A vision frame taken at time t: the estimate is moved back to t by the odometry between
  * t and now, corrected there, and moved forward again by the same odometry. This is one step
  * per frame (the old version replayed the whole 1.5 s history for every frame, about 3 times).
@@ -61,6 +62,13 @@ public class DemaciaPoseEstimator {
 
     /** Odometry samples closer together than this are spread apart to keep them in order. */
     private static final double MIN_SAMPLE_SPACING_SECONDS = 1e-6;
+
+    /**
+     * At this tilt (radians) and more the wheels' translation is not used; below it, it is
+     * scaled by {@code 1 - tilt / MAX_TILT_RADIANS} (6328's RobotState, 2026). On a bump the
+     * wheels spin in the air or count the climb as floor distance. The heading is not affected.
+     */
+    public static final double MAX_TILT_RADIANS = Math.toRadians(25);
 
     /** Jump filter threshold: chi^2 with 2 degrees of freedom at 99.9 %. */
     public static final double GATE_CHI_SQUARED = 13.82;
@@ -174,7 +182,8 @@ public class DemaciaPoseEstimator {
      * that loop's vision.
      *
      * <p>A sample that isn't newer than the last one is moved just after it, so the history
-     * stays in the order the twists were computed.
+     * stays in the order the twists were computed. A sample's translation is scaled by
+     * {@code 1 - clamp(tilt / MAX_TILT_RADIANS, 0, 1)}; its rotation is kept.
      *
      * @param samples Every odometry sample since the last loop, oldest first.
      */
@@ -191,6 +200,8 @@ public class DemaciaPoseEstimator {
                 timestamp = lastTimestamp + MIN_SAMPLE_SPACING_SECONDS;
             }
             Twist2d twist = odometry.updateOdometry(sample.gyroAngle(), sample.swerveModules());
+            double trust = tiltTrust(sample.tiltRadians());
+            twist = new Twist2d(twist.dx * trust, twist.dy * trust, twist.dtheta);
             double dt = timestamp - lastTimestamp;
             estimatedPose = estimatedPose.exp(twist);
             odometryPose = odometryPose.exp(twist);
@@ -204,6 +215,14 @@ public class DemaciaPoseEstimator {
                 history.headMap(oldestNeeded, false).clear();
             }
         }
+    }
+
+    /** @return How much of the wheel translation to use at this tilt (1 level, 0 at 25 deg and more). */
+    static double tiltTrust(double tiltRadians) {
+        if (!(tiltRadians > 0)) {
+            return 1;
+        }
+        return 1 - MathUtil.clamp(tiltRadians / MAX_TILT_RADIANS, 0, 1);
     }
 
     /**
@@ -486,11 +505,28 @@ public class DemaciaPoseEstimator {
      * @param gyroAngle        Raw gyro heading.
      * @param swerveModules    Module positions (total distance driven + wheel angle), same
      *                         order as the module locations.
+     * @param tiltRadians      How far the robot is tilted from level (radians, 0 = level or
+     *                         unknown); see {@link #tilt} and {@link #MAX_TILT_RADIANS}.
      */
-    public record OdometryData(double timestampSeconds, Rotation2d gyroAngle, SwerveModulePosition[] swerveModules) {
-        /** A sample measured now (for odometry read in the robot loop, without a thread). */
+    public record OdometryData(double timestampSeconds, Rotation2d gyroAngle, SwerveModulePosition[] swerveModules,
+            double tiltRadians) {
+        /** A level sample (no tilt). */
+        public OdometryData(double timestampSeconds, Rotation2d gyroAngle, SwerveModulePosition[] swerveModules) {
+            this(timestampSeconds, gyroAngle, swerveModules, 0);
+        }
+
+        /** A level sample measured now (for odometry read in the robot loop, without a thread). */
         public OdometryData(Rotation2d gyroAngle, SwerveModulePosition[] swerveModules) {
             this(Timer.getFPGATimestamp(), gyroAngle, swerveModules);
+        }
+
+        /**
+         * @param pitchRadians Gyro pitch (e.g. {@code Math.toRadians(pigeon.getPitch().getValueAsDouble())}).
+         * @param rollRadians  Gyro roll.
+         * @return The angle between the robot's up axis and vertical: {@code acos(cos(pitch) cos(roll))}.
+         */
+        public static double tilt(double pitchRadians, double rollRadians) {
+            return Math.acos(MathUtil.clamp(Math.cos(pitchRadians) * Math.cos(rollRadians), -1, 1));
         }
     }
 

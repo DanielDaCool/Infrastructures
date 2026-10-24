@@ -173,7 +173,8 @@ public final class PhoenixOdometryThread extends Thread {
             double timestampSeconds = Timer.getFPGATimestamp() - totalLatency / signals.length;
 
             OdometryData sample = reader.apply(timestampSeconds);
-            OdometryData stamped = new OdometryData(timestampSeconds, sample.gyroAngle(), sample.swerveModules());
+            OdometryData stamped = new OdometryData(timestampSeconds, sample.gyroAngle(), sample.swerveModules(),
+                    sample.tiltRadians());
             synchronized (this) {
                 if (queue.size() >= MAX_QUEUED_SAMPLES) {
                     queue.remove(0);

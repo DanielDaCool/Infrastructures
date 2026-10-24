@@ -103,6 +103,12 @@ final class LoopSim {
     boolean highRateOdometry = true;
     /** Field velocity the wheels don't feel (pushed, carried). */
     DoubleFunction<Translation2d> externalVelocity = t -> Translation2d.kZero;
+    /** Robot tilt (radians) at a time since the start, e.g. on a bump. */
+    DoubleFunction<Double> tiltAt = t -> 0.0;
+    /** Extra distance the wheels count at a time since the start (0.6 = 60 % more), e.g. spinning on a bump. */
+    DoubleFunction<Double> bumpExtraDistance = t -> 0.0;
+    /** Whether the odometry samples carry the tilt. */
+    boolean reportTilt = true;
     /** The next odometry sample gets a NaN module distance. */
     boolean nanNextSample = false;
 
@@ -165,7 +171,8 @@ final class LoopSim {
     }
 
     private void addSample() {
-        pendingSamples.add(new OdometryData(Timer.getFPGATimestamp(), gyroAngle(), modulePositions()));
+        pendingSamples.add(new OdometryData(Timer.getFPGATimestamp(), gyroAngle(), modulePositions(),
+                reportTilt ? tiltAt.apply(time()) : 0));
     }
 
     /** Moves the truth, the wheels and the clock by 1 ms. */
@@ -184,7 +191,7 @@ final class LoopSim {
             if (speed > 1e-6) {
                 moduleAngles[i] = moduleVelocity.getAngle();
             }
-            moduleDistances[i] += speed * dt * wheelScale;
+            moduleDistances[i] += speed * dt * wheelScale * (1 + bumpExtraDistance.apply(time()));
         }
         SimHooks.stepTiming(dt);
         truthHistory.put(Timer.getFPGATimestamp(), truth);

@@ -340,4 +340,41 @@ class DemaciaPoseEstimatorTest {
         assertEquals(VisionResult.REJECTED,
                 estimator.addVisionMeasurement(new Pose2d(0.4, 0, Rotation2d.kZero), t, xyStd(0.02)));
     }
+
+    @Test
+    void tiltScalesTheWheelTranslationButNotTheHeading() {
+        resetAtOneSecond();
+        // Level: 0.1 m.
+        estimator.addOdometryData(List.of(tiltedSample(1.02, 0.1, 0.0, 0)));
+        assertEquals(0.1, estimator.getEstimatedPose().getX(), 1e-12);
+        // 12.5 deg: half of the next 0.1 m.
+        estimator.addOdometryData(List.of(tiltedSample(1.04, 0.2, 0.0, Math.toRadians(12.5))));
+        assertEquals(0.15, estimator.getEstimatedPose().getX(), 1e-12);
+        // 25 deg and more: none of it, but the heading still follows the gyro.
+        estimator.addOdometryData(List.of(tiltedSample(1.06, 0.3, 0.2, Math.toRadians(25))));
+        estimator.addOdometryData(List.of(tiltedSample(1.08, 0.4, 0.4, Math.toRadians(40))));
+        assertEquals(0.15, estimator.getEstimatedPose().getX(), 1e-12);
+        assertEquals(0, estimator.getEstimatedPose().getY(), 1e-12);
+        assertEquals(0.4, estimator.getEstimatedPose().getRotation().getRadians(), 1e-12);
+    }
+
+    @Test
+    void theTiltComesFromPitchAndRoll() {
+        assertEquals(0, OdometryData.tilt(0, 0), 1e-12);
+        assertEquals(0.3, OdometryData.tilt(0.3, 0), 1e-12);
+        assertEquals(0.3, OdometryData.tilt(0, -0.3), 1e-12);
+        assertEquals(Math.acos(Math.cos(0.2) * Math.cos(0.3)), OdometryData.tilt(0.2, 0.3), 1e-12);
+        // The old constructors are level.
+        assertEquals(0, straightSample(1.0, 0).tiltRadians(), 0);
+        assertEquals(1.0, DemaciaPoseEstimator.tiltTrust(Double.NaN), 0);
+    }
+
+    /** All modules forward at {@code distance}, gyro at {@code gyro} radians, tilted. */
+    private static OdometryData tiltedSample(double timestamp, double distance, double gyro, double tilt) {
+        SwerveModulePosition[] modules = new SwerveModulePosition[4];
+        for (int i = 0; i < 4; i++) {
+            modules[i] = new SwerveModulePosition(distance, Rotation2d.kZero);
+        }
+        return new OdometryData(timestamp, new Rotation2d(gyro), modules, tilt);
+    }
 }

@@ -376,4 +376,27 @@ class RobotPoseLoopTest {
         assertFalse(Double.isNaN(recovered));
         assertTrue(sim.error(3, 4)[1] < 0.05);
     }
+
+    @Test
+    void drivingOverABumpWithTheTilt() {
+        double[] withAndWithout = new double[2];
+        for (int run = 0; run < 2; run++) {
+            start(LoopSim.STRAIGHT);
+            // Vision off, so only the odometry is measured.
+            megaTag2Device.tagCount = 0;
+            sim.limelight2ds.clear();
+            questNav.connected = false;
+            sim.wheelScale = 1.0;
+            // 1.0-1.4 s: tilted up to 20 deg, the wheels count 60 % more (climb and spin).
+            sim.tiltAt = t -> Math.toRadians(20) * Math.max(0, Math.sin(Math.PI * (t - 1.0) / 0.4)) * (t >= 1.0 && t <= 1.4 ? 1 : 0);
+            sim.bumpExtraDistance = t -> t >= 1.0 && t <= 1.4 ? 0.6 : 0.0;
+            sim.reportTilt = run == 0;
+            sim.run(2);
+            withAndWithout[run] = sim.errors.get(sim.errors.size() - 1)[1];
+        }
+        System.out.printf("bump, odometry only: %.1f cm with the tilt, %.1f cm without%n",
+                withAndWithout[0] * 100, withAndWithout[1] * 100);
+        assertTrue(withAndWithout[0] < withAndWithout[1]);
+        assertTrue(sim.headingError(0, 2) < 1e-6);
+    }
 }
