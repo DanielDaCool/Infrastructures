@@ -48,8 +48,7 @@ when the camera is tilted **up**.
 
 ### 2. Start it (once)
 
-In `Robot`'s constructor or in `RobotContainer`, **after the chassis is created** (it reads the
-gyro and the modules). Not in `Main.java`: that runs before WPILib starts.
+In `Robot`'s constructor, **after the chassis is created** (it reads the gyro and the modules).
 
 ```java
 RobotPose.initialize(
@@ -97,7 +96,7 @@ Pose2d pose = RobotPose.getInstance().getEstimatedPose();
 1. Check the 3D Limelight on the robot first: `vision/<name>/source pose sent` on the dashboard
    must match the camera pose in the Limelight web page.
 2. Change the imports from `frc.demacia.RobotPose` to `frc.robot.RobotPose`.
-3. Replace the `initialize` call with the one in step 2 above (use your `STATE_STD` for the
+3. Replace the `initialize` call with the one in step 2 above, in `Robot`'s constructor (use your `STATE_STD` for the
    wheel trust), and add
    `BaseVisionSource.setOnCreate(ElasticGenerator.getInstance()::registerVisionSource);`.
 4. The dashboard keys moved from `chassis/...` to `pose/...`.
