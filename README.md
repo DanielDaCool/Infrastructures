@@ -107,14 +107,6 @@ fieldSpeeds = ChassisSpeeds.fromRobotRelativeSpeeds(
 
 `AccelLimitedSwerve` (in this package) already does it; see [docs/design.md](docs/design.md).
 
-## Before the first match
-
-1. The robot turns **the same way** as before for the same stick and the same auto.
-2. Set `MAX_ALLOWED_MODULE_VELOCITY` and `LATENCY` (table above).
-3. Drive while spinning: the robot keeps going straight.
-4. Full speed, then let go: it stops without skidding. Snap the stick 90°: it curves smoothly.
-5. Stop: the wheels keep their angle (they don't snap to 0).
-
 ## Troubleshooting
 
 | Problem | Try |
