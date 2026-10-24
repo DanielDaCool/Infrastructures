@@ -1,28 +1,75 @@
 # RobotPose
 
-Knows where the robot is on the field. It combines the swerve wheels and the gyro (odometry)
-with Limelight cameras (MegaTag2 or 2D) and a Meta Quest (QuestNav), and gives you one pose to
-use for autos, aiming and driving.
+[![WPILib](https://img.shields.io/badge/WPILib-2026.2.1-blue)](https://docs.wpilib.org/)
+[![Java](https://img.shields.io/badge/Java-17-orange)](https://adoptium.net/)
+[![Phoenix 6](https://img.shields.io/badge/Phoenix%206-26.1.0-green)](https://v6.docs.ctr-electronics.com/)
+[![QuestNav](https://img.shields.io/badge/QuestNav-2026--2.2.0-purple)](https://questnav.gg/)
 
-You don't have to tune a filter: bad camera frames, a jumping Quest and a wrong start pose are
-handled for you.
+Field-relative pose estimation for FRC swerve robots. RobotPose combines swerve odometry and
+the gyro with Limelight cameras (MegaTag2 or 2D) and a Meta Quest running QuestNav, and
+returns one pose for autos, aiming and driving.
 
-> Mentors and developers: how it works, why, test results and every setting are in
-> [docs/design.md](docs/design.md).
+No filter tuning is required: bad camera frames, a jumping Quest and a wrong starting pose
+are handled automatically.
 
-## Install
+> [!NOTE]
+> This README is the student guide. How it works, the design decisions, simulation results,
+> calibration and every setting are documented in [docs/design.md](docs/design.md).
+
+## Contents
+
+- [Features](#features)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Getting started](#getting-started)
+- [Migrating from DemaciaCode](#migrating-from-demaciacode)
+- [Telemetry](#telemetry)
+- [Building](#building)
+- [Troubleshooting](#troubleshooting)
+- [Project structure](#project-structure)
+- [Acknowledgements](#acknowledgements)
+
+## Features
+
+- **Latency-compensated fusion.** Each vision frame is applied at its capture time: the
+  estimate is moved back to that time by odometry, corrected, and moved forward again.
+- **Jump filter with recovery.** Frames that disagree too much with the estimate are
+  rejected. When most recent frames agree with each other but not with the estimate, the
+  estimate is the one that is wrong, and the frames are used again.
+- **Multiple vision source types.** MegaTag2 Limelight, 2D Limelight (single tag, `tx`/`ty`)
+  and Meta Quest (QuestNav), configured through one `VisionConfig`.
+- **Automatic Quest handling.** Anchoring at startup and on reconnect, re-alignment after a
+  jump or lost tracking, and a cross-check against the MegaTag2 Limelight.
+- **Tilt trust.** Wheel motion counts less while the robot is tilted on a bump or ramp.
+- **Optional 250 Hz odometry.** `PhoenixOdometryThread` samples the gyro and modules on a
+  separate thread over CAN FD (100 Hz on CAN 2.0).
+- **Pose prediction.** `getFuturePose` extrapolates the pose for shooting on the move.
+
+## Requirements
+
+| Dependency | Version | Used for |
+|---|---|---|
+| [WPILib / GradleRIO](https://docs.wpilib.org/) | 2026.2.1 | Core |
+| Java | 17 | Core |
+| WPILib New Commands | 2026 | Core |
+| [CTRE Phoenix 6](https://v6.docs.ctr-electronics.com/) | 26.1.0 | `PhoenixOdometryThread` |
+| [QuestNavLib](https://questnav.gg/) | 2026-2.2.0 | `Quest` source |
+| [LimelightHelpers](https://github.com/LimelightVision/limelightlib-wpijava) | Bundled | Limelight sources |
+
+## Installation
 
 1. Copy [`Infrastructures/src/main/java/frc/robot/RobotPose`](Infrastructures/src/main/java/frc/robot/RobotPose)
-   into your robot project (same package path).
-2. Install the vendor libraries: **Phoenix 6** and **QuestNav** (WPILib → Manage Vendor Libraries).
-
-Made for WPILib 2026.
+   into your robot project, keeping the same package path.
+2. Install the **Phoenix 6** and **QuestNav** vendor libraries (WPILib → Manage Vendor
+   Libraries). The vendordep files are in [`Infrastructures/vendordeps`](Infrastructures/vendordeps).
+3. Follow [Getting started](#getting-started).
 
 ## Getting started
 
 ### 1. Describe your cameras
 
-Each camera needs a **name**, **where it is on the robot** and how much to trust it.
+Each camera needs a **name**, its **position on the robot** and how much to trust it
+(standard deviations: x m, y m, heading rad).
 
 ```java
 public final class VisionConstants {
@@ -41,14 +88,18 @@ public final class VisionConstants {
 }
 ```
 
-**Where it is on the robot** = from the robot's center (on the floor) to the camera lens, in
-meters: **x forward, y left, z up**. Angles in radians, counter-clockwise positive.
-A 2D Limelight (`LimelightTagCamera2dConfig`) is the one exception: its pitch is positive
-when the camera is tilted **up**.
+> [!IMPORTANT]
+> The position on the robot is measured from the robot's center (on the floor) to the camera
+> lens, in meters: **x forward, y left, z up**. Angles are in radians, counter-clockwise
+> positive.
+>
+> **Exception:** for a 2D Limelight (`LimelightTagCamera2dConfig`), pitch is positive when
+> the camera is tilted **up**.
 
-### 2. Start it (once)
+### 2. Initialize RobotPose
 
-In `Robot`'s constructor, **after the chassis is created** (it reads the gyro and the modules).
+Call this once in `Robot`'s constructor, **after the chassis is created** (it reads the gyro
+and the modules):
 
 ```java
 RobotPose.initialize(
@@ -60,7 +111,7 @@ RobotPose.initialize(
     VisionConstants.VISION);
 ```
 
-### 3. Run it every loop
+### 3. Update every loop
 
 In `Robot.robotPeriodic()`, after the CommandScheduler:
 
@@ -69,58 +120,103 @@ CommandScheduler.getInstance().run();
 RobotPose.getInstance().periodic();
 ```
 
-### 4. Use it
-
-| Call | What it does |
-|---|---|
-| `getEstimatedPose()` | Where the robot is now (blue-alliance origin). |
-| `getFuturePose(seconds)` | Where it will be in a moment at the current speed (for shooting on the move). |
-| `resetPose(pose)` | Tell it where the robot is (e.g. at the start of an auto). |
-| `setYaw(angle)` | Set only the heading (writes the gyro). |
-| `getEstimatedPoseAt(time)` | Where it was at a past time (last 1.5 s). |
+### 4. Read the pose
 
 ```java
 Pose2d pose = RobotPose.getInstance().getEstimatedPose();
 ```
 
+| Method | Description |
+|---|---|
+| `getEstimatedPose()` | Current pose (blue-alliance origin). |
+| `getFuturePose(seconds)` | Predicted pose a moment ahead at the current speed (for shooting on the move). |
+| `resetPose(pose)` | Sets the robot's pose (for example, at the start of an auto). |
+| `setYaw(angle)` | Sets only the heading, and writes it to the gyro. |
+| `getEstimatedPoseAt(time)` | Pose at a past time (last 1.5 s). |
+
 ### Optional extras
 
-- **Bumps:** pass the robot's tilt so wheel slip on bumps isn't counted:
+- **Bumps:** pass the robot's tilt so wheel slip on bumps is not counted:
   `new OdometryData(Timer.getFPGATimestamp(), gyro, modules, OdometryData.tilt(pitchRadians, rollRadians))`.
-- **More accurate odometry (250 Hz):** use `PhoenixOdometryThread` instead of the supplier above;
-  see [docs/design.md](docs/design.md#250-hz-odometry).
-- **Dashboard generator:** `BaseVisionSource.setOnCreate(callback)` gives you every vision source.
+- **More accurate odometry (250 Hz):** use `PhoenixOdometryThread` instead of the supplier
+  above; see [docs/design.md](docs/design.md#250-hz-odometry).
+- **Dashboard generator:** `BaseVisionSource.setOnCreate(callback)` is called with every
+  vision source as it is created.
 
-## Switching from the old DemaciaCode RobotPose
+## Migrating from DemaciaCode
 
-1. Check the 3D Limelight on the robot first: `vision/<name>/source pose sent` on the dashboard
-   must match the camera pose in the Limelight web page.
+1. Check the 3D Limelight on the robot first: `vision/<name>/source pose sent` on the
+   dashboard must match the camera pose in the Limelight web interface.
 2. Change the imports from `frc.demacia.RobotPose` to `frc.robot.RobotPose`.
-3. Replace the `initialize` call with the one in step 2 above, in `Robot`'s constructor (use your `STATE_STD` for the
-   wheel trust), and add
+3. Replace the `initialize` call with the one in [step 2](#2-initialize-robotpose), in
+   `Robot`'s constructor (use your `STATE_STD` for the wheel trust), and add
    `BaseVisionSource.setOnCreate(ElasticGenerator.getInstance()::registerVisionSource);`.
 4. The dashboard keys moved from `chassis/...` to `pose/...`.
 
-## Dashboard
+## Telemetry
 
 | Key | What to look for |
 |---|---|
-| `pose/field` | The robot on the field. Should sit where the robot really is. |
-| `vision/<name>/is Connected` | The camera / Quest is talking to the robot. |
-| `vision/<name>/seconds since used` | Keeps growing = that camera isn't helping (no tag, or rejected). |
-| `vision/<name>/last error m` | Always large = that camera's position on the robot is wrong. |
+| `pose/field` | The robot on the field. It should sit where the robot really is. |
+| `vision/<name>/is Connected` | The camera or Quest is communicating with the robot. |
+| `vision/<name>/seconds since used` | If it keeps growing, that source is not contributing (no tag, or rejected). |
+| `vision/<name>/last error m` | Consistently large means that source's position on the robot is wrong. |
 | `pose/frames rejected` | Frames that looked wrong. A few is normal; a fast climb means a wrong offset. |
-| `pose/reset pose`, `chassis/reset gyro` | Buttons: reset the pose to the origin / the heading to 0. |
+| `pose/reset pose`, `chassis/reset gyro` | Buttons: reset the pose to the origin, or the heading to 0. |
+
+## Building
+
+From the `Infrastructures` directory:
+
+```bash
+./gradlew build
+```
+
+[`Robot.java`](Infrastructures/src/main/java/frc/robot/Robot.java) contains a placeholder
+setup (zero gyro and modules, no vision) so the project runs without hardware. Before
+relying on the pose, calibrate the robot and run the robot checks in
+[docs/design.md](docs/design.md#calibration-step-by-step).
 
 ## Troubleshooting
 
-| Problem | Try |
+| Symptom | Likely cause |
 |---|---|
 | Pose drifts when driving straight | Module locations in the wrong order, or wrong wheel size / gear ratio. |
 | Pose turns the wrong way | The gyro must be counter-clockwise positive. |
-| Pose jumps around | A camera's trust is 0 (`VecBuilder.fill(0, ...)`) – use a small number instead. |
-| Cameras are ignored for a long time | A camera offset is wrong, or the pose was reset to a wrong place. After a few seconds of cameras agreeing it fixes itself. |
+| Pose jumps around | A camera's trust is 0 (`VecBuilder.fill(0, ...)`); use a small number instead. |
+| Cameras are ignored for a long time | A camera offset is wrong, or the pose was reset to a wrong place. After a few seconds of cameras agreeing, it recovers on its own. |
 | Cameras never change the pose | Check `is Connected` and that the camera sees tags (Quest: `is tracking`). |
-| One camera keeps pulling the pose | Its offset on the robot is wrong (see the calibration in [docs/design.md](docs/design.md#calibration-step-by-step)). |
+| One camera keeps pulling the pose | Its offset on the robot is wrong; see [calibration](docs/design.md#calibration-step-by-step). |
 | 2D camera is off by meters when turning | Wrong camera yaw, height or pitch. |
-| Quest pulls the pose to (0, 0) | Don't call `QuestNav.setPose` yourself; use `resetPose` or the dashboard button. |
+| Quest pulls the pose to (0, 0) | Do not call `QuestNav.setPose` directly; use `resetPose` or the dashboard button. |
+
+## Project structure
+
+All paths are relative to `Infrastructures/src/main/java/frc/robot/RobotPose`.
+
+| Path | Description |
+|---|---|
+| `RobotPose.java` | Public entry point. Singleton that runs the full pipeline each loop. |
+| `Estimation/DemaciaOdometry.java` | Swerve odometry (gyro + module positions → twist). |
+| `Estimation/DemaciaPoseEstimator.java` | Fuses odometry and vision: latency compensation, jump filter with recovery, tilt trust. |
+| `Estimation/PhoenixOdometryThread.java` | Optional 250 Hz (CAN FD) / 100 Hz (CAN 2.0) odometry thread. |
+| `Vision/VisionSource.java` | Interface implemented by every vision source. |
+| `Vision/BaseVisionSource.java` | Base class for sources: config values and dashboard entries. |
+| `Vision/VisionConfig.java` | The list of sources passed to `RobotPose.initialize`. |
+| `Vision/TimestampedVisionMeasurement.java` | A single measurement: pose, capture time, standard deviations. |
+| `Vision/VisionTypes/LimelightTagCamera2d.java` | Limelight in 2D mode (`tx`/`ty` to one tag). |
+| `Vision/VisionTypes/LimelightTagCamera3d.java` | Limelight using MegaTag2. |
+| `Vision/VisionTypes/Quest.java` | Meta Quest running QuestNav. |
+| `Vision/VisionTypes/QuestFrameFilter.java` | Selects which Quest frames are used (jump and lost-tracking handling, re-alignment, 10 Hz thinning). |
+| `Vision/visionConfigs/*Config.java` | One config class per source type. |
+| `Vision/LimelightHelpers.java` | Limelight's official helper library. |
+
+## Acknowledgements
+
+- **Team 6328 Mechanical Advantage**: the tilt-trust approach and high-frequency odometry.
+- **Limelight Vision**: [LimelightHelpers](https://github.com/LimelightVision/limelightlib-wpijava).
+- **QuestNav**: [QuestNavLib](https://questnav.gg/) for Meta Quest tracking.
+- **WPILib**: the framework this project builds on, licensed under
+  [`WPILib-License.md`](Infrastructures/WPILib-License.md).
+- **DemaciaCode**: the original `frc.demacia.RobotPose`, from which the DemaciaCode-only
+  dependencies (`Chassis`, `Log`, `ElasticGenerator`) were removed so it works in any project.
