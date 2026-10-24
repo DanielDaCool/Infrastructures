@@ -26,8 +26,7 @@ import frc.robot.Kinematics.DemaciaKinematics;
 ```
 
 The chassis already creates it once (`new DemaciaKinematics(modulePositions)` in the `Chassis`
-constructor). If you create it yourself, do it once where the chassis is built – not in
-`Main.java`, which runs before WPILib starts.
+constructor). If you create it yourself, do it once in `Robot`'s constructor.
 
 ### Level 2 – tell it where the wheels point (one line)
 
