@@ -1,34 +1,86 @@
 # Kinematics
 
-Turns the speeds you want (forward, sideways, turn) into what each swerve module should do. It
-replaces DemaciaCode's `DemaciaKinematics`: your chassis keeps working, and the robot stays on
-its path better when it drives and spins at the same time.
+[![WPILib](https://img.shields.io/badge/WPILib-2026.2.1-blue)](https://docs.wpilib.org/)
+[![Java](https://img.shields.io/badge/Java-17-orange)](https://adoptium.net/)
+[![Vendor libraries](https://img.shields.io/badge/vendor%20libraries-none-lightgrey)](#requirements)
 
-> Mentors and developers: how it works, why, test results and every setting are in
-> [docs/design.md](docs/design.md).
+Swerve kinematics for FRC robots. It converts the requested chassis speeds (forward,
+sideways, turn) into a state for each swerve module, and keeps the robot on its path when
+it drives and spins at the same time. It is a drop-in replacement for DemaciaCode's
+`DemaciaKinematics`: existing chassis code keeps working unchanged.
 
-## Install
+> [!NOTE]
+> This README is the student guide. The full design, the math, simulation results and every
+> setting are documented in [docs/design.md](docs/design.md).
+
+## Contents
+
+- [Features](#features)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Getting started](#getting-started)
+- [Conventions](#conventions)
+- [Settings](#settings)
+- [Using it with an acceleration limiter](#using-it-with-an-acceleration-limiter)
+- [Building](#building)
+- [Troubleshooting](#troubleshooting)
+- [Project structure](#project-structure)
+- [Acknowledgements](#acknowledgements)
+
+## Features
+
+- **Drop-in replacement.** Same constructor and methods as DemaciaCode's
+  `DemaciaKinematics`; adopting it is a one-line import change.
+- **Discretization over the loop and the latency.** Removes the sideways drift a swerve
+  robot gets while driving and spinning together.
+- **Cosine scaling against measured module angles.** A wheel that still points the wrong
+  way gets less speed, so it does not push the robot off the path.
+- **Drive and steer feed-forwards.** Per-module acceleration and steer-velocity values so the
+  motors do not lag behind the command.
+- **Ratio-preserving desaturation.** When a wheel is over its top speed, driving and turning
+  slow down together.
+- **Optional acceleration limiter.** `AccelLimitedSwerve` limits how fast the field-relative
+  velocity setpoint changes (skid, forward and tilt limits).
+
+Average distance from the path in simulation:
+
+| Configuration | Off the path |
+|---|---|
+| Old kinematics | 36 cm |
+| Level 1 | 24 cm |
+| Level 2 + drive feed-forward | 15 cm |
+| Level 3 (both feed-forwards) | 12 cm |
+
+## Requirements
+
+| Dependency | Version |
+|---|---|
+| [WPILib / GradleRIO](https://docs.wpilib.org/) | 2026.2.1 |
+| Java | 17 |
+| Vendor libraries | None |
+
+## Installation
 
 1. Copy [`Infrastructures/src/main/java/frc/robot/Kinematics`](Infrastructures/src/main/java/frc/robot/Kinematics)
-   into your robot project (same package path).
-2. Made for WPILib 2026. No vendor libraries needed.
+   into your robot project, keeping the same package path.
+2. Follow [Getting started](#getting-started).
 
 ## Getting started
 
-There are three levels. Each one works on its own; each next one makes the robot follow its path
-better.
+Adoption is split into three levels. Each level works on its own, and each one makes the
+robot follow its path more closely.
 
-### Level 1 – change the import (nothing else)
+### Level 1: change the import
 
 ```java
 // import frc.demacia.kinematics.DemaciaKinematics;
 import frc.robot.Kinematics.DemaciaKinematics;
 ```
 
-The chassis already creates it once (`new DemaciaKinematics(modulePositions)` in the `Chassis`
-constructor). If you create it yourself, do it once in `Robot`'s constructor.
+The DemaciaCode chassis already creates it once (`new DemaciaKinematics(modulePositions)` in
+the `Chassis` constructor). If you create it yourself, do it once in `Robot`'s constructor.
 
-### Level 2 – tell it where the wheels point (one line)
+### Level 2: pass the measured module states
 
 In `Chassis.setVelocities`, pass the measured module states:
 
@@ -37,15 +89,18 @@ SwerveModuleState[] states = demaciaKinematics.toSwerveModuleStates(speeds, getM
 ```
 
 A wheel that still points the wrong way (just starting, or the stick moved faster than the
-wheel can turn) now gets less speed, so it doesn't push the robot off the path.
+wheel can turn) now gets less speed, so it does not push the robot off the path.
 
-### Level 3 – feed-forwards (a few lines)
+### Level 3: add the feed-forwards
 
-Tells the motors in advance how the speed and the angle are about to change, so they don't lag.
-**1. In the module code (`SwerveModule.java`), not in the chassis:** add a second `setState` with
-two more values. It is a copy of the module's `setState` without the reverse, with the
-feed-forwards added (written for the module on `mechanism`). It has to be inside `SwerveModule`
-because it uses the module's own fields and methods (`isDriveStop`, `steerMotor`, `getSteerVel()`):
+The feed-forwards tell the motors in advance how the speed and the angle are about to
+change, so they do not lag. Level 3 requires level 2.
+
+**1. In the module code (`SwerveModule.java`), not in the chassis,** add a second `setState`
+that takes two more values. It is a copy of the module's `setState` without the reverse, with
+the feed-forwards added (written for the module on the `mechanism` branch). It must live in
+`SwerveModule` because it uses the module's own fields and methods (`isDriveStop`,
+`steerMotor`, `getSteerVel()`):
 
 ```java
 public void setState(SwerveModuleState state, double acceleration, double steerVelocity) {
@@ -67,7 +122,7 @@ public void setState(SwerveModuleState state, double acceleration, double steerV
 }
 ```
 
-**2. In the chassis code (`Chassis.setVelocities`):** call it for each module:
+**2. In the chassis code (`Chassis.setVelocities`),** call it for each module:
 
 ```java
 SwerveModuleState[] states = demaciaKinematics.toSwerveModuleStates(speeds, getModuleStates());
@@ -78,54 +133,85 @@ for (int i = 0; i < states.length; i++) {
 }
 ```
 
-`STEER_KV` is the steer motor's kV (volts per rad/s). With a MotionMagic steer, leave the steer
-feed-forward out. Use level 3 only together with level 2.
+`STEER_KV` is the steer motor's kV (volts per rad/s). With a MotionMagic steer, leave the
+steer feed-forward out.
 
-How much each level helps (simulation, average distance from the path):
+## Conventions
 
-| | Off the path |
-|---|---|
-| Old kinematics | 36 cm |
-| Level 1 | 24 cm |
-| Level 2 + drive feed-forward | 15 cm |
-| Level 3 (both feed-forwards) | 12 cm |
-
-### Rules
-
-- Call `toSwerveModuleStates` **once per loop** (it remembers the last loop).
-- Turning speed is **clockwise-positive** here, the same as the old DemaciaCode kinematics, so
-  nothing in the chassis changes.
+> [!IMPORTANT]
+> - Call `toSwerveModuleStates` **once per loop**. It remembers the previous loop.
+> - The turning speed passed to `toSwerveModuleStates` is **clockwise-positive**, the same as
+>   the old DemaciaCode kinematics, so nothing in the chassis changes. Everything else
+>   (module locations, `AccelLimitedSwerve`) uses the WPILib frame: x forward, y left,
+>   counter-clockwise positive.
 
 ## Settings
 
-In `KinematicsConstants`. Set them on your robot:
+All settings are in `KinematicsConstants`. The defaults are placeholders; tune them on your
+robot.
 
-| Setting | What it is | How to find it | Default |
+| Setting | Description | How to find it | Default |
 |---|---|---|---|
-| `MAX_ALLOWED_MODULE_VELOCITY` | Top speed of a wheel | Drive full stick on the floor, log the wheel speed, use ~10 % less than the highest | 4.5 m/s |
-| `LATENCY` | Delay from the command to the wheels | Drive straight while spinning; raise it until the path is straight | 0.035 s |
-| `MAX_DRIVE_ACCEL` | Limit of the drive feed-forward | Where the wheels start to slip | 20 m/s² |
-| `MAX_STEER_RATE` | Limit of the steer feed-forward | Fastest the steer turns | 12 rad/s |
+| `MAX_ALLOWED_MODULE_VELOCITY` | Top speed of a wheel | Drive at full stick on the floor, log the wheel speed, and use about 10% less than the highest value | 4.5 m/s |
+| `LATENCY` | Delay from the command to the wheels | Drive straight while spinning, and raise it until the path is straight | 0.035 s |
+| `MAX_DRIVE_ACCEL` | Limit of the drive feed-forward | The point where the wheels start to slip | 20 m/s² |
+| `MAX_STEER_RATE` | Limit of the steer feed-forward | The fastest the steer can turn | 12 rad/s |
 
 ## Using it with an acceleration limiter
 
 If your chassis has its own acceleration limiter, add this line **before** the limiter, so
-driving and turning slow down together when the wheels are at top speed (without it the robot
-keeps turning fast but drives much slower):
+driving and turning slow down together when the wheels are at top speed. Without it, the
+robot keeps turning fast but drives much slower.
 
 ```java
 fieldSpeeds = ChassisSpeeds.fromRobotRelativeSpeeds(
     demaciaKinematics.desaturate(ChassisSpeeds.fromFieldRelativeSpeeds(fieldSpeeds, heading)), heading);
 ```
 
-`AccelLimitedSwerve` (in this package) already does it; see [docs/design.md](docs/design.md).
+`AccelLimitedSwerve` (in this package) already does this. See
+[docs/design.md](docs/design.md#using-the-acceleration-limiter-accellimitedswerve) for how to
+use it.
+
+## Building
+
+From the `Infrastructures` directory:
+
+```bash
+./gradlew build
+```
+
+Simulation results do not replace testing on the robot. Check the settings above and the
+module directions on real hardware; see
+[docs/design.md](docs/design.md#checking-it-on-the-robot).
 
 ## Troubleshooting
 
-| Problem | Try |
+| Symptom | Likely cause |
 |---|---|
-| Robot turns the wrong way after the import change | Your chassis used a different version of the old kinematics; see [docs/design.md](docs/design.md#differences-from-demaciacode). |
-| Drives slower than expected while turning | `MAX_ALLOWED_MODULE_VELOCITY` is higher than the wheels can really do, or a limiter without the line above. |
-| Curves when driving and spinning | `LATENCY` too small (or too big). |
-| Wheels snap to 0 when stopping | The module code overrides speed-0 states. |
-| Wheel jumps or shakes with level 3 | Level 3 used without level 2, or `STEER_KV` too big. |
+| Robot turns the wrong way after the import change | Your chassis used a different version of the old kinematics; see [Differences from DemaciaCode](docs/design.md#differences-from-demaciacode). |
+| Drives slower than expected while turning | `MAX_ALLOWED_MODULE_VELOCITY` is higher than the wheels can really reach, or a limiter is used without the line above. |
+| Curves when driving and spinning | `LATENCY` is too small (or too big). |
+| Wheels snap to 0° when stopping | The module code overrides speed-0 states. |
+| Wheel jumps or shakes with level 3 | Level 3 is used without level 2, or `STEER_KV` is too big. |
+
+## Project structure
+
+All paths are relative to `Infrastructures/src/main/java/frc/robot/Kinematics`.
+
+| Path | Description |
+|---|---|
+| `DemaciaKinematics.java` | Swerve kinematics. Drop-in for DemaciaCode's `DemaciaKinematics`, with discretization, cosine scaling and feed-forwards. |
+| `AccelLimitedSwerve.java` | Runs the acceleration limiter and the kinematics once per loop and keeps the speeds it sent. |
+| `SwerveAccelerationLimiter.java` | Limits how fast the field-relative velocity setpoint changes (skid, forward and tilt limits). |
+| `KinematicsConstants.java` | Module speed limit, standing threshold, loop time, latency and feed-forward limits. |
+| `KinematicsUtilities.java` | Small vector helpers (`limitVector`, `isInRange`, ...). |
+
+## Acknowledgements
+
+- **WPILib**: the framework this project builds on, licensed under
+  [`WPILib-License.md`](Infrastructures/WPILib-License.md).
+- **DemaciaCode**: the original kinematics and `SwerveAccelerationLimiter`
+  (`kinematics-acceleration-limit-testing` at `a54f5a4`). The `Chassis`, `Log` and
+  `ElasticGenerator` dependencies were removed so it works in any project, and the
+  kinematics math has since been fixed here; see
+  [Differences from DemaciaCode](docs/design.md#differences-from-demaciacode).
