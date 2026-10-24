@@ -68,11 +68,21 @@ takes volts). In `SwerveModule`, a copy of `setState` with two more arguments:
 
 ```java
 public void setState(SwerveModuleState state, double acceleration, double steerVelocity) {
+    // no reverse here: the two-argument toSwerveModuleStates already decided it
     double diff = MathUtil.angleModulus(state.angle.getRadians() - steerMotor.getCurrentPosition());
-    // no reverse here: the two-argument toSwerveModuleStates already turned the state to within 90 degrees
-    steerMotor.setPositionVoltage(steerMotor.getCurrentPosition() + diff, STEER_KV * steerVelocity);
-    // the module already corrects the drive for the steer coupling (SteerVelToDriveVel)
-    driveMotor.setVelocityWithAcceleration(state.speedMetersPerSecond, () -> acceleration);
+    if (Math.abs(diff) <= Math.toRadians(0.7)) {
+        setSteerPower(0);
+    } else {
+        steerMotor.setPositionVoltage(steerMotor.getCurrentPosition() + diff, STEER_KV * steerVelocity);
+    }
+    if (state.speedMetersPerSecond == 0) {
+        setDrivePower(0);
+    } else {
+        isDriveStop = false;
+        // like setDriveVelocity (steer coupling correction), plus the acceleration feed-forward
+        driveMotor.setVelocityWithAcceleration(
+            state.speedMetersPerSecond - config.steerVelToDriveVel * getSteerVel(), () -> acceleration);
+    }
 }
 ```
 
