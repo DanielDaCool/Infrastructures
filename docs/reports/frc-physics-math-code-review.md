@@ -314,32 +314,58 @@ From the simulation study (fresh seeds, see README "What changed"). Commits on `
 | V1 | `af81635` | trust limelight frames by tag distance and count, drop megatag2 frames taken while spinning or with another heading |
 | V2 | `2cd53dd` | quest: subtract the configured latency, ignore and re-align after a jump or lost tracking, thin to 10 hz, debounce disconnects |
 
-- **E1 follow-up:** the collision threshold is 5 g (3 g gave 5x more false hits with an
-  off-center roboRIO) and the hold 0.15 s. The drop into the hit is only used with
-  `adaptiveTrust` off; with it on, the slip/collision detector raises the uncertainty instead.
+- **E1 follow-up:** collision handling (the drop into the hit, at 5 g / 0.15 s) was removed in
+  E4 together with the accelerometer.
 - **Q1 (found by the end-to-end tests, fixed):** when the Quest frames escaped the jump filter,
   the Quest offset was shifted by their distance from the estimate in the wrong direction, so
   their error doubled instead of going to 0 (after a wrong start pose: 1.17 m, then 2.3 m,
   then 4.65 m off, rejected for good). The simulation had the same sign; this path fired 0
   times in the cross-check runs (the Quest is re-aligned mostly by its jump handling).
 - **E2:** still kept by decision (frames up to 50 ms ahead go on the newest sample).
-- **R1:** kept for odometry samples; vision frames are now also dropped until the first sample
-  after a reset.
+- **R1:** kept for odometry samples; vision frames from before a reset are older than the
+  cleared history, so they are dropped too.
 - **Evidence:** compiled and run with javac against stand-in WPILib/CTRE/QuestNav stubs (real
   WPILib 2026.2.1 geometry sources), 44 JUnit tests pass; the Java estimator reproduces the
   simulation's reference implementation to 0.17 mm on 5 scenarios. Not built with Gradle, not run
   on a robot. Run `./gradlew build test`.
+
+## E4. Simplified estimator and tilt trust (2026-10-24)
+
+| ID | Commit | Message |
+|---|---|---|
+| S1 | `5a8301d` | simplify the estimator to a fixed gain with the jump filter and escape, remove the adaptive trust, the slip and collision detector and the accelerometer |
+| T1 | `63af0db` | trust the wheel translation less while the robot is tilted, like 6328 |
+| Q2 | `49b902b` | shift the quest with the estimate when camera frames escape the jump filter |
+
+- **Why:** on fresh seeds the adaptive version was 6.5 cm, the simple one 8.6 cm, the shared
+  fixes alone 10.6 cm, WPILib as wired about 20 cm. The adaptive version needed 17 tunables, about
+  20 values kept between loops and the roboRIO accelerometer; the simple one has 5 tunables, 3
+  values and no extra sensor.
+- **Removed:** the uncertainty P and its growth/floor/reset, the slip/collision/pin detector,
+  `adaptiveTrust` and its `initialize` overload, collision detection and the accelerometer
+  (`enableCollisionDetection`, `RoboRioOrientation`), the drop into a hit, the vision drop until
+  the first sample after a reset, and the Limelight std floor (config std).
+- **T1:** wheel translation x `1 − clamp(tilt / 25°, 0, 1)` per sample, heading untouched;
+  `OdometryData` has a tilt component, its old constructors are level.
+- **Q2 (found by the end-to-end tests):** with the simple estimator a Quest anchored to a wrong
+  start pose was never rejected (its 0.4 m std lets 1.5 m errors through) and kept pulling the
+  estimate away from the cameras (end-to-end: 52.6 cm RMS for 8 s). A camera escape now shifts
+  the Quest by the same amount. Simulation, seeds 600-609 nominal: `wrong_start` 30.9 to 18.7 cm,
+  every other scenario within 0.1 cm, mean 8.35 to 7.63 cm.
+- **Evidence:** 52 JUnit tests pass against the stubs (16 end-to-end); the Java matches the
+  simulation's simple estimator to 0.25 mm on 4 scenarios (with Q2: 0.15 mm on 3).
 
 ## F. Remaining risks
 
 - U1 is open (owner will check on the robot): the 3D Limelight pose sent may have the wrong side/roll/yaw (and possibly pitch) sign.
 - E2 is kept by decision: Quest frames ahead of odometry keep a small v·Δ bias.
 - R1 and the 2026-10-22 update (E3) were compiled against stubs only, not with Gradle.
-- `adaptiveTrust` depends on the slip/collision detector; the push test must show it fires, or
-  turn `adaptiveTrust` off.
+- Pushes and hits are no longer detected; vision corrects them through the jump filter and the
+  escape (end-to-end: a 0.5 m shove is under 5 cm after 0.5 s).
+- Tilt trust needs the gyro pitch/roll in the samples; a pitch/roll mounting offset scales every
+  sample down.
 - C3 changes what a 2D config's pitch means; any existing robot config must flip its 2D pitch sign.
 - C2 assumes the pinhole tx/ty model and the crosshair at the principal point.
-- E1 and the detector still depend on one accelerometer read per loop.
 - Nothing here was run on a robot.
 
 ## G. Verdict
