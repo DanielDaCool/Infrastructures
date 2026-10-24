@@ -37,8 +37,9 @@ import edu.wpi.first.wpilibj.Timer;
  * {@link #ESCAPE_WINDOW_FRAMES} frames of one kind were rejected but agree with each other
  * within {@link #ESCAPE_SPREAD_METERS}, the estimate is the one that is wrong and the frame is
  * used (for the Quest, its offset is re-aligned instead; see
- * {@link VisionResult#REALIGN_QUEST}). The filter is off while the robot is disabled (it may be
- * carried).</li>
+ * {@link VisionResult#REALIGN_QUEST}). When camera frames escape, the Quest was anchored to the
+ * wrong estimate too, so it is shifted by the same amount ({@link VisionResult#ESCAPED}). The
+ * filter is off while the robot is disabled (it may be carried).</li>
  * </ul>
  *
  * <p>The heading comes from the gyro. Vision only changes it if a measurement has a finite
@@ -91,6 +92,11 @@ public class DemaciaPoseEstimator {
     public enum VisionResult {
         /** Used. */
         ACCEPTED,
+        /**
+         * A camera frame used after the escape: the estimate was wrong by about
+         * {@link #getQuestRealignment()}, so shift the Quest (anchored to the old estimate) by it.
+         */
+        ESCAPED,
         /** Rejected by the jump filter. */
         REJECTED,
         /** Not looked at: NaN, outside the field, too old or too new. */
@@ -272,6 +278,7 @@ public class DemaciaPoseEstimator {
         double measurementVarianceX = square(stdDevs.get(0, 0));
         double measurementVarianceY = square(stdDevs.get(1, 0));
 
+        VisionResult result = VisionResult.ACCEPTED;
         List<Translation2d> window = recentFrames.get(kind);
         if (!enabled) {
             window.clear();
@@ -297,6 +304,8 @@ public class DemaciaPoseEstimator {
                     return VisionResult.REALIGN_QUEST;
                 }
                 escapes++;
+                questRealignment = mean;
+                result = VisionResult.ESCAPED;
             }
         }
 
@@ -309,7 +318,7 @@ public class DemaciaPoseEstimator {
                 estimateAtFrame.getRotation().plus(new Rotation2d(gainTheta
                         * visionRobotPose.getRotation().minus(estimateAtFrame.getRotation()).getRadians())));
         estimatedPose = corrected.plus(odometryPose.minus(odometryAtFrame));
-        return VisionResult.ACCEPTED;
+        return result;
     }
 
     /** WPILib's gain {@code q / (q + sqrt(q r))}; 0 when q is 0 or r infinite. */
@@ -463,8 +472,11 @@ public class DemaciaPoseEstimator {
     /** Time the velocity of {@link #getFuturePose} is averaged over (seconds). */
     private static final double FUTURE_VELOCITY_WINDOW_SECONDS = 0.1;
 
-    /** @return How far to shift the Quest frames after {@link VisionResult#REALIGN_QUEST} so they
-     *         agree with the estimate: minus their mean distance from it (field frame, meters). */
+    /**
+     * @return How far to shift the Quest frames (field frame, meters): after
+     *         {@link VisionResult#REALIGN_QUEST} minus their mean distance from the estimate, after
+     *         {@link VisionResult#ESCAPED} the cameras' mean distance from the old estimate.
+     */
     public Translation2d getQuestRealignment() {
         return questRealignment;
     }

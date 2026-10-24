@@ -161,6 +161,13 @@ public final class RobotPose implements Sendable {
                         source instanceof Quest ? MeasurementKind.QUEST : MeasurementKind.CAMERA);
                 if (result == VisionResult.REALIGN_QUEST) {
                     ((Quest) source).shiftOffset(poseEstimator.getQuestRealignment());
+                } else if (result == VisionResult.ESCAPED) {
+                    // The cameras showed the estimate was wrong; the Quests were anchored to it.
+                    for (VisionSource quest : sources) {
+                        if (quest instanceof Quest) {
+                            ((Quest) quest).shiftOffset(poseEstimator.getQuestRealignment());
+                        }
+                    }
                 }
             }
         }

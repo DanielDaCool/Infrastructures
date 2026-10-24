@@ -273,7 +273,9 @@ class RobotPoseLoopTest {
         System.out.printf("start pose 1.17 m off: under 10 cm after %.2f s, then %s; Quest frames at the end off by %.1f cm%n",
                 recovered, cm(error), worstQuestError * 100);
         assertTrue(recovered < 2.0, "recovered at " + recovered);
+        assertTrue(error[1] < 0.15, cm(error));
         assertTrue(questUsedAtTheEnd > 5);
+        assertTrue(worstQuestError < 0.1, "quest error " + worstQuestError);
     }
 
     @Test

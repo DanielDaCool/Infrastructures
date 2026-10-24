@@ -161,11 +161,12 @@ class DemaciaPoseEstimatorTest {
                 assertEquals(VisionResult.REJECTED, result);
                 assertEquals(0, estimator.getEstimatedPose().getX(), 1e-12);
             } else {
-                assertEquals(VisionResult.ACCEPTED, result);
+                assertEquals(VisionResult.ESCAPED, result);
             }
         }
-        // Then used with the normal gain: q = r, so K = 0.5.
+        // Then used with the normal gain: q = r, so K = 0.5. The Quest is to move by the 2 m.
         assertEquals(1.0, estimator.getEstimatedPose().getX(), 1e-9);
+        assertEquals(2.0, estimator.getQuestRealignment().getX(), 1e-12);
         assertEquals(1, estimator.getEscapes());
         assertEquals(DemaciaPoseEstimator.ESCAPE_REJECTED_FRAMES, estimator.getRejectedFrames());
     }
