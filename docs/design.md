@@ -64,7 +64,8 @@ within 90° of the module).
 two-argument call, `getDriveAccelerations()` [m/s²] and `getSteerVelocities()` [rad/s] give each
 module's planned drive acceleration and steer velocity. The motor classes already take them
 (`setVelocityWithAcceleration` uses the drive's kA, `setPositionVoltage(position, feedForward)`
-takes volts). In `SwerveModule`, a copy of `setState` with two more arguments:
+takes volts). In the **module code** (`SwerveModule.java`, not the chassis: it uses the module's own
+fields), a copy of `setState` without the reverse, with two more arguments:
 
 ```java
 public void setState(SwerveModuleState state, double acceleration, double steerVelocity) {
@@ -87,7 +88,7 @@ public void setState(SwerveModuleState state, double acceleration, double steerV
 ```
 
 (`STEER_KV`: the steer's kV in volts per rad/s; leave the steer feed-forward out with a MotionMagic
-steer.) In `Chassis.setVelocities`:
+steer.) In the **chassis code** (`Chassis.setVelocities`):
 
 ```java
 SwerveModuleState[] states = demaciaKinematics.toSwerveModuleStates(speeds, getModuleStates());
