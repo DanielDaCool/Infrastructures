@@ -111,6 +111,11 @@ RobotPose.initialize(
     VisionConstants.VISION);
 ```
 
+> [!NOTE]
+> `RobotPose.initialize` can also be called in the `RobotContainer` constructor, as long as
+> it comes after the chassis is created there. `Robot`'s constructor remains the recommended
+> place. Either way, call it only once.
+
 ### 3. Update every loop
 
 In `Robot.robotPeriodic()`, after the CommandScheduler:
