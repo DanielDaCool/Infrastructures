@@ -20,7 +20,7 @@ import edu.wpi.first.wpilibj.Alert;
 import edu.wpi.first.wpilibj.Alert.AlertType;
 import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.wpilibj2.command.InstantCommand;
-import frc.robot.RobotPose.PoseLog;
+import frc.demacia.utils.log.Log;
 import frc.robot.RobotPose.RobotPose;
 import frc.robot.RobotPose.Vision.BaseVisionSource;
 import frc.robot.RobotPose.Vision.TimestampedVisionMeasurement;
@@ -143,7 +143,7 @@ public class Quest extends BaseVisionSource {
     @Override
     protected void addLog() {
         super.addLog();
-        PoseLog.putData("vision/" + getName() + "/Reset Quest Pose", new InstantCommand(
+        Log.putData("vision/" + getName() + "/Reset Quest Pose", new InstantCommand(
             ()->setPose(RobotPose.getInstance().getEstimatedPose())).ignoringDisable(true));
     }
 

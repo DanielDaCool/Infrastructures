@@ -23,6 +23,7 @@ import edu.wpi.first.wpilibj.Alert.AlertType;
 import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.smartdashboard.Field2d;
 import edu.wpi.first.wpilibj2.command.InstantCommand;
+import frc.demacia.utils.log.Log;
 import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator;
 import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator.MeasurementKind;
 import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator.OdometryData;
@@ -102,13 +103,13 @@ public final class RobotPose implements Sendable {
      * reset the gyro to 0 or 180 degrees and the pose to the origin.
      */
     private void addLog() {
-        PoseLog.putData("pose", this);
-        PoseLog.putData("pose/field", field);
-        PoseLog.putData("pose/reset pose",
+        Log.putData("pose", this);
+        Log.putData("pose/field", field);
+        Log.putData("pose/reset pose",
                 new InstantCommand(() -> resetPose(Pose2d.kZero)).ignoringDisable(true));
-        PoseLog.putData("chassis/reset gyro",
+        Log.putData("chassis/reset gyro",
                 new InstantCommand(() -> setYaw(Rotation2d.kZero)).ignoringDisable(true));
-        PoseLog.putData("chassis/reset gyro 180",
+        Log.putData("chassis/reset gyro 180",
                 new InstantCommand(() -> setYaw(Rotation2d.kPi)).ignoringDisable(true));
     }
 
@@ -245,7 +246,7 @@ public final class RobotPose implements Sendable {
         private SourceDisagreement(String questName, String limelightName) {
             alert = new Alert(questName + " and " + limelightName + " disagree by more than "
                     + SOURCE_DISAGREEMENT_METERS + " m", AlertType.kWarning);
-            PoseLog.putData("vision/" + limelightName + "/" + questName,
+            Log.putData("vision/" + limelightName + "/" + questName,
                     builder -> builder.addDoubleProperty("distance m", () -> distanceMeters, null));
         }
 
