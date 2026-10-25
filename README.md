@@ -26,7 +26,6 @@ are handled automatically.
 - [Telemetry](#telemetry)
 - [Troubleshooting](#troubleshooting)
 - [Project structure](#project-structure)
-- [Acknowledgements](#acknowledgements)
 
 ## Features
 
@@ -201,13 +200,3 @@ All paths are relative to `Infrastructures/src/main/java/frc/robot/RobotPose`.
 | `Vision/VisionTypes/QuestFrameFilter.java` | Selects which Quest frames are used (jump and lost-tracking handling, re-alignment, 10 Hz thinning). |
 | `Vision/visionConfigs/*Config.java` | One config class per source type. |
 | `Vision/LimelightHelpers.java` | Limelight's official helper library. |
-
-## Acknowledgements
-
-- **Team 6328 Mechanical Advantage**: the tilt-trust approach and high-frequency odometry.
-- **Limelight Vision**: [LimelightHelpers](https://github.com/LimelightVision/limelightlib-wpijava).
-- **QuestNav**: [QuestNavLib](https://questnav.gg/) for Meta Quest tracking.
-- **WPILib**: the framework this project builds on, licensed under
-  [`WPILib-License.md`](Infrastructures/WPILib-License.md).
-- **DemaciaCode**: the original `frc.demacia.RobotPose`, from which the DemaciaCode-only
-  dependencies (`Chassis`, `Log`, `ElasticGenerator`) were removed so it works in any project.
