@@ -145,6 +145,9 @@ Pose2d pose = RobotPose.getInstance().getEstimatedPose();
   above; see [docs/design.md](docs/design.md#250-hz-odometry).
 - **Dashboard generator:** `BaseVisionSource.setOnCreate(callback)` is called with every
   vision source as it is created.
+- **Your own logger:** all dashboard entries go to SmartDashboard by default. To send them to
+  the team's `Log` instead, call `PoseLog.setLogger(Log::putData);` in `Robot`'s constructor,
+  before `RobotPose.initialize`.
 
 ## Migrating from DemaciaCode
 
@@ -187,6 +190,7 @@ All paths are relative to `Infrastructures/src/main/java/frc/robot/RobotPose`.
 | Path | Description |
 |---|---|
 | `RobotPose.java` | Public entry point. Singleton that runs the full pipeline each loop. |
+| `PoseLog.java` | Where the dashboard entries go (SmartDashboard by default, or your own logger). |
 | `Estimation/DemaciaOdometry.java` | Swerve odometry (gyro + module positions → twist). |
 | `Estimation/DemaciaPoseEstimator.java` | Fuses odometry and vision: latency compensation, jump filter with recovery, tilt trust. |
 | `Estimation/PhoenixOdometryThread.java` | Optional 250 Hz (CAN FD) / 100 Hz (CAN 2.0) odometry thread. |

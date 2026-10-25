@@ -13,7 +13,7 @@ import edu.wpi.first.util.sendable.Sendable;
 import edu.wpi.first.util.sendable.SendableBuilder;
 import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.wpilibj.smartdashboard.Field2d;
-import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
+import frc.robot.RobotPose.PoseLog;
 import frc.robot.RobotPose.Vision.visionConfigs.BaseVisionSourceConfig;
 
 /**
@@ -55,7 +55,7 @@ public abstract class BaseVisionSource implements VisionSource, Sendable {
     /** Distance between the last used measurement and the estimate at its capture time. */
     private double lastErrorMeters;
 
-    /** Copies the config and registers this source on SmartDashboard. */
+    /** Copies the config and registers this source on the dashboard ({@link PoseLog}). */
     public BaseVisionSource(BaseVisionSourceConfig config) {
         name = config.name;
         offset = config.offset;
@@ -64,7 +64,7 @@ public abstract class BaseVisionSource implements VisionSource, Sendable {
         pose = Pose2d.kZero;
 
         addLog();
-        SmartDashboard.putData("vision/" + name, this);
+        PoseLog.putData("vision/" + name, this);
         createdSources.add(this);
         onCreate.accept(this);
     }
@@ -100,7 +100,7 @@ public abstract class BaseVisionSource implements VisionSource, Sendable {
 
     /** Puts dashboard entries. Subclasses can override to add their own (call super). */
     protected void addLog() {
-        SmartDashboard.putData("vision/" + name + "/field", field);
+        PoseLog.putData("vision/" + name + "/field", field);
     }
 
     public String getName() {
