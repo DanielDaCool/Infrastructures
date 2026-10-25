@@ -18,8 +18,6 @@ import edu.wpi.first.math.numbers.N1;
 import edu.wpi.first.math.numbers.N3;
 import edu.wpi.first.util.sendable.Sendable;
 import edu.wpi.first.util.sendable.SendableBuilder;
-import edu.wpi.first.wpilibj.Alert;
-import edu.wpi.first.wpilibj.Alert.AlertType;
 import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.smartdashboard.Field2d;
 import edu.wpi.first.wpilibj2.command.InstantCommand;
@@ -240,18 +238,18 @@ public final class RobotPose implements Sendable {
      */
     private static final class SourceDisagreement {
         private final Debouncer debouncer = new Debouncer(SOURCE_DISAGREEMENT_SECONDS, DebounceType.kRising);
-        private final Alert alert;
+        private final String alertText;
         private double distanceMeters = Double.NaN;
 
         private SourceDisagreement(String questName, String limelightName) {
-            alert = new Alert(questName + " and " + limelightName + " disagree by more than "
-                    + SOURCE_DISAGREEMENT_METERS + " m", AlertType.kWarning);
+            alertText = questName + " and " + limelightName + " disagree by more than "
+                    + SOURCE_DISAGREEMENT_METERS + " m";
             Log.putData("vision/" + limelightName + "/" + questName,
                     builder -> builder.addDoubleProperty("distance m", () -> distanceMeters, null));
         }
 
         private void update(boolean disagrees) {
-            alert.set(debouncer.calculate(disagrees));
+            Log.alert(alertText, debouncer.calculate(disagrees));
         }
     }
 

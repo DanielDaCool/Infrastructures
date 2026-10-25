@@ -9,9 +9,8 @@ import com.ctre.phoenix6.BaseStatusSignal;
 import com.ctre.phoenix6.CANBus;
 import com.ctre.phoenix6.StatusCode;
 
-import edu.wpi.first.wpilibj.Alert;
-import edu.wpi.first.wpilibj.Alert.AlertType;
 import edu.wpi.first.wpilibj.Timer;
+import frc.demacia.utils.log.ConsoleAlert;
 import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator.OdometryData;
 
 /**
@@ -95,7 +94,7 @@ public final class PhoenixOdometryThread extends Thread {
     private double lastFailureSeconds = Double.NEGATIVE_INFINITY;
     /** The alert stays on this long after the last failed cycle (seconds). */
     private static final double FAILURE_ALERT_SECONDS = 1.0;
-    private final Alert failureAlert = new Alert("odometry thread: a signal stopped updating", AlertType.kError);
+    private final ConsoleAlert failureAlert = ConsoleAlert.error("odometry thread: a signal stopped updating");
 
     /**
      * Uses {@link #CAN_FD_FREQUENCY_HZ} on CAN FD, {@link #CAN_2_FREQUENCY_HZ} otherwise.

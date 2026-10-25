@@ -16,8 +16,6 @@ import edu.wpi.first.math.geometry.Translation2d;
 import edu.wpi.first.networktables.GenericSubscriber;
 import edu.wpi.first.networktables.NetworkTableInstance;
 import edu.wpi.first.util.sendable.SendableBuilder;
-import edu.wpi.first.wpilibj.Alert;
-import edu.wpi.first.wpilibj.Alert.AlertType;
 import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.wpilibj2.command.InstantCommand;
 import frc.demacia.utils.log.Log;
@@ -91,14 +89,14 @@ public class Quest extends BaseVisionSource {
      */
     private static final double QUEST_RESET_SETTLE_SECONDS = 0.25;
 
-    /** Battery percent at or below which {@link #lowBatteryAlert} is raised. */
+    /** Battery percent at or below which {@link #lowBatteryText} is raised. */
     private static final int LOW_BATTERY_PERCENT = 20;
     /**
-     * On while the Quest is connected, has sent its device data, and its battery is at or
-     * below {@link #LOW_BATTERY_PERCENT}. Updated every loop, so it clears after a battery swap.
+     * Text of the low battery alert, raised while the Quest is connected, has sent its device
+     * data, and its battery is at or below {@link #LOW_BATTERY_PERCENT}. Updated every loop, so it
+     * clears after a battery swap.
      */
-    private final Alert lowBatteryAlert = new Alert(
-            name + " battery is at or below " + LOW_BATTERY_PERCENT + " percent", AlertType.kWarning);
+    private final String lowBatteryText = name + " battery is at or below " + LOW_BATTERY_PERCENT + " percent";
     /**
      * QuestNav's device data topic, only to see whether it has ever been received. QuestNav's
      * battery percent reads 0 (not empty) until then.
@@ -215,7 +213,7 @@ public class Quest extends BaseVisionSource {
             hasUpdatedQuestIntialPose = false;
         }
 
-        lowBatteryAlert.set(isBatteryLow(isConnected(), deviceDataSubscriber.getLastChange() != 0,
+        Log.alert(lowBatteryText, isBatteryLow(isConnected(), deviceDataSubscriber.getLastChange() != 0,
                 questNav.getBatteryPercent()));
     }
 
