@@ -24,7 +24,6 @@ are handled automatically.
 - [Getting started](#getting-started)
 - [Migrating from DemaciaCode](#migrating-from-demaciacode)
 - [Telemetry](#telemetry)
-- [Building](#building)
 - [Troubleshooting](#troubleshooting)
 - [Project structure](#project-structure)
 - [Acknowledgements](#acknowledgements)
@@ -168,19 +167,6 @@ Pose2d pose = RobotPose.getInstance().getEstimatedPose();
 | `vision/<name>/last error m` | Consistently large means that source's position on the robot is wrong. |
 | `pose/frames rejected` | Frames that looked wrong. A few is normal; a fast climb means a wrong offset. |
 | `pose/reset pose`, `chassis/reset gyro` | Buttons: reset the pose to the origin, or the heading to 0. |
-
-## Building
-
-From the `Infrastructures` directory:
-
-```bash
-./gradlew build
-```
-
-[`Robot.java`](Infrastructures/src/main/java/frc/robot/Robot.java) contains a placeholder
-setup (zero gyro and modules, no vision) so the project runs without hardware. Before
-relying on the pose, calibrate the robot and run the robot checks in
-[docs/design.md](docs/design.md#calibration-step-by-step).
 
 ## Troubleshooting
 
