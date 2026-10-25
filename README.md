@@ -25,7 +25,6 @@ it drives and spins at the same time. It is a drop-in replacement for DemaciaCod
 - [Building](#building)
 - [Troubleshooting](#troubleshooting)
 - [Project structure](#project-structure)
-- [Acknowledgements](#acknowledgements)
 
 ## Features
 
@@ -205,13 +204,3 @@ All paths are relative to `Infrastructures/src/main/java/frc/robot/Kinematics`.
 | `SwerveAccelerationLimiter.java` | Limits how fast the field-relative velocity setpoint changes (skid, forward and tilt limits). |
 | `KinematicsConstants.java` | Module speed limit, standing threshold, loop time, latency and feed-forward limits. |
 | `KinematicsUtilities.java` | Small vector helpers (`limitVector`, `isInRange`, ...). |
-
-## Acknowledgements
-
-- **WPILib**: the framework this project builds on, licensed under
-  [`WPILib-License.md`](Infrastructures/WPILib-License.md).
-- **DemaciaCode**: the original kinematics and `SwerveAccelerationLimiter`
-  (`kinematics-acceleration-limit-testing` at `a54f5a4`). The `Chassis`, `Log` and
-  `ElasticGenerator` dependencies were removed so it works in any project, and the
-  kinematics math has since been fixed here; see
-  [Differences from DemaciaCode](docs/design.md#differences-from-demaciacode).
