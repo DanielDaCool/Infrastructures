@@ -38,8 +38,9 @@ it drives and spins at the same time. It is a drop-in replacement for DemaciaCod
   motors do not lag behind the command.
 - **Ratio-preserving desaturation.** When a wheel is over its top speed, driving and turning
   slow down together.
-- **Optional acceleration limiter.** `AccelLimitedSwerve` limits how fast the field-relative
-  velocity setpoint changes (skid, forward and tilt limits).
+- **Optional acceleration limiter.** `SwerveAccelerationLimiter` limits how fast the
+  field-relative velocity setpoint changes (skid, forward and tilt limits). A few lines in your
+  own drive method.
 
 Average distance from the path in simulation:
 
@@ -141,7 +142,7 @@ steer feed-forward out.
 > - Call `toSwerveModuleStates` **once per loop**. It remembers the previous loop.
 > - The turning speed passed to `toSwerveModuleStates` is **clockwise-positive**, the same as
 >   the old DemaciaCode kinematics, so nothing in the chassis changes. Everything else
->   (module locations, `AccelLimitedSwerve`) uses the WPILib frame: x forward, y left,
+>   (module locations, `SwerveAccelerationLimiter`) uses the WPILib frame: x forward, y left,
 >   counter-clockwise positive.
 
 ## Settings
@@ -158,18 +159,25 @@ robot.
 
 ## Using it with an acceleration limiter
 
-If your chassis has its own acceleration limiter, add this line **before** the limiter, so
-driving and turning slow down together when the wheels are at top speed. Without it, the
-robot keeps turning fast but drives much slower.
+Optional. Use `SwerveAccelerationLimiter` in your own field-relative drive method. Keep the
+field-relative speeds you sent last loop (`lastFieldSpeeds`) in the chassis:
 
 ```java
-fieldSpeeds = ChassisSpeeds.fromRobotRelativeSpeeds(
-    demaciaKinematics.desaturate(ChassisSpeeds.fromFieldRelativeSpeeds(fieldSpeeds, heading)), heading);
+// desaturate first, so driving and turning slow down together at top speed
+wanted = ChassisSpeeds.fromRobotRelativeSpeeds(
+    demaciaKinematics.desaturate(ChassisSpeeds.fromFieldRelativeSpeeds(wanted, heading)), heading);
+lastFieldSpeeds = limiter.calculate(wanted, lastFieldSpeeds, heading);
+// send ChassisSpeeds.fromFieldRelativeSpeeds(lastFieldSpeeds, heading) with your drive method
 ```
 
-`AccelLimitedSwerve` (in this package) already does this. See
-[docs/design.md](docs/design.md#using-the-acceleration-limiter-accellimitedswerve) for how to
-use it.
+Keep the desaturate line **before** the limiter, also with a limiter of your own. Without it,
+the robot keeps turning fast but drives much slower.
+
+Also set `lastFieldSpeeds` to the measured speeds when something else drove the robot last
+loop, and turn it on a gyro reset. The example chassis
+[`ExampleChassis.java`](Infrastructures/src/main/java/frc/robot/example/ExampleChassis.java)
+shows all of it; see also
+[docs/design.md](docs/design.md#adding-the-acceleration-limit-to-your-chassis).
 
 ## Building
 
@@ -200,7 +208,11 @@ All paths are relative to `Infrastructures/src/main/java/frc/robot/Kinematics`.
 | Path | Description |
 |---|---|
 | `DemaciaKinematics.java` | Swerve kinematics. Drop-in for DemaciaCode's `DemaciaKinematics`, with discretization, cosine scaling and feed-forwards. |
-| `AccelLimitedSwerve.java` | Runs the acceleration limiter and the kinematics once per loop and keeps the speeds it sent. |
 | `SwerveAccelerationLimiter.java` | Limits how fast the field-relative velocity setpoint changes (skid, forward and tilt limits). |
 | `KinematicsConstants.java` | Module speed limit, standing threshold, loop time, latency and feed-forward limits. |
 | `KinematicsUtilities.java` | Small vector helpers (`limitVector`, `isInRange`, ...). |
+
+The example chassis is outside the library, in
+`Infrastructures/src/main/java/frc/robot/example/ExampleChassis.java`: robot-relative and
+field-relative drive with the acceleration limit, re-sync and gyro reset, hardware left to your
+own code. It is not used by the robot.

@@ -14,7 +14,13 @@ import edu.wpi.first.math.kinematics.ChassisSpeeds;
  *
  * <p>The limiter only keeps the time of the last call. The caller keeps the last commanded
  * velocity (the speeds actually sent, after desaturation) and passes it every loop. Use one
- * instance per drivetrain and call {@code calculate} once per loop.
+ * instance per drivetrain and call {@code calculate} once per loop:
+ *
+ * <pre>{@code
+ * wanted = fromRobotRelativeSpeeds(kinematics.desaturate(fromFieldRelativeSpeeds(wanted, heading)), heading);
+ * lastFieldSpeeds = limiter.calculate(wanted, lastFieldSpeeds, heading);
+ * // send fromFieldRelativeSpeeds(lastFieldSpeeds, heading) with the chassis's own drive method
+ * }</pre>
  */
 public final class SwerveAccelerationLimiter {
     // Placeholders. Tune on the robot.
