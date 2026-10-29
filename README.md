@@ -154,7 +154,7 @@ robot.
 |---|---|---|---|
 | `MAX_ALLOWED_MODULE_VELOCITY` | Top speed of a wheel | Drive at full stick on the floor, log the wheel speed, and use about 10% less than the highest value | 4.5 m/s |
 | `LATENCY` | Command latency + gyro latency (no half loop) | Drive straight while spinning, and raise it until the path is straight | 0.035 s (placeholder) |
-| `MAX_DRIVE_ACCEL` | Limit of the drive feed-forward | The point where the wheels start to slip | 20 m/s² |
+| `MAX_DRIVE_ACCEL` | Safety clamp of the drive feed-forward | Above the traction limit (about μg); with the acceleration limiter it never engages | 20 m/s² |
 | `MAX_STEER_RATE` | Limit of the steer feed-forward | The fastest the steer can turn | 12 rad/s |
 
 ## Using it with an acceleration limiter

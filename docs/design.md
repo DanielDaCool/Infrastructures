@@ -122,7 +122,7 @@ Set on the robot (`KinematicsConstants`):
 |---|---|---|---|
 | `LATENCY` | Command latency + gyro latency (no half loop: the discretize over `CYCLE_DT + 2·LATENCY` already adds it) | Drive a straight line while spinning at a constant rate and raise it until the path is straight | 0.035 s (placeholder, tune it) |
 | `MAX_ALLOWED_MODULE_VELOCITY` | Desaturation | The fastest a module really drives (DemaciaCode has 4) | 4.5 m/s |
-| `MAX_DRIVE_ACCEL` | Clamp of the acceleration feed-forward | The acceleration where the wheels still don't slip | 20 m/s² |
+| `MAX_DRIVE_ACCEL` | Safety clamp of the acceleration feed-forward | Above the traction limit (about μg, 11.8 m/s² at μ = 1.2), so it only catches a bad setpoint step. With `SwerveAccelerationLimiter` it never engages; the limiter's `MAX_SKID_ACCEL` sets the acceleration | 20 m/s² |
 | `MAX_STEER_RATE` | Clamp of the steer velocity feed-forward | Free steer speed: a large steer step, peak steer velocity | 12 rad/s |
 
 Check on the robot after the import change: the robot spins **the same way** as before for the
@@ -285,7 +285,7 @@ All in `SwerveAccelerationLimiter` (m/s²) and `KinematicsConstants`. Start low 
 | `MIN_VELOCITY` | Below this the robot stands | Just above stick noise after the controller deadband. |
 | `CYCLE_DT` | Discretize time | The robot loop period (0.02 s). |
 | `LATENCY` | Added to the discretize time (twice) in `toSwerveModuleStates` | See [Quick start](#quick-start-the-demaciacode-chassis). |
-| `MAX_DRIVE_ACCEL` | Clamp of `getDriveAccelerations` | The acceleration where the wheels still don't slip. |
+| `MAX_DRIVE_ACCEL` | Clamp of `getDriveAccelerations` | A safety clamp above the traction limit, not the slip limit (that is the limiter's `MAX_SKID_ACCEL`). |
 
 ## Differences from DemaciaCode
 
