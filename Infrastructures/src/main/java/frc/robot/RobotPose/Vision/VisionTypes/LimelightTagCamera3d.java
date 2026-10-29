@@ -7,7 +7,6 @@ import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Transform3d;
 import edu.wpi.first.util.sendable.SendableBuilder;
 import edu.wpi.first.wpilibj.Timer;
-import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import frc.robot.RobotPose.RobotPose;
 import frc.robot.RobotPose.Vision.BaseVisionSource;
 import frc.robot.RobotPose.Vision.LimelightHelpers;
@@ -57,6 +56,7 @@ public class LimelightTagCamera3d extends BaseVisionSource {
     public static final double MAX_HEADING_ERROR_RADIANS = Math.toRadians(3);
     /** Frames rejected by the yaw rate or heading check since startup (for the dashboard). */
     private int rejectedFrames;
+    private double[] sourcePoseSent; // no initializer: set in the constructor, read by the dashboard
 
     /**
      * Sends the config offset to the Limelight as its camera pose in robot space (meters,
@@ -80,7 +80,7 @@ public class LimelightTagCamera3d extends BaseVisionSource {
             Math.toDegrees(sourceOffset.getRotation().getZ()) };
         LimelightHelpers.setCameraPose_RobotSpace(limelightName,
             sourcePose[0], sourcePose[1], sourcePose[2], sourcePose[3], sourcePose[4], sourcePose[5]);
-        SmartDashboard.putNumberArray("vision/" + name + "/source pose sent", sourcePose);
+        sourcePoseSent = sourcePose;
     }
 
     /**
@@ -177,5 +177,7 @@ public class LimelightTagCamera3d extends BaseVisionSource {
         builder.addIntegerProperty("tag count", () -> poseEstimate == null ? 0 : poseEstimate.tagCount, null);
         builder.addDoubleProperty("avg tag distance m", () -> poseEstimate == null ? 0 : poseEstimate.avgTagDist, null);
         builder.addIntegerProperty("frames rejected (spin or heading)", () -> rejectedFrames, null);
+        // forward, side, up m; roll, pitch, yaw deg, in the Limelight's frame (set before the constructor ends)
+        builder.addDoubleArrayProperty("source pose sent", () -> sourcePoseSent == null ? new double[0] : sourcePoseSent, null);
     }
 }

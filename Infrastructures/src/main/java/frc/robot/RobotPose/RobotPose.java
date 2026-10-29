@@ -18,12 +18,10 @@ import edu.wpi.first.math.numbers.N1;
 import edu.wpi.first.math.numbers.N3;
 import edu.wpi.first.util.sendable.Sendable;
 import edu.wpi.first.util.sendable.SendableBuilder;
-import edu.wpi.first.wpilibj.Alert;
-import edu.wpi.first.wpilibj.Alert.AlertType;
 import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.smartdashboard.Field2d;
-import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.InstantCommand;
+import frc.demacia.utils.log.Log;
 import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator;
 import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator.MeasurementKind;
 import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator.OdometryData;
@@ -103,13 +101,13 @@ public final class RobotPose implements Sendable {
      * reset the gyro to 0 or 180 degrees and the pose to the origin.
      */
     private void addLog() {
-        SmartDashboard.putData("pose", this);
-        SmartDashboard.putData("pose/field", field);
-        SmartDashboard.putData("pose/reset pose",
+        Log.putData("pose", this);
+        Log.putData("pose/field", field);
+        Log.putData("pose/reset pose",
                 new InstantCommand(() -> resetPose(Pose2d.kZero)).ignoringDisable(true));
-        SmartDashboard.putData("chassis/reset gyro",
+        Log.putData("chassis/reset gyro",
                 new InstantCommand(() -> setYaw(Rotation2d.kZero)).ignoringDisable(true));
-        SmartDashboard.putData("chassis/reset gyro 180",
+        Log.putData("chassis/reset gyro 180",
                 new InstantCommand(() -> setYaw(Rotation2d.kPi)).ignoringDisable(true));
     }
 
@@ -212,7 +210,7 @@ public final class RobotPose implements Sendable {
                             .getTranslation().minus(poseEstimator.getPoseAt(questMeasurement.timestampSeconds()).getTranslation());
                     double distance = questMeasurement.pose().getTranslation().plus(motionBetweenFrames)
                             .getDistance(limelightMeasurement.pose().getTranslation());
-                    SmartDashboard.putNumber("vision/" + limelight.getName() + "/" + quest.getName() + " distance m", distance);
+                    disagreement.distanceMeters = distance;
                     disagreement.update(distance > SOURCE_DISAGREEMENT_METERS);
                 } else if (!quest.isConnected()) {
                     disagreement.update(false);
@@ -234,18 +232,24 @@ public final class RobotPose implements Sendable {
         return newest;
     }
 
-    /** Alert for one Quest and 3D Limelight pair; see {@link #checkQuestAgainstLimelights}. */
+    /**
+     * Alert and dashboard entry ({@code vision/<limelight>/<quest>/distance m}) for one Quest and
+     * 3D Limelight pair; see {@link #checkQuestAgainstLimelights}.
+     */
     private static final class SourceDisagreement {
         private final Debouncer debouncer = new Debouncer(SOURCE_DISAGREEMENT_SECONDS, DebounceType.kRising);
-        private final Alert alert;
+        private final String alertText;
+        private double distanceMeters = Double.NaN;
 
         private SourceDisagreement(String questName, String limelightName) {
-            alert = new Alert(questName + " and " + limelightName + " disagree by more than "
-                    + SOURCE_DISAGREEMENT_METERS + " m", AlertType.kWarning);
+            alertText = questName + " and " + limelightName + " disagree by more than "
+                    + SOURCE_DISAGREEMENT_METERS + " m";
+            Log.putData("vision/" + limelightName + "/" + questName,
+                    builder -> builder.addDoubleProperty("distance m", () -> distanceMeters, null));
         }
 
         private void update(boolean disagrees) {
-            alert.set(debouncer.calculate(disagrees));
+            Log.alert(alertText, debouncer.calculate(disagrees));
         }
     }
 

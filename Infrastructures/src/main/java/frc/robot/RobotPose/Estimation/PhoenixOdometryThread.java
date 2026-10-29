@@ -9,10 +9,9 @@ import com.ctre.phoenix6.BaseStatusSignal;
 import com.ctre.phoenix6.CANBus;
 import com.ctre.phoenix6.StatusCode;
 
-import edu.wpi.first.wpilibj.Alert;
-import edu.wpi.first.wpilibj.Alert.AlertType;
-import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.Timer;
+import frc.demacia.utils.log.ConsoleAlert;
+import frc.demacia.utils.log.Log;
 import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator.OdometryData;
 
 /**
@@ -40,7 +39,7 @@ import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator.OdometryData;
  *
  * <p>Cycles where a signal didn't arrive in time (an unplugged device) or the reader threw
  * produce no sample; they raise an alert ("odometry thread: a signal stopped updating") while
- * they happen. A reader exception is also reported to the driver station (at most once a
+ * they happen. A reader exception also raises its own alert, prints its stack trace (at most once a
  * second) and the thread keeps going.
  * Each robot loop, {@link #getNewSamples()} (passed to {@code RobotPose.initialize}) hands
  * over everything queued since the last loop.
@@ -98,10 +97,11 @@ public final class PhoenixOdometryThread extends Thread {
     private double lastFailureSeconds = Double.NEGATIVE_INFINITY;
     /** The alert stays on this long after the last failed cycle (seconds). */
     private static final double FAILURE_ALERT_SECONDS = 1.0;
-    private final Alert failureAlert = new Alert("odometry thread: a signal stopped updating", AlertType.kError);
-    /** A reader exception is reported to the driver station at most once per this long (seconds). */
-    private static final double ERROR_REPORT_SECONDS = 1.0;
-    private double lastErrorReportSeconds = Double.NEGATIVE_INFINITY;
+    private final ConsoleAlert failureAlert = ConsoleAlert.error("odometry thread: a signal stopped updating");
+    private static final String READER_ERROR_TEXT = "odometry thread: the reader threw (stack trace in the console)";
+    /** When the reader last threw (FPGA seconds), and when its stack trace was last printed. */
+    private volatile double lastReaderErrorSeconds = Double.NEGATIVE_INFINITY;
+    private double lastStackTraceSeconds = Double.NEGATIVE_INFINITY;
 
     /**
      * Uses {@link #CAN_FD_FREQUENCY_HZ} on CAN FD, {@link #CAN_2_FREQUENCY_HZ} otherwise.
@@ -162,9 +162,10 @@ public final class PhoenixOdometryThread extends Thread {
                 // A bug in the reader must not stop odometry for good: count it and go on.
                 failedCycles++;
                 double now = Timer.getFPGATimestamp();
-                if (now - lastErrorReportSeconds >= ERROR_REPORT_SECONDS) {
-                    lastErrorReportSeconds = now;
-                    DriverStation.reportError("odometry thread: reader threw " + e, e.getStackTrace());
+                lastReaderErrorSeconds = now;
+                if (now - lastStackTraceSeconds >= FAILURE_ALERT_SECONDS) { // at most once a second
+                    lastStackTraceSeconds = now;
+                    e.printStackTrace();
                 }
             }
         }
@@ -217,6 +218,7 @@ public final class PhoenixOdometryThread extends Thread {
             lastFailureSeconds = now;
         }
         failureAlert.set(now - lastFailureSeconds < FAILURE_ALERT_SECONDS);
+        Log.alert(READER_ERROR_TEXT, now - lastReaderErrorSeconds < FAILURE_ALERT_SECONDS);
         return samples;
     }
 
