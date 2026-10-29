@@ -74,6 +74,10 @@ Each `periodic()`:
   may be carried).
 - Dropped: NaN/inf, more than 0.5 m outside the field, older than the history (a reset clears
   it), more than 50 ms newer than the newest sample.
+- Yaw rate (for the MegaTag2 spin check): each sample's rotation over the raw time since the
+  previous sample. Under 1 ms apart (or out of order) and on the first sample after a reset
+  or `setYaw` (its twist spans the reset) the previous rate is kept. `getFuturePose` divides
+  the first twist after a reset by the time since the sample before the reset.
 - θ: only changed by a frame with a finite θ std dev, with the θ odometry std dev as a fixed
   gain (none of the current sources measure heading).
 
@@ -98,9 +102,11 @@ them in the reader (see below).
 
 ## What changed (2026-10-22/24) and why
 
-All numbers are from simulation (no robot yet), on fresh seeds never used for tuning: 10 seeds
-x 17 scenarios x 13 conditions (latency, noise, Limelight outliers, Quest bias, traction,
-accelerometer noise). Mean position error:
+All numbers are from the loop simulation used while writing this version (`LoopSim`, removed
+with the test files in commit c4b349f), not from a robot, on fresh seeds never used for tuning:
+10 seeds x 17 scenarios x 13 conditions (latency, noise, Limelight outliers, Quest bias,
+traction, accelerometer noise). Mean position error over all of them. The current simulation
+tests use other scenarios and don't reproduce these numbers:
 
 | Estimator | Mean error |
 |---|---|
@@ -185,7 +191,9 @@ RobotPose.initialize(odometryThread::getNewSamples, ...);
   math your module does (e.g. a steer/drive coupling correction) goes in the reader too,
   using only these signals.
 - `getFailedCycles()` counts cycles where a signal didn't arrive in time (e.g. an unplugged
-  device); an alert ("odometry thread: a signal stopped updating") is on while it keeps going up.
+  device) or the reader threw; an alert ("odometry thread: a signal stopped updating") is on
+  while it keeps going up. A reader exception is also reported to the driver station (at most
+  once a second) and the thread keeps running; it stops only when interrupted.
 - **Gyro vs module timing.** The gyro and the modules arrive in separate frames and can be a
   few ms apart (about 2.5 cm of error per ms when driving 2.5 m/s and spinning 4.5 rad/s). Use
   the constructor whose reader gets the sample time and move each position to it with its
@@ -273,7 +281,10 @@ so it must be **anchored** to the fused estimate first.
 - At startup and after every disconnect, RobotPose anchors it to the current estimate
   automatically.
 - After an anchor, frames are ignored for 0.25 s (QuestNav doesn't acknowledge the reset).
-  This is checked per frame, by its capture time.
+  This is checked per frame, by its capture time. The first frame after that re-aligns the
+  Quest to the estimate: QuestNav's `setPose` has no timestamp and the headset applies it a
+  little later, so an anchor sent while moving is off by speed x that delay. If the headset
+  applies it later than 0.25 s, the pose change reads as a jump (below) and is re-aligned then.
 - `resetPose` and `setYaw` re-anchor it too.
 - Offset is robot center → headset.
 - Every unread frame of the loop that is tracking is used, each at its own capture time

@@ -291,7 +291,9 @@ public class Quest extends BaseVisionSource {
      * Anchors the Quest: tells QuestNav that the robot is at {@code currentFusedPose} now
      * (converted to the headset's pose with the offset). Frames are ignored until they were
      * captured {@link #QUEST_RESET_SETTLE_SECONDS} after this, since QuestNav doesn't confirm
-     * the reset.
+     * the reset. The first frame after that re-aligns the frame filter to the estimate, so the
+     * delay before the headset applies the pose (no timestamp in QuestNav's setPose) leaves no
+     * bias when this is called while moving.
      *
      * @param currentFusedPose The robot's field pose right now.
      */

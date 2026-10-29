@@ -64,6 +64,9 @@ public class DemaciaPoseEstimator {
     /** Odometry samples closer together than this are spread apart to keep them in order. */
     private static final double MIN_SAMPLE_SPACING_SECONDS = 1e-6;
 
+    /** A yaw rate from samples closer together than this (or out of order) keeps the previous rate. */
+    private static final double MIN_YAW_RATE_DT_SECONDS = 1e-3;
+
     /**
      * At this tilt (radians) and more the wheels' translation is not used; below it, it is
      * scaled by {@code 1 - tilt / MAX_TILT_RADIANS} (6328's RobotState, 2026). On a bump the
@@ -140,6 +143,18 @@ public class DemaciaPoseEstimator {
      */
     private double resetTimestampSeconds = Double.NEGATIVE_INFINITY;
 
+    /** Raw time of the last sample (before it was moved to keep the order); NaN before the first. */
+    private double lastSampleSeconds = Double.NaN;
+    /** Yaw rate of the last sample; kept when the next one can't give a rate. */
+    private double lastYawRate;
+    /** True until the first sample after a reset: its twist spans the reset. */
+    private boolean nextSampleSpansReset;
+    /**
+     * Raw time of the sample the first twist after the last reset started from (NaN if none),
+     * so {@link #getFuturePose} divides that twist by its own time span.
+     */
+    private double resetTwistStartSeconds = Double.NaN;
+
     /**
      * @param moduleLocations  Module positions relative to the robot center (meters).
      * @param stateSTD         Odometry std devs (x m, y m, theta rad); see {@link #setStateStd}.
@@ -188,7 +203,10 @@ public class DemaciaPoseEstimator {
      * that loop's vision.
      *
      * <p>A sample that isn't newer than the last one is moved just after it, so the history
-     * stays in the order the twists were computed. A sample's translation is scaled by
+     * stays in the order the twists were computed. Its yaw rate is the rotation over the raw
+     * time since the previous sample; if that is under {@link #MIN_YAW_RATE_DT_SECONDS} (or
+     * negative), and for the first sample after a reset, the previous rate is kept. A sample's
+     * translation is scaled by
      * {@code 1 - clamp(tilt / MAX_TILT_RADIANS, 0, 1)}; its rotation is kept.
      *
      * @param samples Every odometry sample since the last loop, oldest first.
@@ -198,6 +216,7 @@ public class DemaciaPoseEstimator {
             if (sample.timestampSeconds() < resetTimestampSeconds) {
                 // Measured before the last reset: only move the module baseline.
                 odometry.setModulePositions(sample.swerveModules());
+                lastSampleSeconds = sample.timestampSeconds();
                 continue;
             }
             double timestamp = sample.timestampSeconds();
@@ -208,10 +227,21 @@ public class DemaciaPoseEstimator {
             Twist2d twist = odometry.updateOdometry(sample.gyroAngle(), sample.swerveModules());
             double trust = tiltTrust(sample.tiltRadians());
             twist = new Twist2d(twist.dx * trust, twist.dy * trust, twist.dtheta);
-            double dt = timestamp - lastTimestamp;
             estimatedPose = estimatedPose.exp(twist);
             odometryPose = odometryPose.exp(twist);
-            history.put(timestamp, new OdometryEntry(odometryPose, dt > 0 ? twist.dtheta / dt : 0));
+            // Rate over the raw time since the previous sample (the moved timestamp can be 1 us).
+            double dt = sample.timestampSeconds() - lastSampleSeconds;
+            double yawRate = lastYawRate;
+            if (nextSampleSpansReset) {
+                // The twist started at the previous sample, before the reset: keep the rate.
+                resetTwistStartSeconds = lastSampleSeconds;
+                nextSampleSpansReset = false;
+            } else if (dt >= MIN_YAW_RATE_DT_SECONDS) {
+                yawRate = twist.dtheta / dt;
+            }
+            lastSampleSeconds = sample.timestampSeconds();
+            lastYawRate = yawRate;
+            history.put(timestamp, new OdometryEntry(odometryPose, yawRate));
         }
 
         // Keep the newest entry older than the history length, so the history still covers it.
@@ -464,6 +494,10 @@ public class DemaciaPoseEstimator {
         }
         double newest = history.lastKey();
         double from = Math.max(newest - FUTURE_VELOCITY_WINDOW_SECONDS, history.firstKey());
+        // Right after a reset the first twist started at the sample before the reset.
+        if (from == resetTimestampSeconds && resetTwistStartSeconds < from) {
+            from = resetTwistStartSeconds;
+        }
         Translation2d velocity = getOdometryMotion(newest - FUTURE_VELOCITY_WINDOW_SECONDS, newest)
                 .div(newest - from);
         return new Pose2d(estimatedPose.getTranslation().plus(velocity.times(seconds)), estimatedPose.getRotation());
@@ -503,7 +537,10 @@ public class DemaciaPoseEstimator {
         history.clear();
         estimatedPose = pose;
         odometryPose = pose;
-        history.put(resetTimestampSeconds, new OdometryEntry(pose, 0));
+        // The robot is still turning: keep the yaw rate; the next twist spans the reset.
+        history.put(resetTimestampSeconds, new OdometryEntry(pose, lastYawRate));
+        nextSampleSpansReset = true;
+        resetTwistStartSeconds = Double.NaN;
         for (List<Translation2d> window : recentFrames.values()) {
             window.clear();
         }

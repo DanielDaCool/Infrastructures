@@ -14,6 +14,9 @@ import edu.wpi.first.math.geometry.Translation2d;
  * its frames are ignored for {@code blackoutSeconds}, then it is re-aligned: the offset
  * between its position and the estimate at that frame is stored and added to every later
  * frame.</li>
+ * <li><b>New anchor:</b> after {@link #reset} (the Quest was set to a new pose) the first
+ * frame re-aligns it the same way. If the headset applies the pose only after that frame,
+ * the pose change reads as a jump and is handled as one.</li>
  * <li><b>Thinning:</b> at most one frame per {@code periodSeconds} is used (the first one of
  * each period), with a larger std dev (see {@code QuestConfig}).</li>
  * </ul>
@@ -104,12 +107,16 @@ public final class QuestFrameFilter {
         return offset;
     }
 
-    /** Forgets everything (after the Quest was set to a new pose). */
+    /**
+     * Forgets everything (after the Quest was set to a new pose) and re-aligns on the next
+     * frame. The headset applies setPose a little later than it was sent, while the robot
+     * moves, so the anchor alone is off by speed x that delay.
+     */
     public void reset() {
         lastFrameSeconds = Double.NaN;
         lastFramePosition = null;
         ignoreUntilSeconds = Double.NEGATIVE_INFINITY;
-        realignNext = false;
+        realignNext = true;
         offset = Translation2d.kZero;
         lastUsedSeconds = Double.NEGATIVE_INFINITY;
     }

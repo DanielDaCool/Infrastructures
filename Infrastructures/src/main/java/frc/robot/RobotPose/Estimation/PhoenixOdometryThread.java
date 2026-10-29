@@ -11,6 +11,7 @@ import com.ctre.phoenix6.StatusCode;
 
 import edu.wpi.first.wpilibj.Alert;
 import edu.wpi.first.wpilibj.Alert.AlertType;
+import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.Timer;
 import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator.OdometryData;
 
@@ -37,8 +38,10 @@ import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator.OdometryData;
  * {@link #valueAt}, which moves it to that time with its velocity signal (also passed in the
  * signals). Check first: log {@code yaw.getTimestamp().getLatency()} minus a drive signal's.
  *
- * <p>Cycles where a signal didn't arrive in time (an unplugged device) produce no sample; they
- * raise an alert ("odometry thread: a signal stopped updating") while they happen.
+ * <p>Cycles where a signal didn't arrive in time (an unplugged device) or the reader threw
+ * produce no sample; they raise an alert ("odometry thread: a signal stopped updating") while
+ * they happen. A reader exception is also reported to the driver station (at most once a
+ * second) and the thread keeps going.
  * Each robot loop, {@link #getNewSamples()} (passed to {@code RobotPose.initialize}) hands
  * over everything queued since the last loop.
  *
@@ -88,7 +91,7 @@ public final class PhoenixOdometryThread extends Thread {
 
     /** Samples waiting for the main thread. Guarded by {@code this}. */
     private List<OdometryData> queue = new ArrayList<>();
-    /** Cycles where a signal failed to arrive in time (e.g. a device is unplugged). */
+    /** Cycles where a signal failed to arrive in time (e.g. a device is unplugged) or the reader threw. */
     private volatile int failedCycles;
     /** {@link #failedCycles} at the last {@link #getNewSamples()}, and when it last went up. */
     private int failedCyclesSeen;
@@ -96,6 +99,9 @@ public final class PhoenixOdometryThread extends Thread {
     /** The alert stays on this long after the last failed cycle (seconds). */
     private static final double FAILURE_ALERT_SECONDS = 1.0;
     private final Alert failureAlert = new Alert("odometry thread: a signal stopped updating", AlertType.kError);
+    /** A reader exception is reported to the driver station at most once per this long (seconds). */
+    private static final double ERROR_REPORT_SECONDS = 1.0;
+    private double lastErrorReportSeconds = Double.NEGATIVE_INFINITY;
 
     /**
      * Uses {@link #CAN_FD_FREQUENCY_HZ} on CAN FD, {@link #CAN_2_FREQUENCY_HZ} otherwise.
@@ -147,40 +153,53 @@ public final class PhoenixOdometryThread extends Thread {
 
     @Override
     public void run() {
-        while (true) {
-            StatusCode status;
-            if (isCANFD) {
-                // Twice the period, so one late frame doesn't count as a failure.
-                status = BaseStatusSignal.waitForAll(2.0 / frequencyHz, signals);
-            } else {
-                try {
-                    Thread.sleep((long) (1000.0 / frequencyHz));
-                } catch (InterruptedException e) {
-                    return;
-                }
-                status = BaseStatusSignal.refreshAll(signals);
-            }
-
-            if (!status.isOK()) {
+        while (!isInterrupted()) {
+            try {
+                runCycle();
+            } catch (InterruptedException e) {
+                return;
+            } catch (RuntimeException e) {
+                // A bug in the reader must not stop odometry for good: count it and go on.
                 failedCycles++;
-                continue;
-            }
-
-            double totalLatency = 0;
-            for (BaseStatusSignal signal : signals) {
-                totalLatency += signal.getTimestamp().getLatency();
-            }
-            double timestampSeconds = Timer.getFPGATimestamp() - totalLatency / signals.length;
-
-            OdometryData sample = reader.apply(timestampSeconds);
-            OdometryData stamped = new OdometryData(timestampSeconds, sample.gyroAngle(), sample.swerveModules(),
-                    sample.tiltRadians());
-            synchronized (this) {
-                if (queue.size() >= MAX_QUEUED_SAMPLES) {
-                    queue.remove(0);
+                double now = Timer.getFPGATimestamp();
+                if (now - lastErrorReportSeconds >= ERROR_REPORT_SECONDS) {
+                    lastErrorReportSeconds = now;
+                    DriverStation.reportError("odometry thread: reader threw " + e, e.getStackTrace());
                 }
-                queue.add(stamped);
             }
+        }
+    }
+
+    /** One cycle: wait for the signals, read and queue a sample. */
+    private void runCycle() throws InterruptedException {
+        StatusCode status;
+        if (isCANFD) {
+            // Twice the period, so one late frame doesn't count as a failure.
+            status = BaseStatusSignal.waitForAll(2.0 / frequencyHz, signals);
+        } else {
+            Thread.sleep((long) (1000.0 / frequencyHz));
+            status = BaseStatusSignal.refreshAll(signals);
+        }
+
+        if (!status.isOK()) {
+            failedCycles++;
+            return;
+        }
+
+        double totalLatency = 0;
+        for (BaseStatusSignal signal : signals) {
+            totalLatency += signal.getTimestamp().getLatency();
+        }
+        double timestampSeconds = Timer.getFPGATimestamp() - totalLatency / signals.length;
+
+        OdometryData sample = reader.apply(timestampSeconds);
+        OdometryData stamped = new OdometryData(timestampSeconds, sample.gyroAngle(), sample.swerveModules(),
+                sample.tiltRadians());
+        synchronized (this) {
+            if (queue.size() >= MAX_QUEUED_SAMPLES) {
+                queue.remove(0);
+            }
+            queue.add(stamped);
         }
     }
 
@@ -226,8 +245,8 @@ public final class PhoenixOdometryThread extends Thread {
     }
 
     /**
-     * @return How many cycles failed because a signal didn't arrive in time (also shown as an
-     *         alert while it keeps going up).
+     * @return How many cycles failed because a signal didn't arrive in time or the reader threw
+     *         (also shown as an alert while it keeps going up).
      */
     public int getFailedCycles() {
         return failedCycles;
