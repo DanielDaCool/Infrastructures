@@ -13,13 +13,14 @@ import edu.wpi.first.math.kinematics.ChassisSpeeds;
  * field-relative. Omega is passed through.
  *
  * <p>The limiter only keeps the time of the last call. The caller keeps the last commanded
- * velocity (the speeds actually sent, after desaturation) and passes it every loop. Use one
- * instance per drivetrain and call {@code calculate} once per loop:
+ * velocity (the speeds really sent, after desaturation and cosine scaling:
+ * {@code DemaciaKinematics.getSentSpeeds()}) and passes it every loop. Use one instance per
+ * drivetrain and call {@code calculate} once per loop:
  *
  * <pre>{@code
  * wanted = fromRobotRelativeSpeeds(kinematics.desaturate(fromFieldRelativeSpeeds(wanted, heading)), heading);
- * lastFieldSpeeds = limiter.calculate(wanted, lastFieldSpeeds, heading);
- * // send fromFieldRelativeSpeeds(lastFieldSpeeds, heading) with the chassis's own drive method
+ * // send fromFieldRelativeSpeeds(limiter.calculate(wanted, lastFieldSpeeds, heading), heading) with the chassis's drive
+ * lastFieldSpeeds = fromRobotRelativeSpeeds(kinematics.getSentSpeeds(), heading);
  * }</pre>
  */
 public final class SwerveAccelerationLimiter {

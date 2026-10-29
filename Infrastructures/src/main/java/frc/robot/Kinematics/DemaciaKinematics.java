@@ -6,9 +6,12 @@ package frc.robot.Kinematics;
 
 import java.util.Arrays;
 
+import edu.wpi.first.math.MathSharedStore;
 import edu.wpi.first.math.MathUtil;
+import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Translation2d;
+import edu.wpi.first.math.geometry.Twist2d;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
 import edu.wpi.first.math.kinematics.SwerveModuleState;
 
@@ -33,10 +36,12 @@ import static frc.robot.Kinematics.KinematicsConstants.*;
  * <li>with the measured module states ({@link #toSwerveModuleStates(ChassisSpeeds, SwerveModuleState[])},
  * one added argument in the chassis) a module that still points the wrong way gets less speed
  * (cosine scaling) instead of pushing the robot off the path;</li>
- * <li>a standing robot keeps its module angles (no snap to 0).</li>
+ * <li>a standing robot keeps its module angles. With the measured module states the first held
+ * angles are the measured ones; the one-argument call starts at 0, like WPILib.</li>
+ * <li>NaN or infinite wanted speeds are treated as standing.</li>
  * </ul>
  * Optional: {@link #getDriveAccelerations()} and {@link #getSteerVelocities()} for the drive and steer
- * feed-forwards.
+ * feed-forwards, {@link #getSentSpeeds()} for an acceleration limiter.
  *
  * <p>Stateful: call one of the {@code toSwerveModuleStates} methods once per loop.
  * {@link #toWpilibModuleStates} is the plain (stateless) WPILib inverse kinematics.
@@ -50,6 +55,9 @@ public class DemaciaKinematics {
     private double[] lastVx, lastVy; // module velocity vectors sent last loop [m/s]
     private double[] driveAccelerations; // [m/s^2]
     private double[] steerVelocities; // [rad/s]
+    private SwerveModuleState[] lastSent; // states returned last loop
+    private boolean sentAny = false; // a state was returned already
+    private double lastTime = Double.NaN; // time of the last call [s]
     private Translation2d center; // average of the module positions
     private double sumSquaredDistance; // sum of the squared module distances from the center
 
@@ -62,6 +70,10 @@ public class DemaciaKinematics {
         lastVy = new double[n];
         driveAccelerations = new double[n];
         steerVelocities = new double[n];
+        lastSent = new SwerveModuleState[n];
+        for (int i = 0; i < n; i++) {
+            lastSent[i] = new SwerveModuleState();
+        }
 
         double sumX = 0, sumY = 0;
         for (Translation2d position : modulePositionOnTheRobot) {
@@ -145,6 +157,12 @@ public class DemaciaKinematics {
      * @return module states, in the same order as the module positions
      */
     public SwerveModuleState[] toSwerveModuleStates(ChassisSpeeds wantedSpeeds, SwerveModuleState[] currentStates) {
+        // nothing sent yet: hold the measured angles, not 0
+        if (!sentAny) {
+            for (int i = 0; i < lastAngles.length; i++) {
+                lastAngles[i] = currentStates[i].angle;
+            }
+        }
         SwerveModuleState[] states = plan(wantedSpeeds);
         for (int i = 0; i < states.length; i++) {
             Rotation2d measured = currentStates[i].angle;
@@ -164,7 +182,8 @@ public class DemaciaKinematics {
      * {@link KinematicsConstants#MAX_DRIVE_ACCEL}. Same sign as the state's speed. Send it as the drive
      * motor's acceleration feed-forward (Phoenix 6 {@code VelocityVoltage.withAcceleration}, or
      * {@code kA * a}). Only with {@link #toSwerveModuleStates(ChassisSpeeds, SwerveModuleState[])}: the
-     * module must not reverse the state again, or the sign is wrong.
+     * module must not reverse the state again, or the sign is wrong. 0 after a gap of more than two
+     * loops (disabled, or another code path drove the modules).
      *
      * @return accelerations [m/s^2], in the same order as the module positions
      */
@@ -178,12 +197,30 @@ public class DemaciaKinematics {
      * motor's velocity feed-forward when the steer runs {@code PositionVoltage} (Phoenix 6
      * {@code PositionVoltage.withVelocity}, in rotations/s, or {@code kV * velocity} volts); with
      * MotionMagic don't use it. Only with {@link #toSwerveModuleStates(ChassisSpeeds, SwerveModuleState[])}.
+     * 0 after a gap of more than two loops.
      *
      * @return steer velocities [rad/s], counter-clockwise positive, in the same order as the module
      *         positions
      */
     public double[] getSteerVelocities() {
         return steerVelocities.clone();
+    }
+
+    /**
+     * The robot speeds of the states returned last (after desaturation, reversal and cosine scaling),
+     * with the discretize undone: the speeds that, discretized again, give these states. Start an
+     * acceleration limiter from these, not from its own output, so it doesn't ramp past what the
+     * modules were really sent. 0 when standing or before the first call.
+     *
+     * @return robot-relative speeds [m/s, rad/s], omega counter-clockwise positive (a limiter ignores it)
+     */
+    public ChassisSpeeds getSentSpeeds() {
+        ChassisSpeeds sent = toChassisSpeeds(lastSent);
+        // undo the discretize: the chord of the twist over the same time, divided by the time
+        double time = CYCLE_DT + 2 * LATENCY;
+        Pose2d chord = Pose2d.kZero.exp(new Twist2d(sent.vxMetersPerSecond * time,
+                sent.vyMetersPerSecond * time, sent.omegaRadiansPerSecond * time));
+        return new ChassisSpeeds(chord.getX() / time, chord.getY() / time, sent.omegaRadiansPerSecond);
     }
 
     /**
@@ -200,13 +237,15 @@ public class DemaciaKinematics {
         return toChassisSpeeds(toWpilibModuleStates(robotRelSpeeds));
     }
 
-    /** Desaturate, discretize over the loop and the latency, inverse kinematics; stand still when slow. */
+    /** Desaturate, discretize over the loop and the latency, inverse kinematics; stand still when slow or not finite. */
     private SwerveModuleState[] plan(ChassisSpeeds wantedSpeeds) {
         // the chassis sends omega clockwise-positive; the math below is WPILib (counter-clockwise)
         ChassisSpeeds speeds = new ChassisSpeeds(wantedSpeeds.vxMetersPerSecond, wantedSpeeds.vyMetersPerSecond,
                 -wantedSpeeds.omegaRadiansPerSecond);
-        if (Math.hypot(speeds.vxMetersPerSecond, speeds.vyMetersPerSecond) < MIN_VELOCITY
-                && Math.abs(speeds.omegaRadiansPerSecond) < MIN_VELOCITY) {
+        boolean finite = Double.isFinite(speeds.vxMetersPerSecond) && Double.isFinite(speeds.vyMetersPerSecond)
+                && Double.isFinite(speeds.omegaRadiansPerSecond);
+        if (!finite || (Math.hypot(speeds.vxMetersPerSecond, speeds.vyMetersPerSecond) < MIN_VELOCITY
+                && Math.abs(speeds.omegaRadiansPerSecond) < MIN_VELOCITY)) {
             SwerveModuleState[] standing = new SwerveModuleState[lastAngles.length];
             for (int i = 0; i < standing.length; i++) {
                 standing[i] = new SwerveModuleState(0, lastAngles[i]);
@@ -219,18 +258,24 @@ public class DemaciaKinematics {
 
     /** Keeps what is sent for the next loop and computes the feed-forwards. */
     private SwerveModuleState[] send(SwerveModuleState[] states) {
+        // a gap (disabled, another code path drove): what was sent before is stale, no feed-forward
+        double now = MathSharedStore.getTimestamp();
+        boolean fresh = Double.isNaN(lastTime) || now - lastTime <= 2 * CYCLE_DT; // first call: at rest, last velocity 0 is right
+        lastTime = now;
+        sentAny = true;
         for (int i = 0; i < states.length; i++) {
             double cos = states[i].angle.getCos();
             double sin = states[i].angle.getSin();
             double speed = states[i].speedMetersPerSecond;
             // the change of the module velocity along the new direction
             double acceleration = (speed - (lastVx[i] * cos + lastVy[i] * sin)) / CYCLE_DT;
-            driveAccelerations[i] = MathUtil.clamp(acceleration, -MAX_DRIVE_ACCEL, MAX_DRIVE_ACCEL);
+            driveAccelerations[i] = fresh ? MathUtil.clamp(acceleration, -MAX_DRIVE_ACCEL, MAX_DRIVE_ACCEL) : 0;
             lastVx[i] = speed * cos;
             lastVy[i] = speed * sin;
-            steerVelocities[i] = MathUtil.clamp(states[i].angle.minus(lastAngles[i]).getRadians() / CYCLE_DT,
-                    -MAX_STEER_RATE, MAX_STEER_RATE);
+            steerVelocities[i] = fresh ? MathUtil.clamp(states[i].angle.minus(lastAngles[i]).getRadians() / CYCLE_DT,
+                    -MAX_STEER_RATE, MAX_STEER_RATE) : 0;
             lastAngles[i] = states[i].angle;
+            lastSent[i] = new SwerveModuleState(speed, states[i].angle);
         }
         return states;
     }

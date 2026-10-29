@@ -153,21 +153,22 @@ robot.
 | Setting | Description | How to find it | Default |
 |---|---|---|---|
 | `MAX_ALLOWED_MODULE_VELOCITY` | Top speed of a wheel | Drive at full stick on the floor, log the wheel speed, and use about 10% less than the highest value | 4.5 m/s |
-| `LATENCY` | Delay from the command to the wheels | Drive straight while spinning, and raise it until the path is straight | 0.035 s |
+| `LATENCY` | Command latency + gyro latency (no half loop) | Drive straight while spinning, and raise it until the path is straight | 0.035 s (placeholder) |
 | `MAX_DRIVE_ACCEL` | Limit of the drive feed-forward | The point where the wheels start to slip | 20 m/s² |
 | `MAX_STEER_RATE` | Limit of the steer feed-forward | The fastest the steer can turn | 12 rad/s |
 
 ## Using it with an acceleration limiter
 
 Optional. Use `SwerveAccelerationLimiter` in your own field-relative drive method. Keep the
-field-relative speeds you sent last loop (`lastFieldSpeeds`) in the chassis:
+field-relative speeds really sent last loop (`lastFieldSpeeds`, from `getSentSpeeds()`) in the chassis:
 
 ```java
 // desaturate first, so driving and turning slow down together at top speed
 wanted = ChassisSpeeds.fromRobotRelativeSpeeds(
     demaciaKinematics.desaturate(ChassisSpeeds.fromFieldRelativeSpeeds(wanted, heading)), heading);
-lastFieldSpeeds = limiter.calculate(wanted, lastFieldSpeeds, heading);
-// send ChassisSpeeds.fromFieldRelativeSpeeds(lastFieldSpeeds, heading) with your drive method
+// send ChassisSpeeds.fromFieldRelativeSpeeds(limiter.calculate(wanted, lastFieldSpeeds, heading), heading)
+// with your drive method, then start the next loop from what was really sent (after cosine scaling)
+lastFieldSpeeds = ChassisSpeeds.fromRobotRelativeSpeeds(demaciaKinematics.getSentSpeeds(), heading);
 ```
 
 Keep the desaturate line **before** the limiter, also with a limiter of your own. Without it,

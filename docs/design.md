@@ -120,7 +120,7 @@ Set on the robot (`KinematicsConstants`):
 
 | Constant | What | How to measure it | Default |
 |---|---|---|---|
-| `LATENCY` | From the command to the wheels moving: command latency + gyro latency + half a loop | Drive a straight line while spinning at a constant rate and raise it until the path is straight | 0.035 s |
+| `LATENCY` | Command latency + gyro latency (no half loop: the discretize over `CYCLE_DT + 2·LATENCY` already adds it) | Drive a straight line while spinning at a constant rate and raise it until the path is straight | 0.035 s (placeholder, tune it) |
 | `MAX_ALLOWED_MODULE_VELOCITY` | Desaturation | The fastest a module really drives (DemaciaCode has 4) | 4.5 m/s |
 | `MAX_DRIVE_ACCEL` | Clamp of the acceleration feed-forward | The acceleration where the wheels still don't slip | 20 m/s² |
 | `MAX_STEER_RATE` | Clamp of the steer velocity feed-forward | Free steer speed: a large steer step, peak steer velocity | 12 rad/s |
@@ -141,8 +141,10 @@ and the path is kept. A chassis with its own acceleration limiter (e.g. `Chassis
 `kinematics-acceleration-limit-testing`) breaks this: the limiter ramps from the speeds sent last
 loop, which the desaturation already cut, and only adds a small step per loop, while omega isn't
 limited. Every loop the desaturation takes back more translation than the limiter adds, so the
-robot spins at almost full speed and drives much slower (simulation: 5 m/s + 4 rad/s wanted gives
-2.5 m/s and 3.8 rad/s instead of 3.0 m/s and 2.4 rad/s).
+robot spins at almost full speed and drives much slower (simulation, modules at (±0.32, ±0.27) m and
+`MAX_ALLOWED_MODULE_VELOCITY` 4.0: 5 m/s + 4 rad/s wanted gives 2.5 m/s and 3.8 rad/s instead of 3.0 m/s
+and 2.4 rad/s). With the current 4.5 m/s and modules at (±0.275, ±0.275) m the kept ratio gives
+3.47 m/s and 2.77 rad/s (simulation).
 
 The fix is to desaturate the wanted speeds **before** the limiter, one line before
 `accelLimiter.calculate(...)`:
@@ -160,8 +162,11 @@ need it.
 Not needed for the DemaciaCode chassis.
 
 There is no wrapper class: the chassis uses `SwerveAccelerationLimiter` directly, in its own
-field-relative drive method, and keeps the field-relative speeds it sent last loop
-(`lastFieldSpeeds`). The full example is
+field-relative drive method, and keeps the field-relative speeds really sent last loop
+(`lastFieldSpeeds`, from `DemaciaKinematics.getSentSpeeds()`: after cosine scaling, with the
+discretize undone). Starting from the limiter's own output instead, the setpoint keeps ramping
+while cosine scaling holds a misaligned wheel back, and the wheel jumps to it when the module
+aligns (above the skid limit in simulation). The full example is
 [`ExampleChassis.java`](../Infrastructures/src/main/java/frc/robot/example/ExampleChassis.java).
 
 ```java
@@ -172,8 +177,8 @@ public void driveFieldRelative(ChassisSpeeds wanted) {
     Rotation2d heading = getGyroAngle();
     wanted = ChassisSpeeds.fromRobotRelativeSpeeds(
         kinematics.desaturate(ChassisSpeeds.fromFieldRelativeSpeeds(wanted, heading)), heading);
-    lastFieldSpeeds = limiter.calculate(wanted, lastFieldSpeeds, heading);
-    drive(ChassisSpeeds.fromFieldRelativeSpeeds(lastFieldSpeeds, heading)); // the chassis's own drive
+    drive(ChassisSpeeds.fromFieldRelativeSpeeds(limiter.calculate(wanted, lastFieldSpeeds, heading), heading));
+    lastFieldSpeeds = ChassisSpeeds.fromRobotRelativeSpeeds(kinematics.getSentSpeeds(), heading);
 }
 ```
 
@@ -224,7 +229,7 @@ would see its last speeds turn with it every loop, and the limiter could not kee
 | Reverse and cosine scale against the measured angle (two-argument call) | A module that still points the wrong way gets ~0 speed instead of scrubbing |
 | Drive acceleration feed-forward (`getDriveAccelerations`) | The drive velocity loop lags the setpoint |
 | Steer velocity feed-forward (`getSteerVelocities`, `PositionVoltage` steer) | A position-only steer lags a moving angle |
-| Hold the angles when standing | Modules don't snap to 0 when the robot stops |
+| Hold the angles when standing | Modules don't snap to 0 when the robot stops. Before the first command the measured angles are held (with the measured states); the one-argument call starts at 0, like WPILib |
 
 The numbers are in [Quick start](#quick-start-the-demaciacode-chassis); they come from a simulation, not a robot. Tune on the robot. Also weaker than
 the full model: the heading while spinning fast (the reverse decision is against the measured angle, with no hysteresis). Known weak spot: a module

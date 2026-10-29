@@ -38,7 +38,8 @@ public abstract class ExampleChassis extends SubsystemBase {
     private final Module[] modules;
     private final DemaciaKinematics kinematics;
     private final SwerveAccelerationLimiter limiter = new SwerveAccelerationLimiter();
-    private ChassisSpeeds lastFieldSpeeds = new ChassisSpeeds(); // field-relative speeds the limit sent last [m/s, rad/s]
+    private ChassisSpeeds lastFieldSpeeds = new ChassisSpeeds(); // field-relative speeds really sent last (omega unused) [m/s, rad/s]
+    private Rotation2d lastHeading = Rotation2d.kZero; // last finite gyro yaw
     private boolean limitedLastLoop = false; // driveFieldRelative ran since the last periodic
 
     /**
@@ -52,6 +53,15 @@ public abstract class ExampleChassis extends SubsystemBase {
 
     /** Gyro yaw, CCW positive. */
     protected abstract Rotation2d getGyroAngle();
+
+    /** Gyro yaw, or the last finite one when the gyro gives NaN or infinity. */
+    private Rotation2d heading() {
+        Rotation2d yaw = getGyroAngle();
+        if (Double.isFinite(yaw.getCos()) && Double.isFinite(yaw.getSin())) {
+            lastHeading = yaw;
+        }
+        return lastHeading;
+    }
 
     /** Gyro yaw rate [rad/s], CCW positive. */
     protected abstract double getGyroRate();
@@ -91,12 +101,13 @@ public abstract class ExampleChassis extends SubsystemBase {
      * @param wanted field-relative speeds [m/s, rad/s], omega CCW positive
      */
     public void driveFieldRelative(ChassisSpeeds wanted) {
-        Rotation2d heading = getGyroAngle();
+        Rotation2d heading = heading();
         // desaturate before the limit, or the robot spins at full speed and drives much slower
         wanted = ChassisSpeeds.fromRobotRelativeSpeeds(
                 kinematics.desaturate(ChassisSpeeds.fromFieldRelativeSpeeds(wanted, heading)), heading);
-        lastFieldSpeeds = limiter.calculate(wanted, lastFieldSpeeds, heading);
-        drive(ChassisSpeeds.fromFieldRelativeSpeeds(lastFieldSpeeds, heading));
+        drive(ChassisSpeeds.fromFieldRelativeSpeeds(limiter.calculate(wanted, lastFieldSpeeds, heading), heading));
+        // next loop starts from what was really sent (after cosine scaling), not from the limit's output
+        lastFieldSpeeds = ChassisSpeeds.fromRobotRelativeSpeeds(kinematics.getSentSpeeds(), heading);
         limitedLastLoop = true;
     }
 
@@ -109,7 +120,7 @@ public abstract class ExampleChassis extends SubsystemBase {
     public void periodic() {
         if (!limitedLastLoop) {
             ChassisSpeeds measured = kinematics.toChassisSpeeds(getModuleStates(), getGyroRate());
-            lastFieldSpeeds = ChassisSpeeds.fromRobotRelativeSpeeds(measured, getGyroAngle());
+            lastFieldSpeeds = ChassisSpeeds.fromRobotRelativeSpeeds(measured, heading());
         }
         limitedLastLoop = false;
     }
@@ -120,8 +131,9 @@ public abstract class ExampleChassis extends SubsystemBase {
      * @param newYaw new yaw, CCW positive
      */
     public void setYaw(Rotation2d newYaw) {
-        Rotation2d turn = newYaw.minus(getGyroAngle());
+        Rotation2d turn = newYaw.minus(heading());
         setGyroYaw(newYaw);
+        lastHeading = newYaw;
         // the speeds are field-relative: the same motion seen from the new field angle
         Translation2d velocity = new Translation2d(lastFieldSpeeds.vxMetersPerSecond,
                 lastFieldSpeeds.vyMetersPerSecond).rotateBy(turn);
