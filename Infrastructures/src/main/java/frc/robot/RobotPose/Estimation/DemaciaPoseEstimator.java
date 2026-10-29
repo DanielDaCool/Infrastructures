@@ -1,5 +1,6 @@
 package frc.robot.RobotPose.Estimation;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
@@ -64,8 +65,13 @@ public class DemaciaPoseEstimator {
     /** Odometry samples closer together than this are spread apart to keep them in order. */
     private static final double MIN_SAMPLE_SPACING_SECONDS = 1e-6;
 
-    /** A yaw rate from samples closer together than this (or out of order) keeps the previous rate. */
-    private static final double MIN_YAW_RATE_DT_SECONDS = 1e-3;
+    /**
+     * The yaw rate is the rotation over at least this long (seconds). Neighbouring samples can't
+     * be used: on CAN 2.0 the thread sleeps instead of waiting for the gyro frame, so one sample
+     * can hold two gyro frames and the next none, which reads up to 1.8x the real rate. Over
+     * 100 ms that is at most one frame in ten; a spin shorter than this reads slower.
+     */
+    private static final double YAW_RATE_SPAN_SECONDS = 0.1;
 
     /**
      * At this tilt (radians) and more the wheels' translation is not used; below it, it is
@@ -147,6 +153,10 @@ public class DemaciaPoseEstimator {
     private double lastSampleSeconds = Double.NaN;
     /** Yaw rate of the last sample; kept when the next one can't give a rate. */
     private double lastYawRate;
+    /** Total rotation of all twists (radians), for the yaw rate. */
+    private double totalRotation;
+    /** {raw sample time, totalRotation} of the recent samples, oldest first, for the yaw rate. */
+    private final ArrayDeque<double[]> yawSamples = new ArrayDeque<>();
     /** True until the first sample after a reset: its twist spans the reset. */
     private boolean nextSampleSpansReset;
     /**
@@ -203,9 +213,9 @@ public class DemaciaPoseEstimator {
      * that loop's vision.
      *
      * <p>A sample that isn't newer than the last one is moved just after it, so the history
-     * stays in the order the twists were computed. Its yaw rate is the rotation over the raw
-     * time since the previous sample; if that is under {@link #MIN_YAW_RATE_DT_SECONDS} (or
-     * negative), and for the first sample after a reset, the previous rate is kept. A sample's
+     * stays in the order the twists were computed. Its yaw rate is the rotation since the newest
+     * sample at least {@link #YAW_RATE_SPAN_SECONDS} older (raw times); until there is one (after
+     * startup or a reset) and for a sample out of order, the previous rate is kept. A sample's
      * translation is scaled by
      * {@code 1 - clamp(tilt / MAX_TILT_RADIANS, 0, 1)}; its rotation is kept.
      *
@@ -229,15 +239,17 @@ public class DemaciaPoseEstimator {
             twist = new Twist2d(twist.dx * trust, twist.dy * trust, twist.dtheta);
             estimatedPose = estimatedPose.exp(twist);
             odometryPose = odometryPose.exp(twist);
-            // Rate over the raw time since the previous sample (the moved timestamp can be 1 us).
-            double dt = sample.timestampSeconds() - lastSampleSeconds;
+            totalRotation += twist.dtheta;
             double yawRate = lastYawRate;
             if (nextSampleSpansReset) {
-                // The twist started at the previous sample, before the reset: keep the rate.
+                // The twist started at the previous sample, before the reset: keep the rate and
+                // measure the next ones from here.
                 resetTwistStartSeconds = lastSampleSeconds;
                 nextSampleSpansReset = false;
-            } else if (dt >= MIN_YAW_RATE_DT_SECONDS) {
-                yawRate = twist.dtheta / dt;
+                yawSamples.clear();
+                yawSamples.addLast(new double[] { sample.timestampSeconds(), totalRotation });
+            } else {
+                yawRate = yawRate(sample.timestampSeconds());
             }
             lastSampleSeconds = sample.timestampSeconds();
             lastYawRate = yawRate;
@@ -456,6 +468,31 @@ public class DemaciaPoseEstimator {
         Rotation2d odometryToField = estimatedPose.getRotation().minus(odometryPose.getRotation());
         return odometryAt(toTimestampSeconds).pose.getTranslation()
                 .minus(odometryAt(fromTimestampSeconds).pose.getTranslation()).rotateBy(odometryToField);
+    }
+
+    /**
+     * Adds a sample (raw time; {@link #totalRotation} already includes its twist) and returns the
+     * rotation since the newest sample at least {@link #YAW_RATE_SPAN_SECONDS} older over the
+     * time between them, or the previous rate if there is none or the sample is out of order
+     * (rad/s, CCW positive).
+     */
+    private double yawRate(double sampleSeconds) {
+        if (!yawSamples.isEmpty() && sampleSeconds <= yawSamples.peekLast()[0]) {
+            yawSamples.peekLast()[1] = totalRotation; // out of order: count its rotation with the last one
+            return lastYawRate;
+        }
+        yawSamples.addLast(new double[] { sampleSeconds, totalRotation });
+        // Drop the oldest while the next one is still old enough.
+        while (yawSamples.size() > 1) {
+            double[] oldest = yawSamples.pollFirst();
+            if (yawSamples.peekFirst()[0] > sampleSeconds - YAW_RATE_SPAN_SECONDS) {
+                yawSamples.addFirst(oldest);
+                break;
+            }
+        }
+        double[] start = yawSamples.peekFirst();
+        double span = sampleSeconds - start[0];
+        return span >= YAW_RATE_SPAN_SECONDS ? (totalRotation - start[1]) / span : lastYawRate;
     }
 
     /**

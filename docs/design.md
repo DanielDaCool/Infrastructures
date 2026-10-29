@@ -74,9 +74,12 @@ Each `periodic()`:
   may be carried).
 - Dropped: NaN/inf, more than 0.5 m outside the field, older than the history (a reset clears
   it), more than 50 ms newer than the newest sample.
-- Yaw rate (for the MegaTag2 spin check): each sample's rotation over the raw time since the
-  previous sample. Under 1 ms apart (or out of order) and on the first sample after a reset
-  or `setYaw` (its twist spans the reset) the previous rate is kept. `getFuturePose` divides
+- Yaw rate (for the MegaTag2 spin check): each sample's rotation since the newest sample at
+  least 100 ms older (raw times). Not since the previous sample: on CAN 2.0 the thread sleeps
+  instead of waiting for the gyro frame, so one sample can hold two gyro frames and the next
+  none (up to 1.8x the real rate, MegaTag2 rejected from about 1.1 rad/s). Until there are
+  100 ms of samples (startup, and after a reset or `setYaw`, whose first twist spans the
+  reset) and for a sample out of order, the previous rate is kept. `getFuturePose` divides
   the first twist after a reset by the time since the sample before the reset.
 - θ: only changed by a frame with a finite θ std dev, with the θ odometry std dev as a fixed
   gain (none of the current sources measure heading).
