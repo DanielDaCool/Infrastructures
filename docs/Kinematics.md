@@ -61,7 +61,7 @@ Average distance from the path in simulation:
 
 ## Installation
 
-1. Copy [`Infrastructures/src/main/java/frc/robot/Kinematics`](Infrastructures/src/main/java/frc/robot/Kinematics)
+1. Copy [`Infrastructures/src/main/java/frc/robot/Kinematics`](../Infrastructures/src/main/java/frc/robot/Kinematics)
    into your robot project, keeping the same package path.
 2. Follow [Getting started](#getting-started).
 
@@ -176,7 +176,7 @@ the robot keeps turning fast but drives much slower.
 
 Also set `lastFieldSpeeds` to the measured speeds when something else drove the robot last
 loop, and turn it on a gyro reset. The example chassis
-[`ExampleChassis.java`](Infrastructures/src/main/java/frc/robot/example/ExampleChassis.java)
+[`ExampleChassis.java`](../Infrastructures/src/main/java/frc/robot/example/ExampleChassis.java)
 shows all of it; see also
 [Kinematics-design.md](Kinematics-design.md#adding-the-acceleration-limit-to-your-chassis).
 

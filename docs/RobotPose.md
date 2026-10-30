@@ -56,10 +56,10 @@ are handled automatically.
 
 ## Installation
 
-1. Copy [`Infrastructures/src/main/java/frc/robot/RobotPose`](Infrastructures/src/main/java/frc/robot/RobotPose)
+1. Copy [`Infrastructures/src/main/java/frc/robot/RobotPose`](../Infrastructures/src/main/java/frc/robot/RobotPose)
    into your robot project, keeping the same package path.
 2. Install the **Phoenix 6** and **QuestNav** vendor libraries (WPILib → Manage Vendor
-   Libraries). The vendordep files are in [`Infrastructures/vendordeps`](Infrastructures/vendordeps).
+   Libraries). The vendordep files are in [`Infrastructures/vendordeps`](../Infrastructures/vendordeps).
 3. Follow [Getting started](#getting-started).
 
 ## Getting started
