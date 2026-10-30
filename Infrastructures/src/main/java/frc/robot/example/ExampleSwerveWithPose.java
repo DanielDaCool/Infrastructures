@@ -7,6 +7,7 @@ import java.util.Optional;
 import com.ctre.phoenix6.BaseStatusSignal;
 import com.ctre.phoenix6.CANBus;
 import com.ctre.phoenix6.StatusSignal;
+import com.ctre.phoenix6.Utils;
 import com.ctre.phoenix6.hardware.Pigeon2;
 
 import edu.wpi.first.math.VecBuilder;
@@ -57,7 +58,8 @@ import frc.robot.RobotPose.Vision.visionConfigs.QuestConfig;
  *
  * <p>Module order: one array ({@code moduleLocations}) is passed to both {@link DemaciaKinematics}
  * and {@link RobotPose#initialize}, and the module states, the odometry thread's positions and the
- * modules all use the same index. A different order makes the pose drift when driving straight.
+ * modules all use the same index. A different order makes the robot fight itself when it turns
+ * (the pose won't show it while driving straight).
  */
 public class ExampleSwerveWithPose extends SubsystemBase {
     /** The cameras (same as the RobotPose README). Measure the offsets on your robot. */
@@ -114,6 +116,7 @@ public class ExampleSwerveWithPose extends SubsystemBase {
     private final PhoenixOdometryThread odometryThread;
     private ChassisSpeeds lastFieldSpeeds = new ChassisSpeeds(); // field-relative speeds really sent last (omega unused) [m/s, rad/s]
     private Rotation2d lastHeading = Rotation2d.kZero; // last finite gyro yaw
+    private double yawWriteTime = Double.NEGATIVE_INFINITY; // Phoenix time the last setYaw returned [s]
     private boolean limitedLastLoop = false; // driveFieldRelative ran since the last periodic
 
     /**
@@ -197,6 +200,9 @@ public class ExampleSwerveWithPose extends SubsystemBase {
      */
     private Rotation2d heading() {
         yaw.refresh();
+        if (yaw.getAllTimestamps().getSystemTimestamp().getTime() <= yawWriteTime) {
+            return lastHeading; // frame received before the write's ack: still the old yaw
+        }
         Rotation2d gyro = Rotation2d.fromDegrees(yaw.getValueAsDouble());
         if (Double.isFinite(gyro.getCos()) && Double.isFinite(gyro.getSin())) {
             lastHeading = gyro;
@@ -218,8 +224,9 @@ public class ExampleSwerveWithPose extends SubsystemBase {
      */
     private void writeGyro(Rotation2d newYaw) {
         Rotation2d turn = newYaw.minus(heading());
-        pigeon.setYaw(newYaw.getDegrees());
-        lastHeading = newYaw; // the Pigeon may not have sent the new value back yet
+        pigeon.setYaw(newYaw.getDegrees()); // blocks until the ack (up to 100 ms)
+        yawWriteTime = Utils.getCurrentTimeSeconds();
+        lastHeading = newYaw; // the next yaw frame may still hold the old value; heading() skips it
         // the limiter's speeds are field-relative: the same motion seen from the new field angle
         Translation2d velocity = new Translation2d(lastFieldSpeeds.vxMetersPerSecond,
                 lastFieldSpeeds.vyMetersPerSecond).rotateBy(turn);

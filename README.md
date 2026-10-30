@@ -24,8 +24,8 @@ importable library.
 ## Using both together
 
 [`ExampleSwerveWithPose.java`](Infrastructures/src/main/java/frc/robot/example/ExampleSwerveWithPose.java)
-shows the two modules in one drivetrain. Kinematics drives field-relative using the heading from
-RobotPose. RobotPose is fed by the module positions and the gyro, and by vision measurements.
+shows the two modules in one drivetrain. Kinematics drives field-relative using the gyro heading, which
+RobotPose keeps equal to its own heading. RobotPose is fed by the module positions and the gyro, and by vision measurements.
 
 For Kinematics without RobotPose, see
 [`ExampleChassis.java`](Infrastructures/src/main/java/frc/robot/example/ExampleChassis.java).

@@ -175,7 +175,7 @@ Pose2d pose = RobotPose.getInstance().getEstimatedPose();
 
 | Symptom | Likely cause |
 |---|---|
-| Pose drifts when driving straight | Module locations in the wrong order, or wrong wheel size / gear ratio. |
+| Pose drifts when driving straight | Wrong wheel size or gear ratio. (A wrong module order does not show in the pose; it makes the robot fight itself when turning.) |
 | Pose turns the wrong way | The gyro must be counter-clockwise positive. |
 | Pose jumps around | A camera's trust is 0 (`VecBuilder.fill(0, ...)`); use a small number instead. |
 | Cameras are ignored for a long time | A camera offset is wrong, or the pose was reset to a wrong place. After a few seconds of cameras agreeing, it recovers on its own. |
