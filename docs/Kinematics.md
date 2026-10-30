@@ -11,7 +11,7 @@ it drives and spins at the same time. It is a drop-in replacement for DemaciaCod
 
 > [!NOTE]
 > This README is the student guide. The full design, the math, simulation results and every
-> setting are documented in [docs/design.md](docs/design.md).
+> setting are documented in [Kinematics-design.md](Kinematics-design.md).
 
 ## Contents
 
@@ -178,7 +178,7 @@ Also set `lastFieldSpeeds` to the measured speeds when something else drove the 
 loop, and turn it on a gyro reset. The example chassis
 [`ExampleChassis.java`](Infrastructures/src/main/java/frc/robot/example/ExampleChassis.java)
 shows all of it; see also
-[docs/design.md](docs/design.md#adding-the-acceleration-limit-to-your-chassis).
+[Kinematics-design.md](Kinematics-design.md#adding-the-acceleration-limit-to-your-chassis).
 
 ## Building
 
@@ -190,13 +190,13 @@ From the `Infrastructures` directory:
 
 Simulation results do not replace testing on the robot. Check the settings above and the
 module directions on real hardware; see
-[docs/design.md](docs/design.md#checking-it-on-the-robot).
+[Kinematics-design.md](Kinematics-design.md#checking-it-on-the-robot).
 
 ## Troubleshooting
 
 | Symptom | Likely cause |
 |---|---|
-| Robot turns the wrong way after the import change | Your chassis used a different version of the old kinematics; see [Differences from DemaciaCode](docs/design.md#differences-from-demaciacode). |
+| Robot turns the wrong way after the import change | Your chassis used a different version of the old kinematics; see [Differences from DemaciaCode](Kinematics-design.md#differences-from-demaciacode). |
 | Drives slower than expected while turning | `MAX_ALLOWED_MODULE_VELOCITY` is higher than the wheels can really reach, or a limiter is used without the line above. |
 | Curves when driving and spinning | `LATENCY` is too small (or too big). |
 | Wheels snap to 0° when stopping | The module code overrides speed-0 states. |
