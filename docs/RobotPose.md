@@ -14,7 +14,7 @@ are handled automatically.
 
 > [!NOTE]
 > This README is the student guide. How it works, the design decisions, simulation results,
-> calibration and every setting are documented in [docs/design.md](docs/design.md).
+> calibration and every setting are documented in [RobotPose-design.md](RobotPose-design.md).
 
 ## Contents
 
@@ -142,7 +142,7 @@ Pose2d pose = RobotPose.getInstance().getEstimatedPose();
 - **Bumps:** pass the robot's tilt so wheel slip on bumps is not counted:
   `new OdometryData(Timer.getFPGATimestamp(), gyro, modules, OdometryData.tilt(pitchRadians, rollRadians))`.
 - **More accurate odometry (250 Hz):** use `PhoenixOdometryThread` instead of the supplier
-  above; see [docs/design.md](docs/design.md#250-hz-odometry).
+  above; see [RobotPose-design.md](RobotPose-design.md#250-hz-odometry).
 - **Dashboard generator:** `BaseVisionSource.setOnCreate(callback)` is called with every
   vision source as it is created.
 - **Your own logger:** all logging goes through `frc.demacia.utils.log.Log` (`putData` for dashboard
@@ -180,7 +180,7 @@ Pose2d pose = RobotPose.getInstance().getEstimatedPose();
 | Pose jumps around | A camera's trust is 0 (`VecBuilder.fill(0, ...)`); use a small number instead. |
 | Cameras are ignored for a long time | A camera offset is wrong, or the pose was reset to a wrong place. After a few seconds of cameras agreeing, it recovers on its own. |
 | Cameras never change the pose | Check `is Connected` and that the camera sees tags (Quest: `is tracking`). |
-| One camera keeps pulling the pose | Its offset on the robot is wrong; see [calibration](docs/design.md#calibration-step-by-step). |
+| One camera keeps pulling the pose | Its offset on the robot is wrong; see [calibration](RobotPose-design.md#calibration-step-by-step). |
 | 2D camera is off by meters when turning | Wrong camera yaw, height or pitch. |
 | Quest pulls the pose to (0, 0) | Do not call `QuestNav.setPose` directly; use `resetPose` or the dashboard button. |
 
