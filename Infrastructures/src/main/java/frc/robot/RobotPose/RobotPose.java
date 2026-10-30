@@ -19,6 +19,7 @@ import edu.wpi.first.math.numbers.N3;
 import edu.wpi.first.util.sendable.Sendable;
 import edu.wpi.first.util.sendable.SendableBuilder;
 import edu.wpi.first.wpilibj.DriverStation;
+import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.wpilibj.smartdashboard.Field2d;
 import edu.wpi.first.wpilibj2.command.InstantCommand;
 import frc.demacia.utils.log.Log;
@@ -320,12 +321,15 @@ public final class RobotPose implements Sendable {
         // Samples measured before the reset must not be applied on top of it.
         addNewOdometrySamples();
         if (poseResetGyroSetter != null) {
+            // The setter can block (a Pigeon 2 waits for the ack): the motion measured from here
+            // on happened after the new pose, so it is kept.
+            double askedSeconds = Timer.getFPGATimestamp();
             poseResetGyroSetter.accept(pose.getRotation());
             // The gyro was just set, so pass the new heading as the gyro reading (the new value
             // may not have been read back from the device yet).
-            resetEstimator(pose, pose.getRotation());
+            resetEstimator(pose, pose.getRotation(), askedSeconds);
         } else {
-            resetEstimator(pose, lastGyroAngle);
+            resetEstimator(pose, lastGyroAngle, Double.POSITIVE_INFINITY);
         }
     }
 
@@ -342,21 +346,31 @@ public final class RobotPose implements Sendable {
             addNewOdometrySamples();
             gyroYawSetter.accept(angle);
             // The gyro was just set to `angle`, so pass it as the gyro reading (the new value may
-            // not have been read back from the device yet).
-            resetEstimator(new Pose2d(getEstimatedPose().getTranslation(), angle), angle);
+            // not have been read back from the device yet). The position is kept, so the
+            // translation of every sample not added yet (e.g. measured while the setter blocked)
+            // is kept too.
+            resetEstimator(new Pose2d(getEstimatedPose().getTranslation(), angle), angle, Double.NEGATIVE_INFINITY);
         }
     }
 
     /**
-     * Resets the estimator and re-anchors every Quest to the new pose. The Quest reports poses
-     * relative to its last anchor, so without this its next frames pull the estimate back to
-     * the old pose.
+     * Resets the estimator, adds the samples that arrived since (see
+     * {@link DemaciaPoseEstimator#resetPose(Pose2d, Rotation2d, double)}) and re-anchors every
+     * Quest to the resulting pose. The Quest reports poses relative to its last anchor, so
+     * without this its next frames pull the estimate back to the old pose.
+     *
+     * <p>The odometry thread keeps measuring meanwhile, but it only hands samples over through
+     * {@link #addNewOdometrySamples} (a locked drain), so the estimator stays on the calling
+     * thread. A sample of the block that is handed over later is kept the same way by
+     * {@link #periodic()}: the estimator sorts samples by their timestamps, not by arrival.
      */
-    private void resetEstimator(Pose2d pose, Rotation2d gyroAngle) {
-        poseEstimator.resetPose(pose, gyroAngle);
+    private void resetEstimator(Pose2d pose, Rotation2d gyroAngle, double keepTranslationFromSeconds) {
+        poseEstimator.resetPose(pose, gyroAngle, keepTranslationFromSeconds);
+        addNewOdometrySamples(); // e.g. the samples measured while the gyro setter blocked
+        Pose2d anchor = poseEstimator.getEstimatedPose();
         for (VisionSource source : sources) {
             if (source instanceof Quest) {
-                ((Quest) source).setPose(pose);
+                ((Quest) source).setPose(anchor);
             }
         }
     }
