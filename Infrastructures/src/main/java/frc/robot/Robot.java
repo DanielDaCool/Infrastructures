@@ -4,9 +4,18 @@
 
 package frc.robot;
 
+import java.util.List;
+
+import edu.wpi.first.math.VecBuilder;
+import edu.wpi.first.math.geometry.Rotation2d;
+import edu.wpi.first.math.geometry.Translation2d;
+import edu.wpi.first.math.kinematics.SwerveModulePosition;
 import edu.wpi.first.wpilibj.TimedRobot;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.CommandScheduler;
+import frc.robot.RobotPose.RobotPose;
+import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator.OdometryData;
+import frc.robot.RobotPose.Vision.VisionConfig;
 
 public class Robot extends TimedRobot {
   private Command m_autonomousCommand;
@@ -15,21 +24,42 @@ public class Robot extends TimedRobot {
 
   public Robot() {
     m_robotContainer = new RobotContainer();
+
+    // Placeholder wiring so the project runs without a chassis. On a real robot, read the
+    // gyro and the swerve modules here (see README.md).
+    SwerveModulePosition[] modulePositions = new SwerveModulePosition[4];
+    for (int i = 0; i < 4; i++) {
+      modulePositions[i] = new SwerveModulePosition();
+    }
+    Translation2d[] moduleLocations = {
+        new Translation2d(0.3, 0.3), new Translation2d(0.3, -0.3),
+        new Translation2d(-0.3, 0.3), new Translation2d(-0.3, -0.3) };
+
+    RobotPose.initialize(
+        () -> List.of(new OdometryData(Rotation2d.kZero, modulePositions)),
+        angle -> {},
+        moduleLocations,
+        VecBuilder.fill(0.1, 0.1, 0),
+        new VisionConfig());
   }
 
   @Override
   public void robotPeriodic() {
     CommandScheduler.getInstance().run();
+    RobotPose.getInstance().periodic();
   }
 
   @Override
-  public void disabledInit() {}
+  public void disabledInit() {
+  }
 
   @Override
-  public void disabledPeriodic() {}
+  public void disabledPeriodic() {
+  }
 
   @Override
-  public void disabledExit() {}
+  public void disabledExit() {
+  }
 
   @Override
   public void autonomousInit() {
@@ -41,10 +71,12 @@ public class Robot extends TimedRobot {
   }
 
   @Override
-  public void autonomousPeriodic() {}
+  public void autonomousPeriodic() {
+  }
 
   @Override
-  public void autonomousExit() {}
+  public void autonomousExit() {
+  }
 
   @Override
   public void teleopInit() {
@@ -54,10 +86,12 @@ public class Robot extends TimedRobot {
   }
 
   @Override
-  public void teleopPeriodic() {}
+  public void teleopPeriodic() {
+  }
 
   @Override
-  public void teleopExit() {}
+  public void teleopExit() {
+  }
 
   @Override
   public void testInit() {
@@ -65,8 +99,10 @@ public class Robot extends TimedRobot {
   }
 
   @Override
-  public void testPeriodic() {}
+  public void testPeriodic() {
+  }
 
   @Override
-  public void testExit() {}
+  public void testExit() {
+  }
 }
