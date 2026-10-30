@@ -40,7 +40,9 @@ import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator.OdometryData;
  * <p>Cycles where a signal didn't arrive in time (an unplugged device) or the reader threw
  * produce no sample; they raise an alert ("odometry thread: a signal stopped updating") while
  * they happen. A reader exception also raises its own alert, prints its stack trace (at most once a
- * second) and the thread keeps going.
+ * second) and the thread keeps going. If no sample arrives for more than 0.1 s (the thread died
+ * from an {@code Error}, or the reader blocks), a third alert ("odometry thread: no samples")
+ * goes on, since the pose is frozen.
  * Each robot loop, {@link #getNewSamples()} (passed to {@code RobotPose.initialize}) hands
  * over everything queued since the last loop.
  *
@@ -102,6 +104,12 @@ public final class PhoenixOdometryThread extends Thread {
     /** When the reader last threw (FPGA seconds), and when its stack trace was last printed. */
     private volatile double lastReaderErrorSeconds = Double.NEGATIVE_INFINITY;
     private double lastStackTraceSeconds = Double.NEGATIVE_INFINITY;
+    /** No sample for longer than this raises the stall alert (seconds). */
+    private static final double STALL_ALERT_SECONDS = 0.1;
+    private final ConsoleAlert stallAlert = ConsoleAlert.error(
+            "odometry thread: no samples (thread stopped or stuck), the pose is frozen");
+    /** When {@link #getNewSamples()} last got a sample, or the thread started (FPGA seconds). */
+    private double lastSampleSeconds;
 
     /**
      * Uses {@link #CAN_FD_FREQUENCY_HZ} on CAN FD, {@link #CAN_2_FREQUENCY_HZ} otherwise.
@@ -148,6 +156,7 @@ public final class PhoenixOdometryThread extends Thread {
 
         BaseStatusSignal.setUpdateFrequencyForAll(frequencyHz, signals);
         setDaemon(true);
+        lastSampleSeconds = Timer.getFPGATimestamp(); // after the frequency setup, which can block
         start();
     }
 
@@ -219,6 +228,10 @@ public final class PhoenixOdometryThread extends Thread {
         }
         failureAlert.set(now - lastFailureSeconds < FAILURE_ALERT_SECONDS);
         Log.alert(READER_ERROR_TEXT, now - lastReaderErrorSeconds < FAILURE_ALERT_SECONDS);
+        if (!samples.isEmpty()) {
+            lastSampleSeconds = now;
+        }
+        stallAlert.set(!isAlive() || now - lastSampleSeconds > STALL_ALERT_SECONDS);
         return samples;
     }
 

@@ -196,7 +196,9 @@ RobotPose.initialize(odometryThread::getNewSamples, ...);
 - `getFailedCycles()` counts cycles where a signal didn't arrive in time (e.g. an unplugged
   device) or the reader threw; an alert ("odometry thread: a signal stopped updating") is on
   while it keeps going up. A reader exception is also reported to the driver station (at most
-  once a second) and the thread keeps running; it stops only when interrupted.
+  once a second) and the thread keeps running; it stops only when interrupted. If no sample
+  arrives for more than 0.1 s (the thread died from an `Error` or the reader blocks), an alert
+  ("odometry thread: no samples") is on, since the pose is frozen.
 - **Gyro vs module timing.** The gyro and the modules arrive in separate frames and can be a
   few ms apart (about 2.5 cm of error per ms when driving 2.5 m/s and spinning 4.5 rad/s). Use
   the constructor whose reader gets the sample time and move each position to it with its
