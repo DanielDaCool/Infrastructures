@@ -205,6 +205,33 @@ public class DemaciaOdometry {
     }
 
     /**
+     * Moves the module baseline and the pose's position by the module motion since the last
+     * update, ignoring the gyro (the heading is kept), e.g. for a sample measured while a
+     * blocking gyro setter ran, whose gyro reading may be either the old or the new yaw. With
+     * equal weights the rotation cancels out of the average (the centroid is the center).
+     *
+     * @param modulePositions The current swerve module positions.
+     * @return The robot-relative translation of this update (meters).
+     */
+    public Translation2d updateModulesOnly(SwerveModulePosition[] modulePositions) {
+        if (!isFinite(Rotation2d.kZero, modulePositions)) {
+            return Translation2d.kZero;
+        }
+        if (lastModulePositions == null) {
+            setModulePositions(modulePositions);
+            return Translation2d.kZero;
+        }
+        updateWeights(modulePositions);
+        for (int i = 0; i < modulePositions.length; i++) {
+            moduleDisplacements[i] = calculateModuleDisplacement(lastModulePositions[i], modulePositions[i]);
+            lastModulePositions[i] = modulePositions[i].copy();
+        }
+        Translation2d displacement = calculateRobotDisplacement(moduleDisplacements, 0);
+        pose = new Pose2d(pose.getTranslation().plus(displacement.rotateBy(pose.getRotation())), pose.getRotation());
+        return displacement;
+    }
+
+    /**
      * Takes these module readings as the baseline for the next update without moving the pose,
      * e.g. for a sample measured before a reset (its motion happened before the reset pose).
      *

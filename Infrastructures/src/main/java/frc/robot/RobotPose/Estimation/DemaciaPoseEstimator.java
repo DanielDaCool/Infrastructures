@@ -142,12 +142,19 @@ public class DemaciaPoseEstimator {
     private int escapes;
 
     /**
-     * FPGA time of the last {@link #resetPose}. Samples measured before it are not applied:
-     * their motion happened before the reset pose, and after a gyro reset their gyro reading
-     * can still be the old one (a sample already on its way from the odometry thread). Vision
+     * FPGA time of the last {@link #resetPose}. Samples measured before it are not applied
+     * (except the translation of those from {@link #keepTranslationFromSeconds} on): their
+     * motion happened before the reset pose, and after a gyro reset their gyro reading can
+     * still be the old one (a sample already on its way from the odometry thread). Vision
      * frames from before it are older than the (cleared) history, so they are dropped too.
      */
     private double resetTimestampSeconds = Double.NEGATIVE_INFINITY;
+    /**
+     * Samples stamped from this FPGA time up to {@link #resetTimestampSeconds} were measured
+     * after the reset was asked for (while a blocking gyro setter ran): their translation is
+     * added at the reset heading instead of being dropped. Infinite: none are kept.
+     */
+    private double keepTranslationFromSeconds = Double.POSITIVE_INFINITY;
 
     /** Raw time of the last sample (before it was moved to keep the order); NaN before the first. */
     private double lastSampleSeconds = Double.NaN;
@@ -224,8 +231,22 @@ public class DemaciaPoseEstimator {
     public void addOdometryData(List<OdometryData> samples) {
         for (OdometryData sample : samples) {
             if (sample.timestampSeconds() < resetTimestampSeconds) {
-                // Measured before the last reset: only move the module baseline.
-                odometry.setModulePositions(sample.swerveModules());
+                if (sample.timestampSeconds() >= keepTranslationFromSeconds
+                        && !(sample.timestampSeconds() <= lastSampleSeconds)) {
+                    // Measured after the reset was asked for (and newer than the last sample, so
+                    // time has passed): keep its translation (its gyro reading may be the old or
+                    // the new yaw, so the heading is kept).
+                    Translation2d d = odometry.updateModulesOnly(sample.swerveModules())
+                            .times(tiltTrust(sample.tiltRadians()));
+                    estimatedPose = new Pose2d(estimatedPose.getTranslation().plus(d.rotateBy(estimatedPose.getRotation())),
+                            estimatedPose.getRotation());
+                    odometryPose = new Pose2d(odometryPose.getTranslation().plus(d.rotateBy(odometryPose.getRotation())),
+                            odometryPose.getRotation());
+                    history.put(resetTimestampSeconds, new OdometryEntry(odometryPose, lastYawRate));
+                } else {
+                    // Measured before the last reset: only move the module baseline.
+                    odometry.setModulePositions(sample.swerveModules());
+                }
                 lastSampleSeconds = sample.timestampSeconds();
                 continue;
             }
@@ -569,8 +590,23 @@ public class DemaciaPoseEstimator {
      * @param gyroAngle The raw gyro reading that corresponds to pose's heading.
      */
     public void resetPose(Pose2d pose, Rotation2d gyroAngle) {
+        resetPose(pose, gyroAngle, Double.POSITIVE_INFINITY);
+    }
+
+    /**
+     * Resets the pose and clears the history, keeping the translation of the samples stamped
+     * from {@code keepTranslationFromSeconds} up to now (see {@link #keepTranslationFromSeconds}).
+     *
+     * @param pose                       The new field pose.
+     * @param gyroAngle                  The raw gyro reading that corresponds to pose's heading.
+     * @param keepTranslationFromSeconds FPGA time the reset was asked for (before a blocking
+     *                                   gyro setter); infinite to keep none,
+     *                                   {@code NEGATIVE_INFINITY} to keep every sample not yet added.
+     */
+    public void resetPose(Pose2d pose, Rotation2d gyroAngle, double keepTranslationFromSeconds) {
         odometry.resetPose(pose, gyroAngle);
         resetTimestampSeconds = Timer.getFPGATimestamp();
+        this.keepTranslationFromSeconds = keepTranslationFromSeconds;
         history.clear();
         estimatedPose = pose;
         odometryPose = pose;
