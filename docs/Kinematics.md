@@ -79,6 +79,8 @@ import frc.robot.Kinematics.DemaciaKinematics;
 
 The DemaciaCode chassis already creates it once (`new DemaciaKinematics(modulePositions)` in
 the `Chassis` constructor). If you create it yourself, do it once in `Robot`'s constructor.
+That constructor uses the default settings; to set your robot's values, pass a
+`KinematicsConfig` (see [Settings](#settings)).
 
 ### Level 2: pass the measured module states
 
@@ -147,15 +149,27 @@ steer feed-forward out.
 
 ## Settings
 
-All settings are in `KinematicsConstants`. The defaults are placeholders; tune them on your
-robot.
+All settings are in a `KinematicsConfig`, one per drivetrain, like `ChassisConfig` in
+DemaciaCode. Every setting has a default (placeholders: tune them on your robot); set only the
+ones that differ and pass the same config to the kinematics and the limiter:
+
+```java
+KinematicsConfig kinematicsConfig = new KinematicsConfig()
+    .withMaxAllowedModuleVelocity(4.2)
+    .withLatency(0.03);
+DemaciaKinematics demaciaKinematics = new DemaciaKinematics(kinematicsConfig, modulePositions);
+SwerveAccelerationLimiter limiter = new SwerveAccelerationLimiter(kinematicsConfig);
+```
+
+The values are copied when the kinematics and the limiter are created, so finish the config
+first. The limiter's settings are in [Kinematics-design.md](Kinematics-design.md#tuning-the-limits).
 
 | Setting | Description | How to find it | Default |
 |---|---|---|---|
-| `MAX_ALLOWED_MODULE_VELOCITY` | Top speed of a wheel | Drive at full stick on the floor, log the wheel speed, and use about 10% less than the highest value | 4.5 m/s |
-| `LATENCY` | Command latency + gyro latency (no half loop) | Drive straight while spinning, and raise it until the path is straight | 0.035 s (placeholder) |
-| `MAX_DRIVE_ACCEL` | Safety clamp of the drive feed-forward | Above the traction limit (about μg); with the acceleration limiter it never engages | 20 m/s² |
-| `MAX_STEER_RATE` | Limit of the steer feed-forward | The fastest the steer can turn | 12 rad/s |
+| `maxAllowedModuleVelocity` | Top speed of a wheel | Drive at full stick on the floor, log the wheel speed, and use about 10% less than the highest value | 4.5 m/s |
+| `latency` | Command latency + gyro latency (no half loop) | Drive straight while spinning, and raise it until the path is straight | 0.035 s (placeholder) |
+| `maxDriveAccel` | Safety clamp of the drive feed-forward | Above the traction limit (about μg); with the acceleration limiter it never engages | 20 m/s² |
+| `maxSteerRate` | Limit of the steer feed-forward | The fastest the steer can turn | 12 rad/s |
 
 ## Using it with an acceleration limiter
 
@@ -197,8 +211,8 @@ module directions on real hardware; see
 | Symptom | Likely cause |
 |---|---|
 | Robot turns the wrong way after the import change | Your chassis used a different version of the old kinematics; see [Differences from DemaciaCode](Kinematics-design.md#differences-from-demaciacode). |
-| Drives slower than expected while turning | `MAX_ALLOWED_MODULE_VELOCITY` is higher than the wheels can really reach, or a limiter is used without the line above. |
-| Curves when driving and spinning | `LATENCY` is too small (or too big). |
+| Drives slower than expected while turning | `maxAllowedModuleVelocity` is higher than the wheels can really reach, or a limiter is used without the line above. |
+| Curves when driving and spinning | `latency` is too small (or too big). |
 | Wheels snap to 0° when stopping | The module code overrides speed-0 states. |
 | Wheel jumps or shakes with level 3 | Level 3 is used without level 2, or `STEER_KV` is too big. |
 
@@ -210,7 +224,7 @@ All paths are relative to `Infrastructures/src/main/java/frc/robot/Kinematics`.
 |---|---|
 | `DemaciaKinematics.java` | Swerve kinematics. Drop-in for DemaciaCode's `DemaciaKinematics`, with discretization, cosine scaling and feed-forwards. |
 | `SwerveAccelerationLimiter.java` | Limits how fast the field-relative velocity setpoint changes (skid, forward and tilt limits). |
-| `KinematicsConstants.java` | Module speed limit, standing threshold, loop time, latency and feed-forward limits. |
+| `KinematicsConfig.java` | Settings for the kinematics and the limiter (module speed limit, standing threshold, loop time, latency, feed-forward limits, acceleration limits). |
 | `KinematicsUtilities.java` | Small vector helpers (`limitVector`, `isInRange`, ...). |
 
 The example chassis is outside the library, in

@@ -6,6 +6,7 @@ import edu.wpi.first.math.kinematics.ChassisSpeeds;
 import edu.wpi.first.math.kinematics.SwerveModuleState;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 import frc.robot.Kinematics.DemaciaKinematics;
+import frc.robot.Kinematics.KinematicsConfig;
 import frc.robot.Kinematics.SwerveAccelerationLimiter;
 
 /**
@@ -37,7 +38,7 @@ public abstract class ExampleChassis extends SubsystemBase {
 
     private final Module[] modules;
     private final DemaciaKinematics kinematics;
-    private final SwerveAccelerationLimiter limiter = new SwerveAccelerationLimiter();
+    private final SwerveAccelerationLimiter limiter;
     private ChassisSpeeds lastFieldSpeeds = new ChassisSpeeds(); // field-relative speeds really sent last (omega unused) [m/s, rad/s]
     private Rotation2d lastHeading = Rotation2d.kZero; // last finite gyro yaw
     private boolean limitedLastLoop = false; // driveFieldRelative ran since the last periodic
@@ -47,8 +48,18 @@ public abstract class ExampleChassis extends SubsystemBase {
      * @param modulePositions module positions on the robot [m], x forward, y left
      */
     protected ExampleChassis(Module[] modules, Translation2d... modulePositions) {
+        this(new KinematicsConfig(), modules, modulePositions);
+    }
+
+    /**
+     * @param config          kinematics and acceleration limiter settings for this robot
+     * @param modules         the modules, in the same order as the positions
+     * @param modulePositions module positions on the robot [m], x forward, y left
+     */
+    protected ExampleChassis(KinematicsConfig config, Module[] modules, Translation2d... modulePositions) {
         this.modules = modules;
-        this.kinematics = new DemaciaKinematics(modulePositions);
+        this.kinematics = new DemaciaKinematics(config, modulePositions);
+        this.limiter = new SwerveAccelerationLimiter(config);
     }
 
     /** Gyro yaw, CCW positive. */
