@@ -1,8 +1,8 @@
 # Plan – turning Infrastructures into one importable library
 
-Status: **plan only, nothing done yet.** Nothing on `main`, `RobotPose` or `Kinematics` changes
+Status: **plan only.** Nothing on `main`, `RobotPose` or `Kinematics` changes for packaging
 until the owner has tested both branches and approves. This plan is waiting for the owner's own
-approach and will be updated to match it.
+approach and will be updated to match it. Branch state last checked 2026-10-31.
 
 ## Goal
 
@@ -14,20 +14,20 @@ and uses it **without copying or changing the code**.
 
 | Branch | Head | Content |
 |---|---|---|
-| `main` | `030bf01` | WPILib template only (`frc.robot.Main/Robot/RobotContainer`). |
-| `RobotPose` | `a46b84a` | `frc.robot.RobotPose` (estimation, vision, 250 Hz odometry thread, collision detection, source-frame offsets), tests, README, review report. Vendordeps: Phoenix 6, QuestNav, WPILib New Commands. |
-| `Kinematics` | `e6e4988` | `frc.robot.Kinematics` (`DemaciaKinematics`, `SwerveAccelerationLimiter`, `AccelLimitedSwerve`), tests, README. |
-| `kinematics-sync` | `8d6b155` | Same commit as an older `Kinematics`; to be deleted on GitHub. |
+| `main` | `26593b6` | WPILib template only (`frc.robot.Main/Robot/RobotContainer`) and an older copy of this plan. |
+| `RobotPose` | `f6637e7` | `frc.robot.RobotPose` (estimation, vision, 250 Hz odometry thread, collision detection, source-frame offsets), `PoseLogger` interface for dashboard entries and alerts, README, `docs/design.md`. Vendordeps: Phoenix 6, QuestNav, WPILib New Commands. Tests and review report removed. |
+| `Kinematics` | `84d50a9` | `frc.robot.Kinematics` (`DemaciaKinematics`, `SwerveAccelerationLimiter`, `KinematicsConfig`, `KinematicsUtilities`), `frc.robot.example.ExampleChassis`, README, `docs/design.md`. `AccelLimitedSwerve` and tests removed. |
+| `development` | latest merge | Both branches merged, plus `frc.robot.example.ExampleSwerveWithPose`. Module docs in `docs/Kinematics*.md` and `docs/RobotPose*.md`; combined root README. |
 
-Both branches start from `030bf01` and both change the root `README.md` and `build.gradle`, so the
-merge has two known conflicts.
+`kinematics-sync` no longer exists on GitHub.
 
 ## Steps (after approval)
 
 ### 1. Merge into `main`
-- Merge `RobotPose`, then `Kinematics`, into `main` as merge commits (history kept; the branches
-  stay until the owner removes them).
-- Resolve `README.md` and `build.gradle` by hand (step 4/3 replace them anyway).
+- Done on `development` (merge commits, history kept). After testing, merge `development` into
+  `main`; the module branches stay until the owner removes them.
+- Module branch READMEs conflict with `development`'s root README on every merge: keep
+  `development`'s README and apply the module change to `docs/Kinematics.md` or `docs/RobotPose.md`.
 
 ### 2. One package
 Root package **`frc.demacia.infrastructures`** (doesn't clash with `frc.robot` in team projects or
@@ -39,9 +39,17 @@ with DemaciaCode's own `frc.demacia.RobotPose` / `frc.demacia.kinematics`).
 | `frc.robot.RobotPose.Estimation` | `frc.demacia.infrastructures.robotpose.estimation` |
 | `frc.robot.RobotPose.Vision` (+ `VisionTypes`, `visionConfigs`) | `frc.demacia.infrastructures.robotpose.vision` (+ `types`, `configs`) |
 | `frc.robot.Kinematics` | `frc.demacia.infrastructures.kinematics` |
-| tests under `frc.robot...` | same mapping under `src/test/java` |
+| `frc.robot.example` | not published (example project, see open questions) |
 
 - Only `package` / `import` lines and file locations change; no logic changes.
+- Logging (decided, done on `RobotPose`): the stand-in `frc.demacia.utils.log` is removed. RobotPose
+  sends entries and alerts through its `PoseLogger` interface (SmartDashboard and WPILib Alerts by
+  default); a team plugs in its own logger with `PoseLogger.set`. Nothing in the jar clashes with
+  DemaciaCode's classes.
+- Settings (decided, done on `Kinematics`): `KinematicsConstants` and the limiter's constants are
+  replaced by `KinematicsConfig` (like DemaciaCode's `ChassisConfig`). RobotPose already takes its
+  robot-specific values through `initialize` and the vision configs; its remaining constants are
+  estimator tuning and stay as they are.
 - Remove the template `frc.robot.Main`, `Robot`, `RobotContainer` and `src/main/deploy` (a library
   has no robot program). If a test robot project is wanted, it lives outside the library (see
   open questions).
@@ -57,7 +65,8 @@ with DemaciaCode's own `frc.demacia.RobotPose` / `frc.demacia.kinematics`).
   QuestNav 2026-2.2.0).
 - Outputs: `infrastructures-java-<version>.jar`, `-sources.jar`, `-javadoc.jar`, published to a
   Maven layout (`frc/demacia/infrastructures-java/<version>/…`).
-- Unit tests stay (`./gradlew test`, JUnit 5, WPILib sim HAL as today).
+- Tests were removed from both branches. `./gradlew test` with JUnit 5 stays wired in Gradle;
+  adding tests back before publishing is an open question.
 - Version from one place (`version = "2026.0.1"`), reused in the vendordep.
 
 ### 4. Vendordep
@@ -88,9 +97,10 @@ Team side: VS Code → WPILib → Manage Vendor Libraries → Install new librar
 `jsonUrl`. Updates: change the version, republish, the team updates the vendordep.
 
 ### 5. Docs
-- One root `README.md`: what it is, install (vendordep URL), quick start, then the RobotPose and
-  Kinematics sections from the two branch READMEs (adjusted to the new package names).
-- `docs/reports/frc-physics-math-code-review.md` kept.
+- Root `README.md` from `development`, changed to: install (vendordep URL) instead of copying
+  packages, new package names, no branch-copy instructions.
+- `docs/Kinematics.md`, `docs/Kinematics-design.md`, `docs/RobotPose.md`, `docs/RobotPose-design.md`
+  kept, with package names and links updated.
 - `CHANGELOG.md` per version.
 
 ### 6. Publish (only when the owner says)
@@ -98,19 +108,25 @@ Team side: VS Code → WPILib → Manage Vendor Libraries → Install new librar
 - Build and publish the Maven files + the vendordep JSON to GitHub Pages (`gh-pages` branch or a
   GitHub Action on tags).
 - Check the install on a clean WPILib 2026 project: install the vendordep, `./gradlew build`,
-  call `RobotPose.initialize` and `AccelLimitedSwerve` from a minimal robot.
+  call `RobotPose.initialize` and `DemaciaKinematics` / `SwerveAccelerationLimiter` from a minimal
+  robot.
 
 ## Checks before publishing
 - `./gradlew build test` passes on `main`.
 - A clean robot project with only the vendordep (plus Phoenix 6 and QuestNav) compiles and runs in
   simulation.
-- No `frc.robot` package left in the library; no robot-specific constants.
+- No `frc.robot` package left in the library; no robot-specific constants (robot values come from
+  `KinematicsConfig`, `RobotPose.initialize` and the vision configs).
+- No `frc.demacia.utils.log` class in the jar.
 - Javadoc builds (public API documented).
 
 ## Open questions (for the owner)
 - Package/maven group: `frc.demacia` group with `frc.demacia.infrastructures` package — keep?
 - Where the published files live: GitHub Pages of this repo, or a team-owned repo/organization.
 - Version scheme (`2026.0.1`, `2026.1.0`, …) and who publishes.
-- Keep a small example robot project (separate folder, not published) for simulation tests?
+- Keep a small example robot project (separate folder, not published) for simulation tests? The
+  current `ExampleChassis` / `ExampleSwerveWithPose` would move there.
+- A ready-made `PoseLogger` adapter for DemaciaCode's logger (in DemaciaCode, not in the library)?
+- Add unit tests back before the first release?
 - Should DemaciaCode switch to the library and delete its own copies of RobotPose/kinematics?
 - Anything in the owner's approach that differs from the above (waiting for the explanation).

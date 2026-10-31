@@ -25,6 +25,7 @@ import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.DriverStation.Alliance;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 import frc.robot.Kinematics.DemaciaKinematics;
+import frc.robot.Kinematics.KinematicsConfig;
 import frc.robot.Kinematics.SwerveAccelerationLimiter;
 import frc.robot.RobotPose.RobotPose;
 import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator.OdometryData;
@@ -41,7 +42,7 @@ import frc.robot.RobotPose.Vision.visionConfigs.QuestConfig;
  *
  * <p>Wiring, in {@code Robot}'s constructor:
  * <pre>
- * chassis = new ExampleSwerveWithPose(canBus, pigeon, modules, WHEEL_CIRCUMFERENCE, MODULE_LOCATIONS);
+ * chassis = new ExampleSwerveWithPose(canBus, pigeon, modules, WHEEL_CIRCUMFERENCE, KINEMATICS_CONFIG, MODULE_LOCATIONS);
  * chassis.initializeRobotPose(ExampleSwerveWithPose.VisionConstants.VISION); // once, after the chassis
  * </pre>
  * and keep {@code Robot.robotPeriodic()} as it is: {@code CommandScheduler.run()}, then
@@ -109,7 +110,7 @@ public class ExampleSwerveWithPose extends SubsystemBase {
     private final Module[] modules;
     private final Translation2d[] moduleLocations;
     private final DemaciaKinematics kinematics;
-    private final SwerveAccelerationLimiter limiter = new SwerveAccelerationLimiter();
+    private final SwerveAccelerationLimiter limiter;
     private final Pigeon2 pigeon;
     private final StatusSignal<Angle> yaw; // main thread copy (refreshed here, not by the thread) [deg]
     private final StatusSignal<AngularVelocity> yawRate; // [deg/s]
@@ -126,16 +127,18 @@ public class ExampleSwerveWithPose extends SubsystemBase {
      * @param pigeon             the gyro, CCW positive
      * @param modules            the modules, in the same order as the locations
      * @param wheelCircumference wheel circumference [m]
+     * @param kinematicsConfig   kinematics and acceleration limiter settings for this robot
      * @param moduleLocations    module positions on the robot [m], x forward, y left
      */
     public ExampleSwerveWithPose(CANBus canBus, Pigeon2 pigeon, Module[] modules, double wheelCircumference,
-            Translation2d... moduleLocations) {
+            KinematicsConfig kinematicsConfig, Translation2d... moduleLocations) {
         if (modules.length != moduleLocations.length) {
             throw new IllegalArgumentException("one location per module, in the same order");
         }
         this.modules = modules;
         this.moduleLocations = moduleLocations;
-        this.kinematics = new DemaciaKinematics(moduleLocations);
+        this.kinematics = new DemaciaKinematics(kinematicsConfig, moduleLocations);
+        this.limiter = new SwerveAccelerationLimiter(kinematicsConfig);
         this.pigeon = pigeon;
         this.yaw = pigeon.getYaw();
         this.yawRate = pigeon.getAngularVelocityZWorld();
