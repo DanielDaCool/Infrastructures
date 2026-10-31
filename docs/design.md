@@ -20,7 +20,7 @@ here and no longer matches DemaciaCode (see [Differences from DemaciaCode](#diff
 |---|---|
 | `DemaciaKinematics.java` | Swerve kinematics. A drop-in for DemaciaCode's `DemaciaKinematics` (same constructor and methods) that discretizes over the loop and the latency, keeps the angles when standing and, with one added argument, cosine scales against the measured module angles. Also the plain WPILib inverse (`toWpilibModuleStates`) and robot speeds from module states. |
 | `SwerveAccelerationLimiter.java` | Limits how fast the field-relative velocity setpoint changes (skid, forward and tilt limits). |
-| `KinematicsConstants.java` | `MAX_ALLOWED_MODULE_VELOCITY` (desaturation), `MIN_VELOCITY` (below this the robot stands), loop time, `LATENCY`, `MAX_DRIVE_ACCEL`. |
+| `KinematicsConfig.java` | Settings, one config per drivetrain (like DemaciaCode's `ChassisConfig`): `maxAllowedModuleVelocity` (desaturation), `minVelocity` (below this the robot stands), `cycleDt`, `latency`, `maxDriveAccel`, `maxSteerRate`, and the limiter's limits. Chain the `with...` setters; the kinematics and the limiter copy the values when created. |
 | `KinematicsUtilities.java` | Small vector helpers (`limitVector`, `isInRange`, ...). |
 | `../example/ExampleChassis.java` | Example only (outside the library, not used by the robot): a chassis with the kinematics and the optional acceleration limit. |
 
@@ -30,7 +30,7 @@ exception:** `DemaciaKinematics.toSwerveModuleStates` takes omega **clockwise-po
 that is what the DemaciaCode chassis sends (its old kinematics computed `vy − ω·x`, and the chassis
 negates the trajectory's omega to match).
 
-The limits in `SwerveAccelerationLimiter` and `KinematicsConstants` are placeholders. Tune
+The defaults in `KinematicsConfig` are placeholders. Tune
 them on the robot.
 
 ## Quick start: the DemaciaCode chassis
@@ -116,14 +116,14 @@ With a `PositionVoltage` steer the steer feed-forward is worth as much as the dr
 (path error 18.0 → 11.5 cm); with MotionMagic it does nothing. The latency compensation uses the
 commanded omega, not the gyro; in the simulation that is as good as the gyro rate (14.8 vs 15.3 cm).
 
-Set on the robot (`KinematicsConstants`):
+Set on the robot (`KinematicsConfig`):
 
-| Constant | What | How to measure it | Default |
+| Setting | What | How to measure it | Default |
 |---|---|---|---|
-| `LATENCY` | Command latency + gyro latency (no half loop: the discretize over `CYCLE_DT + 2·LATENCY` already adds it) | Drive a straight line while spinning at a constant rate and raise it until the path is straight | 0.035 s (placeholder, tune it) |
-| `MAX_ALLOWED_MODULE_VELOCITY` | Desaturation | The fastest a module really drives (DemaciaCode has 4) | 4.5 m/s |
-| `MAX_DRIVE_ACCEL` | Safety clamp of the acceleration feed-forward | Above the traction limit (about μg, 11.8 m/s² at μ = 1.2), so it only catches a bad setpoint step. With `SwerveAccelerationLimiter` it never engages; the limiter's `MAX_SKID_ACCEL` sets the acceleration | 20 m/s² |
-| `MAX_STEER_RATE` | Clamp of the steer velocity feed-forward | Free steer speed: a large steer step, peak steer velocity | 12 rad/s |
+| `latency` | Command latency + gyro latency (no half loop: the discretize over `cycleDt + 2·latency` already adds it) | Drive a straight line while spinning at a constant rate and raise it until the path is straight | 0.035 s (placeholder, tune it) |
+| `maxAllowedModuleVelocity` | Desaturation | The fastest a module really drives (DemaciaCode has 4) | 4.5 m/s |
+| `maxDriveAccel` | Safety clamp of the acceleration feed-forward | Above the traction limit (about μg, 11.8 m/s² at μ = 1.2), so it only catches a bad setpoint step. With `SwerveAccelerationLimiter` it never engages; the limiter's `maxSkidAccel` sets the acceleration | 20 m/s² |
+| `maxSteerRate` | Clamp of the steer velocity feed-forward | Free steer speed: a large steer step, peak steer velocity | 12 rad/s |
 
 Check on the robot after the import change: the robot spins **the same way** as before for the
 same stick/trajectory (the omega sign is the one the old kinematics used on `main`; the
@@ -142,7 +142,7 @@ and the path is kept. A chassis with its own acceleration limiter (e.g. `Chassis
 loop, which the desaturation already cut, and only adds a small step per loop, while omega isn't
 limited. Every loop the desaturation takes back more translation than the limiter adds, so the
 robot spins at almost full speed and drives much slower (simulation, modules at (±0.32, ±0.27) m and
-`MAX_ALLOWED_MODULE_VELOCITY` 4.0: 5 m/s + 4 rad/s wanted gives 2.5 m/s and 3.8 rad/s instead of 3.0 m/s
+`maxAllowedModuleVelocity` 4.0: 5 m/s + 4 rad/s wanted gives 2.5 m/s and 3.8 rad/s instead of 3.0 m/s
 and 2.4 rad/s). With the current 4.5 m/s and modules at (±0.275, ±0.275) m the kept ratio gives
 3.47 m/s and 2.77 rad/s (simulation).
 
@@ -170,7 +170,7 @@ aligns (above the skid limit in simulation). The full example is
 [`ExampleChassis.java`](../Infrastructures/src/main/java/frc/robot/example/ExampleChassis.java).
 
 ```java
-private final SwerveAccelerationLimiter limiter = new SwerveAccelerationLimiter(); // one per drivetrain
+private final SwerveAccelerationLimiter limiter = new SwerveAccelerationLimiter(kinematicsConfig); // one per drivetrain
 private ChassisSpeeds lastFieldSpeeds = new ChassisSpeeds();
 
 public void driveFieldRelative(ChassisSpeeds wanted) {
@@ -207,13 +207,13 @@ small and the limiter catches up in the next loops.
 
 Each `SwerveAccelerationLimiter.calculate` moves the last sent field-relative velocity toward
 the wanted one by the closest change that every limit allows in the time since the last call
-(at most `MAX_DT`):
+(at most `maxDt`):
 
-- skid: total change ≤ `MAX_SKID_ACCEL · dt`;
-- forward: the speed can grow by at most `MAX_FORWARD_ACCEL · (1 - speed / FREE_SPEED) · dt`
+- skid: total change ≤ `maxSkidAccel · dt`;
+- forward: the speed can grow by at most `maxForwardAccel · (1 - speed / freeSpeed) · dt`
   (braking and turning are free here);
-- tilt: change along the robot's front ≤ `MAX_TILT_ACCEL_FRONT · dt`, along its side
-  ≤ `MAX_TILT_ACCEL_SIDE · dt`.
+- tilt: change along the robot's front ≤ `maxTiltAccelFront · dt`, along its side
+  ≤ `maxTiltAccelSide · dt`.
 
 Omega is passed through unchanged. With a NaN or infinite heading the tilt axes are unknown, so
 the smaller tilt limit is used on both.
@@ -225,7 +225,7 @@ would see its last speeds turn with it every loop, and the limiter could not kee
 
 | Step | What it fixes |
 |---|---|
-| Discretize over `CYCLE_DT + 2·LATENCY` (commanded omega) | The robot turns during the loop and the command arrives late; without it a robot that drives and spins curves off its path |
+| Discretize over `cycleDt + 2·latency` (commanded omega) | The robot turns during the loop and the command arrives late; without it a robot that drives and spins curves off its path |
 | Reverse and cosine scale against the measured angle (two-argument call) | A module that still points the wrong way gets ~0 speed instead of scrubbing |
 | Drive acceleration feed-forward (`getDriveAccelerations`) | The drive velocity loop lags the setpoint |
 | Steer velocity feed-forward (`getSteerVelocities`, `PositionVoltage` steer) | A position-only steer lags a moving angle |
@@ -241,7 +241,7 @@ Without the limiter, use `toSwerveModuleStates` (above). For the plain WPILib in
 counter-clockwise, no discretize, no state), discretize first, as WPILib does:
 
 ```java
-ChassisSpeeds discrete = ChassisSpeeds.discretize(robotRelSpeeds, KinematicsConstants.CYCLE_DT);
+ChassisSpeeds discrete = ChassisSpeeds.discretize(robotRelSpeeds, kinematicsConfig.cycleDt);
 SwerveModuleState[] states = kinematics.toWpilibModuleStates(discrete); // desaturated
 setModuleStates(states);
 ```
@@ -259,33 +259,34 @@ ChassisSpeeds robotRelNoGyro = kinematics.toChassisSpeeds(getModuleStates());
 
 | Class | Method | What it does |
 |---|---|---|
-| `DemaciaKinematics` | `DemaciaKinematics(Translation2d...)` | Module locations, robot frame, module order. |
-| | `toSwerveModuleStates(robotRelSpeeds)` | For the chassis (omega clockwise-positive): desaturate, discretize over `CYCLE_DT + 2·LATENCY`, inverse, desaturate; keeps the angles when standing. Once per loop. |
+| `DemaciaKinematics` | `DemaciaKinematics(Translation2d...)` | Module locations, robot frame, module order. Default `KinematicsConfig`. |
+| | `DemaciaKinematics(KinematicsConfig, Translation2d...)` | Same, with the robot's settings. |
+| | `toSwerveModuleStates(robotRelSpeeds)` | For the chassis (omega clockwise-positive): desaturate, discretize over `cycleDt + 2·latency`, inverse, desaturate; keeps the angles when standing. Once per loop. |
 | | `toSwerveModuleStates(robotRelSpeeds, measuredStates)` | Same, then reverse against the measured angle and cosine scale. |
-| | `getDriveAccelerations()` | Drive acceleration feed-forward of the last states [m/s²], clamped to `MAX_DRIVE_ACCEL`. |
-| | `getSteerVelocities()` | Steer velocity feed-forward of the last states [rad/s], clamped to `MAX_STEER_RATE`. |
-| | `toWpilibModuleStates(robotRelSpeeds)` | Plain WPILib inverse (omega CCW), desaturated to `MAX_ALLOWED_MODULE_VELOCITY`. No discretize, no state. |
+| | `getDriveAccelerations()` | Drive acceleration feed-forward of the last states [m/s²], clamped to `maxDriveAccel`. |
+| | `getSteerVelocities()` | Steer velocity feed-forward of the last states [rad/s], clamped to `maxSteerRate`. |
+| | `toWpilibModuleStates(robotRelSpeeds)` | Plain WPILib inverse (omega CCW), desaturated to `maxAllowedModuleVelocity`. No discretize, no state. |
 | | `toChassisSpeeds(states, omegaFromGyro)` | Robot speeds from module states, omega from the gyro. |
 | | `toChassisSpeeds(states)` | Same, omega from the modules (least squares). |
-| | `desaturate(robotRelSpeeds)` | Robot speeds cut by one common factor so no module is faster than `MAX_ALLOWED_MODULE_VELOCITY` (translation and rotation together). |
+| | `desaturate(robotRelSpeeds)` | Robot speeds cut by one common factor so no module is faster than `maxAllowedModuleVelocity` (translation and rotation together). |
 | | `getModuleCount()` | Number of modules. |
 | `SwerveAccelerationLimiter` | `calculate(wanted, lastCommanded, heading)` | Next field-relative setpoint, dt from the clock. Once per loop; the chassis keeps `lastCommanded` (see [Adding the acceleration limit](#adding-the-acceleration-limit-to-your-chassis)). |
 
 ## Tuning the limits
 
-All in `SwerveAccelerationLimiter` (m/s²) and `KinematicsConstants`. Start low and raise them.
+All in `KinematicsConfig` (accelerations in m/s²); pass the same config to `new SwerveAccelerationLimiter(config)`. Start low and raise them.
 
-| Constant | What it limits | How to find it |
+| Setting | What it limits | How to find it |
 |---|---|---|
-| `MAX_SKID_ACCEL` | Total velocity change (traction) | Full stick from rest on carpet, raise until the wheels slip (logged module speed jumps above the robot speed), then back off ~20%. About μ·g; 8 is a safe start for most treads. |
-| `MAX_FORWARD_ACCEL` | Speed-up at rest | Highest acceleration the drive motors give at low speed without browning out; the limit falls linearly to 0 at `FREE_SPEED`. |
-| `FREE_SPEED` | Where the motors run out of torque | Free speed of the drive: motor free rpm / gear ratio · wheel circumference. |
-| `MAX_TILT_ACCEL_FRONT` / `_SIDE` | Tipping forward/back and sideways | Raise until the robot lifts a wheel when stopping hard / swerving at speed, then back off. Lower with a high center of mass or an extended mechanism. |
-| `MAX_ALLOWED_MODULE_VELOCITY` | Desaturation | The fastest a module can really drive (a bit under the free speed). |
-| `MIN_VELOCITY` | Below this the robot stands | Just above stick noise after the controller deadband. |
-| `CYCLE_DT` | Discretize time | The robot loop period (0.02 s). |
-| `LATENCY` | Added to the discretize time (twice) in `toSwerveModuleStates` | See [Quick start](#quick-start-the-demaciacode-chassis). |
-| `MAX_DRIVE_ACCEL` | Clamp of `getDriveAccelerations` | A safety clamp above the traction limit, not the slip limit (that is the limiter's `MAX_SKID_ACCEL`). |
+| `maxSkidAccel` | Total velocity change (traction) | Full stick from rest on carpet, raise until the wheels slip (logged module speed jumps above the robot speed), then back off ~20%. About μ·g; 8 is a safe start for most treads. |
+| `maxForwardAccel` | Speed-up at rest | Highest acceleration the drive motors give at low speed without browning out; the limit falls linearly to 0 at `freeSpeed`. |
+| `freeSpeed` | Where the motors run out of torque | Free speed of the drive: motor free rpm / gear ratio · wheel circumference. |
+| `maxTiltAccelFront` / `maxTiltAccelSide` | Tipping forward/back and sideways | Raise until the robot lifts a wheel when stopping hard / swerving at speed, then back off. Lower with a high center of mass or an extended mechanism. |
+| `maxAllowedModuleVelocity` | Desaturation | The fastest a module can really drive (a bit under the free speed). |
+| `minVelocity` | Below this the robot stands | Just above stick noise after the controller deadband. |
+| `cycleDt` | Discretize time | The robot loop period (0.02 s). |
+| `latency` | Added to the discretize time (twice) in `toSwerveModuleStates` | See [Quick start](#quick-start-the-demaciacode-chassis). |
+| `maxDriveAccel` | Clamp of `getDriveAccelerations` | A safety clamp above the traction limit, not the slip limit (that is the limiter's `maxSkidAccel`). |
 
 ## Differences from DemaciaCode
 

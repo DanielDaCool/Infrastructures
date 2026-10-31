@@ -24,16 +24,33 @@ import edu.wpi.first.math.kinematics.ChassisSpeeds;
  * }</pre>
  */
 public final class SwerveAccelerationLimiter {
-    // Placeholders. Tune on the robot.
-    public static final double MAX_FORWARD_ACCEL = 10.0; // forward limit at rest [m/s^2]
-    public static final double FREE_SPEED = 5.3; // where the drive motors run out of torque: Kraken X60 6000 rpm (no FOC) / 6.03 * 4" wheel [m/s]
-    public static final double MAX_SKID_ACCEL = 8.0; // traction limit [m/s^2]
-    public static final double MAX_TILT_ACCEL_FRONT = 12.0; // robot front/back [m/s^2]
-    public static final double MAX_TILT_ACCEL_SIDE = 12.0; // robot left/right [m/s^2]
-    public static final double MAX_DT = 0.02; // one loop: a slow loop still moves at most one step [s]
     private static final double TOLERANCE = 1e-12; // rounding allowed when checking a limit [m/s]
 
+    private final double maxForwardAccel; // forward limit at rest [m/s^2]
+    private final double freeSpeed; // where the drive motors run out of torque [m/s]
+    private final double maxSkidAccel; // traction limit [m/s^2]
+    private final double maxTiltAccelFront; // robot front/back [m/s^2]
+    private final double maxTiltAccelSide; // robot left/right [m/s^2]
+    private final double maxDt; // longest step of one call [s]
+
     private double lastTime = MathSharedStore.getTimestamp();
+
+    /** Limiter with the default {@link KinematicsConfig} limits (placeholders: tune on the robot). */
+    public SwerveAccelerationLimiter() {
+        this(new KinematicsConfig());
+    }
+
+    /**
+     * @param config limits (copied: later changes to it are not seen)
+     */
+    public SwerveAccelerationLimiter(KinematicsConfig config) {
+        maxForwardAccel = config.maxForwardAccel;
+        freeSpeed = config.freeSpeed;
+        maxSkidAccel = config.maxSkidAccel;
+        maxTiltAccelFront = config.maxTiltAccelFront;
+        maxTiltAccelSide = config.maxTiltAccelSide;
+        maxDt = config.maxDt;
+    }
 
     /**
      * Returns the next velocity setpoint: the velocity closest to {@code wanted} that the skid,
@@ -52,15 +69,10 @@ public final class SwerveAccelerationLimiter {
     }
 
     /** Same as {@link #calculate(ChassisSpeeds, ChassisSpeeds, Rotation2d)} with a given dt [s]. */
-    static ChassisSpeeds calculate(ChassisSpeeds wanted, ChassisSpeeds lastCommanded, Rotation2d heading, double dt) {
-        return calculate(wanted, lastCommanded, heading, dt,
-                MAX_FORWARD_ACCEL, FREE_SPEED, MAX_SKID_ACCEL, MAX_TILT_ACCEL_FRONT, MAX_TILT_ACCEL_SIDE);
-    }
-
-    /** The limiter with given limits, so they can be tested with other values than the constants. */
-    static ChassisSpeeds calculate(ChassisSpeeds wanted, ChassisSpeeds lastCommanded, Rotation2d heading, double dt,
-            double maxForwardAccel, double freeSpeed, double maxSkidAccel, double maxTiltFront, double maxTiltSide) {
-        dt = Math.min(dt, MAX_DT);
+    ChassisSpeeds calculate(ChassisSpeeds wanted, ChassisSpeeds lastCommanded, Rotation2d heading, double dt) {
+        double maxTiltFront = maxTiltAccelFront;
+        double maxTiltSide = maxTiltAccelSide;
+        dt = Math.min(dt, maxDt);
 
         // NaN or infinite velocities: stop, instead of returning NaN.
         Translation2d velocity = finiteOrZero(lastCommanded.vxMetersPerSecond, lastCommanded.vyMetersPerSecond);
@@ -77,12 +89,12 @@ public final class SwerveAccelerationLimiter {
         }
 
         // Every limit is a set of allowed velocity changes c (field-relative, for this loop):
-        // 1. Skid: |c| <= MAX_SKID_ACCEL * dt, a disk around 0.
-        // 2. Forward: the speed can grow by at most MAX_FORWARD_ACCEL * (1 - speed / FREE_SPEED) * dt.
+        // 1. Skid: |c| <= maxSkidAccel * dt, a disk around 0.
+        // 2. Forward: the speed can grow by at most maxForwardAccel * (1 - speed / freeSpeed) * dt.
         //    |velocity + c| <= speed + maxSpeedUp, a disk around -velocity. Braking and turning
         //    are free here (skid and tilt still limit them). This caps the new speed itself, so a
         //    step to the side can't add speed either (the step is a chord of the turn, not the arc).
-        // 3. Tilt: |c along the robot's front| <= MAX_TILT_ACCEL_FRONT * dt, and the same for the
+        // 3. Tilt: |c along the robot's front| <= maxTiltAccelFront * dt, and the same for the
         //    side: a box turned with the robot, 4 half-planes.
         double speed = velocity.getNorm();
         double maxSpeedUp = maxForwardAccel * Math.max(0, 1 - speed / freeSpeed) * dt;
