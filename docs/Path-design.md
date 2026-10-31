@@ -1593,7 +1593,7 @@ would hide a typo.
 
 **Fact:** there is no class `KinematicsConstants`; the robot limits are instance fields of `KinematicsConfig`
 (KinematicsConfig.java:20, fields :25-59). Defaults are therefore built from a `KinematicsConfig` instance by
-`PathConstraints.fromConfig(config)`, not from static constants.
+`PathConstraints.fromConfig(config, pathsConfig)`, not from static constants (`PathsConfig`, section 9.6).
 
 `PROFILE_MARGIN = 0.9` (**Recommendation**): the profile stays 10% inside the limiter's limits, so the limiter does not
 change commands that follow the profile (section 7.14).
@@ -1604,9 +1604,9 @@ change commands that follow the profile (section 7.14).
 | `aAcc` | 0.9·min(maxForwardAccel, maxSkidAccel, maxTiltAccelFront, maxTiltAccelSide) | 0.9·min(10, 8, 12, 12) = **7.2 m/s^2** | :46, :53, :55, :57 |
 | `aDec` | 0.9·min(maxSkidAccel, maxTiltAccelFront, maxTiltAccelSide) | **7.2 m/s^2** | :53, :55, :57; braking is free from the forward limit (SwerveAccelerationLimiter.java:94) |
 | `aLat` | same as aDec | **7.2 m/s^2** | same |
-| `omegaMax` | DEFAULT_OMEGA_MAX (no KinematicsConfig field) | 2·pi rad/s | placeholder |
-| `alphaMax` | DEFAULT_ALPHA_MAX (no KinematicsConfig field) | 4·pi rad/s^2 | placeholder |
-| `jerkMax` | DEFAULT_JERK_MAX (no KinematicsConfig field; `maxJerk` proposed) | **50 m/s^3** | placeholder (section 7.13.7) |
+| `omegaMax` | `PathsConfig.maxAngularVelocity` | 2·pi rad/s | placeholder in `PathsConfig.defaults()` |
+| `alphaMax` | `PathsConfig.maxAngularAccel` | 4·pi rad/s^2 | placeholder in `PathsConfig.defaults()` |
+| `jerkMax` | `PathsConfig.maxJerk` | **50 m/s^3** | placeholder in `PathsConfig.defaults()` (section 7.13.7) |
 
 Notes:
 - Both tilt limits are used for every direction, because the path tangent can point along the robot's front or
@@ -1616,15 +1616,16 @@ Notes:
 - `maxSteerRate` (:41) is the module steer rate, a different quantity from omegaMax. The limiter passes omega
   through unchanged (**Fact** SwerveAccelerationLimiter.java:80), so nothing limits alpha today; the follower does
   (section 8.5.2).
-- A per-path override is a `with...` copy: `PathConstraints.fromConfig(cfg).withVMax(2.0)`.
-- The missing robot settings (angular limits, jerk, module distance getter) are a proposal, not made (section 12).
+- A per-path override is a `with...` copy: `PathConstraints.fromConfig(cfg, pathsCfg).withVMax(2.0)`.
+- The robot settings that `KinematicsConfig` does not have (angular limits, jerk, module distance) live in the Path module's own
+  `PathsConfig` (section 9.6). **Decision** (user): the Kinematics module is not changed.
 
 #### 7.2.2 Inputs that are not record fields
 
 The record keeps its fields (brief decisions 6 and 18). Two optional inputs go to the command (section 9.10):
 - the `KinematicsConfig` (`withKinematics`): `maxForwardAccel` and `freeSpeed` (motor curve), `maxAllowedModuleVelocity`
   (wheel cap), `maxSkidAccel` (overspeed check), `maxSteerRate` (steer time at stops);
-- the module distance R_mod (`withModuleRadius`): the largest distance from the robot center to a module.
+- the `PathsConfig` (`withPathsConfig`), whose `moduleRadius` is R_mod: the largest distance from the robot center to a module.
   `DemaciaKinematics` keeps the module positions private with no getter (DemaciaKinematics.java:58, :66), so the user
   computes R_mod from the same module locations.
 
@@ -2399,7 +2400,7 @@ span times of section 7.12 are the no-jerk lower bound.
 #### 7.13.7 Default jerk and time cost
 
 New `PathConstraints` field `jerkMax`, validated > 0. **Default 50 m/s^3** (**Recommendation**, placeholder: tune on the robot).
-`KinematicsConfig` has no jerk setting; `maxJerk` (default 50) is proposed, not made (section 12). Justification: at 50 Hz a step of
+`KinematicsConfig` has no jerk setting, so the value lives in `PathsConfig.maxJerk` (default 50, section 9.6). Justification: at 50 Hz a step of
 acceleration A already looks like a jerk of A/dt (150 m/s^3 for 3 m/s^2, 360 for 7.2). For the limit to shape anything, a full
 acceleration change should take at least about 5 loops: `jerkMax <= A/(5·dt) = 7.2/0.1 = 72 m/s^3` at DEF. Below that, time grows
 quickly. jerkMax = 50 spreads 0 -> 7.2 m/s^2 over 0.144 s (7 loops) and 0 -> 3 m/s^2 over 0.06 s (3 loops). Warning C11 when
@@ -3547,7 +3548,8 @@ directory"). Public classes are the API; internal classes are package-private.
 |---|---|---|
 | `Point` | final class | one waypoint: position plus optional angle, max speed, radius, stop with dwell, reserved `cutCorner()` |
 | `Path` | final class | points, constraints, face target, events; builds and holds the geometry; memoizes the flipped copy |
-| `PathConstraints` | record | vMax, aAcc, aDec, aLat, omegaMax, alphaMax, jerkMax; `fromConfig(KinematicsConfig)` |
+| `PathConstraints` | record | vMax, aAcc, aDec, aLat, omegaMax, alphaMax, jerkMax; `fromConfig(KinematicsConfig, PathsConfig)` |
+| `PathsConfig` | record | robot settings the Kinematics module does not have: max omega, max alpha, max jerk, module radius |
 | `PathGeometryConfig` | record | geometry settings (section 5) |
 | `ProfileConfig` | record | speed-profile settings (section 7) |
 | `FollowerConfig` | record | follower gains, windows, tolerances (section 8) |
@@ -3693,15 +3695,12 @@ rebuild geometry; `withGeometryConfig` rebuilds it and re-reports warnings. Even
 ```java
 public record PathConstraints(double vMax, double aAcc, double aDec, double aLat,
                               double omegaMax, double alphaMax, double jerkMax) {
-    public static final double DEFAULT_OMEGA_MAX = 2 * Math.PI;   // placeholder (section 7.2.1)
-    public static final double DEFAULT_ALPHA_MAX = 4 * Math.PI;   // placeholder
-    public static final double DEFAULT_JERK_MAX  = 50;            // placeholder (section 7.13.7)
     public static final double PROFILE_MARGIN    = 0.9;
 
     public PathConstraints { /* every field finite and > 0, else IllegalArgumentException (V16) */ }
 
-    public static PathConstraints fromConfig(KinematicsConfig config);
-    public static PathConstraints fromConfig(KinematicsConfig config, double omegaMax, double alphaMax);
+    public static PathConstraints fromConfig(KinematicsConfig config, PathsConfig paths);
+    public static PathConstraints fromConfig(KinematicsConfig config);   // = fromConfig(config, PathsConfig.defaults())
 
     public PathConstraints withVMax(double vMax);
     public PathConstraints withAAcc(double aAcc);
@@ -3713,20 +3712,41 @@ public record PathConstraints(double vMax, double aAcc, double aDec, double aLat
 }
 ```
 
-`fromConfig(c)` (field names **Fact**: KinematicsConfig.java:32, :46, :51, :53, :55, :57; formulas section 7.2.1):
+`fromConfig(c, p)` (field names of `c` **Fact**: KinematicsConfig.java:32, :46, :51, :53, :55, :57; formulas section 7.2.1):
 
 ```
 vMax     = PROFILE_MARGIN * min(c.maxAllowedModuleVelocity, c.freeSpeed)
 aAcc     = PROFILE_MARGIN * min(c.maxForwardAccel, c.maxSkidAccel, c.maxTiltAccelFront, c.maxTiltAccelSide)
 aDec     = PROFILE_MARGIN * min(c.maxSkidAccel, c.maxTiltAccelFront, c.maxTiltAccelSide)
 aLat     = aDec formula
-omegaMax = DEFAULT_OMEGA_MAX,  alphaMax = DEFAULT_ALPHA_MAX,  jerkMax = DEFAULT_JERK_MAX
+omegaMax = p.maxAngularVelocity,  alphaMax = p.maxAngularAccel,  jerkMax = p.maxJerk     (no margin: these are path limits, not limiter limits)
 ```
 
-With `new KinematicsConfig()`: (4.05, 7.2, 7.2, 7.2, 2·pi, 4·pi, 50). The `KinematicsConfig` itself and the module distance are
-passed to the command (`withKinematics`, `withModuleRadius`, section 9.10), not to the record (section 7.2.2).
+With `new KinematicsConfig()` and `PathsConfig.defaults()`: (4.05, 7.2, 7.2, 7.2, 2·pi, 4·pi, 50). The `KinematicsConfig` and the
+`PathsConfig` (for the module radius) are also passed to the command (`withKinematics`, `withPathsConfig`, section 9.10), not to the
+record (section 7.2.2).
 
 ### 9.6 Config records
+
+`PathsConfig` holds the robot settings the path needs that `KinematicsConfig` does not have. **Decision** (user): the Kinematics
+module is not changed; these live in the Path module. It is an immutable record like the other Path configs (`withX` returns a
+copy), unlike `KinematicsConfig`, whose `withX` changes the object (KinematicsConfig.java:61-64).
+
+```java
+public record PathsConfig(
+        double maxAngularVelocity,   // [rad/s]   robot omega limit -> PathConstraints.omegaMax (not maxSteerRate, which is the module steer rate)
+        double maxAngularAccel,      // [rad/s^2] robot alpha limit -> PathConstraints.alphaMax (the limiter passes omega through)
+        double maxJerk,              // [m/s^3]   tangential jerk of the speed command -> PathConstraints.jerkMax
+        double moduleRadius) {       // [m]       R_mod, robot center to the farthest module; 0 = unknown, wheel-speed cap skipped
+    public PathsConfig { /* first three finite and > 0, moduleRadius finite and >= 0, else IllegalArgumentException (V26) */ }
+    public static PathsConfig defaults();   // (2·pi, 4·pi, 50, 0); all placeholders, measure on the robot (section 12)
+    public PathsConfig withMaxAngularVelocity(double radPerSec);
+    public PathsConfig withMaxAngularAccel(double radPerSec2);
+    public PathsConfig withMaxJerk(double metersPerSec3);
+    public PathsConfig withModuleRadius(double meters);
+    public static PathsConfig fromModules(Translation2d... modules);   // defaults() with moduleRadius = max module distance
+}
+```
 
 ```java
 public record PathGeometryConfig(
@@ -3857,7 +3877,7 @@ public class FollowPathCommand extends Command {
 
     // configure BEFORE scheduling; each returns this; after initialize() they throw IllegalStateException (V25)
     public FollowPathCommand withKinematics(KinematicsConfig config);      // motor curve, wheel cap, steer rate, overspeed check
-    public FollowPathCommand withModuleRadius(double meters);              // R_mod for the wheel-speed cap (0 = unknown)
+    public FollowPathCommand withPathsConfig(PathsConfig config);          // R_mod for the wheel-speed cap (moduleRadius 0 = unknown)
     public FollowPathCommand withFollowerConfig(FollowerConfig config);
     public FollowPathCommand withProfileConfig(ProfileConfig config);
     public FollowPathCommand withFlip(FlipConfig flip);                    // default FlipConfig.rotate()
@@ -3886,7 +3906,7 @@ public enum FollowResult {
 ```
 
 Rules:
-- **Constraints:** `path.constraints()` if set; else `PathConstraints.fromConfig(kinematicsConfig)` if `withKinematics` was called; else
+- **Constraints:** `path.constraints()` if set; else `PathConstraints.fromConfig(kinematicsConfig, pathsConfig)` if `withKinematics` was called (`PathsConfig.defaults()` if `withPathsConfig` was not); else
   `PathConstraints.fromConfig(new KinematicsConfig())` with warning C1.
 - **Flip:** `path.forCurrentAlliance(flip)` in `initialize()`, once.
 - **Requirements:** at least one (V24). Event commands must not require any of them (V20), checked here because only the command knows its
@@ -3952,7 +3972,7 @@ wording are proposals.
 | V23 | `FieldDimensions` length or width not finite and > 0 | `FieldDimensions` constructor | IAE | `FieldDimensions: length and width must be finite numbers more than 0 (meters), but you gave {l} x {w}.` |
 | V24 | no requirement, or a null supplier / output / path | `FollowPathCommand` constructor | IAE / NPE | IAE: `FollowPathCommand needs the drivetrain as a requirement, for example new FollowPathCommand(path, swerve::getPose, swerve::getFieldSpeeds, swerve::driveFieldRelative, swerve). Without it, two commands could drive the robot at the same time.` NPE: `FollowPathCommand: {argument} is null. See the example in Path.md "Quick start".` |
 | V25 | `withX` called after the command started | `FollowPathCommand.withX` | ISE | `FollowPathCommand.{method} was called after the command started. Set all options before you schedule the command.` |
-| V26 | `withModuleRadius(r)` with r < 0 or NaN | `FollowPathCommand` | IAE | `withModuleRadius({r}): the distance from the robot center to the farthest module must be 0 or more (meters). A 0.55 m square robot has 0.39 m. Use 0 or leave it out to skip the wheel-speed limit.` |
+| V26 | `PathsConfig` angular limit or jerk not finite and > 0, or `moduleRadius` < 0 or NaN | `PathsConfig` constructor | IAE | for the radius `PathsConfig.moduleRadius ({r}): the distance from the robot center to the farthest module must be 0 or more (meters). A 0.55 m square robot has 0.39 m. Use 0 or leave it out to skip the wheel-speed limit.` |
 | V27 | `FollowerConfig` gain, tolerance or time not finite and > 0 | `FollowerConfig` constructor | IAE | `FollowerConfig.{field} must be a finite number more than 0 ({unit}), but it is {v}. Start from FollowerConfig.defaults().` |
 | V28 | `ProfileConfig` value not finite and > 0 (arcRho also < 1) | `ProfileConfig` constructor | IAE | `ProfileConfig.{field} must be a finite number more than 0 ({unit}){, and less than 1 for arcRho}, but it is {v}.` |
 | V30 | a point has `stop()`, `stop(d)` or `withVelocity(0)` **and** `withRadius(r)` with r > 0 | `Path` constructor | IAE | `Point {i} has both stop() and withRadius({r}). A stop point is a sharp corner (the robot stops exactly on the point), so it has no arc. Remove withRadius({r}) to stop on the point, or remove stop() to drive through the corner on a round arc.` |
@@ -4114,12 +4134,11 @@ In `RobotContainer`:
 private static final KinematicsConfig KINEMATICS_CONFIG = new KinematicsConfig()
     .withMaxAllowedModuleVelocity(4.2);
 private static final Translation2d[] MODULES = { /* same array given to the drivetrain, same order */ };
-private static final double MODULE_RADIUS =
-    Arrays.stream(MODULES).mapToDouble(Translation2d::getNorm).max().orElse(0);
+private static final PathsConfig PATHS_CONFIG = PathsConfig.fromModules(MODULES);   // placeholders for omega, alpha, jerk
 private static final FlipConfig FLIP = FlipConfig.rotate();
 
 private final Path scorePath = new Path(
-    PathConstraints.fromConfig(KINEMATICS_CONFIG).withVMax(3.0),
+    PathConstraints.fromConfig(KINEMATICS_CONFIG, PATHS_CONFIG).withVMax(3.0),
     new Point(1, 2), new Point(3, 4).stop(1.0), new Point(5, 2))
     .withName("score");
 
@@ -4127,7 +4146,7 @@ private Command follow(Path path) {
     return new FollowPathCommand(path, swerve::getPose, swerve::getFieldSpeeds,
                                  swerve::driveFieldRelative, swerve)
         .withKinematics(KINEMATICS_CONFIG)
-        .withModuleRadius(MODULE_RADIUS)
+        .withPathsConfig(PATHS_CONFIG)
         .withFlip(FLIP);
 }
 
@@ -4162,9 +4181,10 @@ robot, unless marked **Fact** or **Decision**.
 | aAcc | `0.9·min(maxForwardAccel, maxSkidAccel, maxTiltAccelFront, maxTiltAccelSide)` = 7.2 | m/s^2 | `PathConstraints.aAcc` | 7.2.1 | |
 | aDec | `0.9·min(maxSkidAccel, maxTiltAccelFront, maxTiltAccelSide)` = 7.2 | m/s^2 | `PathConstraints.aDec` | 7.2.1 | |
 | aLat | same as aDec = 7.2 | m/s^2 | `PathConstraints.aLat` | 7.2.1 | |
-| DEFAULT_OMEGA_MAX | 2·pi | rad/s | `PathConstraints` constant | 7.2.1 | placeholder until KinematicsConfig has it (section 12) |
-| DEFAULT_ALPHA_MAX | 4·pi | rad/s^2 | `PathConstraints` constant | 7.2.1 | placeholder |
-| DEFAULT_JERK_MAX | 50 | m/s^3 | `PathConstraints` constant | 7.13.7 | placeholder; `KinematicsConfig.maxJerk` proposed |
+| maxAngularVelocity | 2·pi | rad/s | `PathsConfig.maxAngularVelocity` | 7.2.1, 9.6 | placeholder; measure (section 12) |
+| maxAngularAccel | 4·pi | rad/s^2 | `PathsConfig.maxAngularAccel` | 7.2.1, 9.6 | placeholder |
+| maxJerk | 50 | m/s^3 | `PathsConfig.maxJerk` | 7.13.7, 9.6 | placeholder |
+| moduleRadius | 0 (unknown; `fromModules` computes it) | m | `PathsConfig.moduleRadius` | 7.2.2, 7.11 | 0 skips the wheel-speed cap |
 | STOP_DIST_MARGIN | 0.005 | m | `SpeedLaw` (internal) | 7.13.4 | |
 | D_H_MAX | 0.05; `d_h = min(D_H_MAX, jerkMax·dt_nom/k_p^2)` | m | `Tracker` (internal) | 8.3.7 | hand-over distance |
 | jerk warning threshold | `max(aAcc, aDec)/(5·dt_nom)` | m/s^3 | `PathWarnings` (internal) | 7.13.7 (C11) | |
@@ -4262,24 +4282,21 @@ robot, unless marked **Fact** or **Decision**.
 | Obstacle avoidance | no | yes | decision 8 |
 | Java API | yes | - | decision 11 |
 | JSON schema | defined only (Appendix A) | `Path.fromJson` / `toJson`, path editor | decision 11 |
-| Changes to the Kinematics module | none | proposal (section 12) | resolution R7 |
+| Changes to the Kinematics module | none | none; the missing settings are in `PathsConfig` (section 9.6) | user decision |
 
 ## 12. Open items for the user
 
 Only the decisions that remain, and the values that must be measured. Everything else in this document is decided.
 
-1. **Proposed additions to the Kinematics module** (not made; resolution R7). Until they exist, the Path module uses its own placeholders and the
-   user passes R_mod.
-   - `KinematicsConfig.maxAngularVelocity` [rad/s], default 2·pi: robot omega limit (`maxSteerRate` is the module steer rate, a different
-     quantity).
-   - `KinematicsConfig.maxAngularAccel` [rad/s^2], default 4·pi: robot alpha limit (the limiter passes omega through, so nothing limits alpha today).
-   - `KinematicsConfig.maxJerk` [m/s^3], default 50: tangential jerk of the path speed command (nothing limits jerk today).
-   - `DemaciaKinematics.getMaxModuleDistance()` [m]: R_mod for the wheel-speed cap (the module positions are private, DemaciaKinematics.java:58).
-   - When they exist, `PathConstraints.fromConfig(c)` reads the first three, and `withModuleRadius` becomes optional.
+1. **Robot settings outside the Kinematics module** (**Decision**, user: `KinematicsConfig` is not changed). They live in `PathsConfig`
+   (section 9.6): `maxAngularVelocity` (2·pi), `maxAngularAccel` (4·pi), `maxJerk` (50) and `moduleRadius` (R_mod; the module positions
+   are private in `DemaciaKinematics`, DemaciaKinematics.java:58, so `PathsConfig.fromModules` takes the same array the drivetrain uses).
+   Nothing to decide; the values must be measured (item 2).
 2. **Values to measure on the robot** (none can be decided on paper):
    - **tau_d**, the drivetrain lag (0.085 s modelled, **Uncertain**): fit the line step (section 8.13). It sets k_n and k_p (raise both to 4 if
      tau_d allows; the hand-over tail is `ln(d_h/0.03)/k_p`, section 8.3.7) and tau_lag (rule in section 8.4).
-   - **omegaMax and alphaMax** (placeholders 2·pi and 4·pi) and **jerkMax** (placeholder 50 m/s^3; it costs +4 to 15% time).
+   - **`PathsConfig` values**: maxAngularVelocity and maxAngularAccel (placeholders 2·pi and 4·pi) and maxJerk (placeholder 50 m/s^3;
+     it costs +4 to 15% time).
    - The `KinematicsConfig` limits themselves (placeholders, KinematicsConfig.java:8-15), from which aAcc, aDec and aLat follow.
    - Whether omega_ff from the commanded speed or from a filtered ds*/dt tracks better (test FOL-H4).
    - The clothoid criterion (section 5.12.3) from match logs, which decides G2 for v2.

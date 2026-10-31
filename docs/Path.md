@@ -83,13 +83,14 @@ time autonomous starts:
 
 ```java
 KinematicsConfig kinematicsConfig = ...;      // the same one you give DemaciaKinematics
+PathsConfig pathsConfig = PathsConfig.fromModules(modules);   // same module array as the drivetrain
 FlipConfig flip = FlipConfig.rotate();
 
 FollowPathCommand follow(Path path) {
-    return new FollowPathCommand(path.withConstraints(PathConstraints.fromConfig(kinematicsConfig)),
+    return new FollowPathCommand(path.withConstraints(PathConstraints.fromConfig(kinematicsConfig, pathsConfig)),
             swerve::getPose, swerve::getFieldSpeeds, swerve::driveFieldRelative, swerve)
         .withKinematics(kinematicsConfig)
-        .withModuleRadius(0.39)          // center to the farthest module, meters
+        .withPathsConfig(pathsConfig)    // module radius for the wheel-speed cap
         .withFlip(flip);
 }
 ```
@@ -172,12 +173,13 @@ Good to know:
 ## Limits
 
 `PathConstraints` has seven numbers: `vMax` (m/s), `aAcc`, `aDec`, `aLat` (m/s^2), `omegaMax` (rad/s),
-`alphaMax` (rad/s^2) and `jerkMax` (m/s^3). `PathConstraints.fromConfig(kinematicsConfig)` computes them from
-your `KinematicsConfig` (about 10% below the limiter's limits). With the default config: 4.05 m/s and 7.2 m/s^2.
-`omegaMax` and `alphaMax` are placeholders (2 pi and 4 pi) until `KinematicsConfig` has them, and `jerkMax` is
-a placeholder of 50 m/s^3. The jerk limit makes the speed change smoothly; it costs a few percent of time.
+`alphaMax` (rad/s^2) and `jerkMax` (m/s^3). `PathConstraints.fromConfig(kinematicsConfig, pathsConfig)` computes
+the first four from your `KinematicsConfig` (about 10% below the limiter's limits; with the default config 4.05 m/s
+and 7.2 m/s^2). The last three come from `PathsConfig`, the Path module's own settings that `KinematicsConfig` does
+not have: `maxAngularVelocity`, `maxAngularAccel` and `maxJerk` (placeholders 2 pi, 4 pi and 50 m/s^3; measure
+them), plus `moduleRadius` for the wheel-speed cap. The jerk limit makes the speed change smoothly; it costs a few percent of time.
 
-Change one for one path: `path.withConstraints(PathConstraints.fromConfig(c).withVMax(2.0))`.
+Change one for one path: `path.withConstraints(PathConstraints.fromConfig(c, pathsConfig).withVMax(2.0))`.
 
 ## Face a target, events, alliance
 
