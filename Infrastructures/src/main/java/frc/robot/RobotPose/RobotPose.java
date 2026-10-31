@@ -18,11 +18,11 @@ import edu.wpi.first.math.numbers.N1;
 import edu.wpi.first.math.numbers.N3;
 import edu.wpi.first.util.sendable.Sendable;
 import edu.wpi.first.util.sendable.SendableBuilder;
+import edu.wpi.first.wpilibj.Alert.AlertType;
 import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.wpilibj.smartdashboard.Field2d;
 import edu.wpi.first.wpilibj2.command.InstantCommand;
-import frc.demacia.utils.log.Log;
 import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator;
 import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator.MeasurementKind;
 import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator.OdometryData;
@@ -102,13 +102,13 @@ public final class RobotPose implements Sendable {
      * reset the gyro to 0 or 180 degrees and the pose to the origin.
      */
     private void addLog() {
-        Log.putData("pose", this);
-        Log.putData("pose/field", field);
-        Log.putData("pose/reset pose",
+        PoseLogger.get().putData("pose", this);
+        PoseLogger.get().putData("pose/field", field);
+        PoseLogger.get().putData("pose/reset pose",
                 new InstantCommand(() -> resetPose(Pose2d.kZero)).ignoringDisable(true));
-        Log.putData("chassis/reset gyro",
+        PoseLogger.get().putData("chassis/reset gyro",
                 new InstantCommand(() -> setYaw(Rotation2d.kZero)).ignoringDisable(true));
-        Log.putData("chassis/reset gyro 180",
+        PoseLogger.get().putData("chassis/reset gyro 180",
                 new InstantCommand(() -> setYaw(Rotation2d.kPi)).ignoringDisable(true));
     }
 
@@ -245,12 +245,12 @@ public final class RobotPose implements Sendable {
         private SourceDisagreement(String questName, String limelightName) {
             alertText = questName + " and " + limelightName + " disagree by more than "
                     + SOURCE_DISAGREEMENT_METERS + " m";
-            Log.putData("vision/" + limelightName + "/" + questName,
+            PoseLogger.get().putData("vision/" + limelightName + "/" + questName,
                     builder -> builder.addDoubleProperty("distance m", () -> distanceMeters, null));
         }
 
         private void update(boolean disagrees) {
-            Log.alert(alertText, debouncer.calculate(disagrees));
+            PoseLogger.get().alert(alertText, AlertType.kWarning, debouncer.calculate(disagrees));
         }
     }
 

@@ -94,7 +94,6 @@ the conflict for good.
     ├── vendordeps/              Phoenix 6, WPILib New Commands, QuestNavLib
     ├── WPILib-License.md
     └── src/main/java/frc/
-        ├── demacia/utils/log/   Log and ConsoleAlert helpers
         └── robot/
             ├── Kinematics/      Swerve kinematics, acceleration limiter
             ├── RobotPose/       Estimation/ (odometry, pose estimator), Vision/ (sources, configs)
