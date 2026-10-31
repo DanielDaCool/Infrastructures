@@ -13,7 +13,7 @@ import edu.wpi.first.util.sendable.Sendable;
 import edu.wpi.first.util.sendable.SendableBuilder;
 import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.wpilibj.smartdashboard.Field2d;
-import frc.demacia.utils.log.Log;
+import frc.robot.RobotPose.PoseLogger;
 import frc.robot.RobotPose.Vision.visionConfigs.BaseVisionSourceConfig;
 
 /**
@@ -64,7 +64,7 @@ public abstract class BaseVisionSource implements VisionSource, Sendable {
         pose = Pose2d.kZero;
 
         addLog();
-        Log.putData("vision/" + name, this);
+        PoseLogger.get().putData("vision/" + name, this);
         createdSources.add(this);
         onCreate.accept(this);
     }
@@ -100,7 +100,7 @@ public abstract class BaseVisionSource implements VisionSource, Sendable {
 
     /** Puts dashboard entries. Subclasses can override to add their own (call super). */
     protected void addLog() {
-        Log.putData("vision/" + name + "/field", field);
+        PoseLogger.get().putData("vision/" + name + "/field", field);
     }
 
     public String getName() {

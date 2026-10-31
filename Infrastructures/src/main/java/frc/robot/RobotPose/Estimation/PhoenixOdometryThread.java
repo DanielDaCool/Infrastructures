@@ -9,9 +9,9 @@ import com.ctre.phoenix6.BaseStatusSignal;
 import com.ctre.phoenix6.CANBus;
 import com.ctre.phoenix6.StatusCode;
 
+import edu.wpi.first.wpilibj.Alert.AlertType;
 import edu.wpi.first.wpilibj.Timer;
-import frc.demacia.utils.log.ConsoleAlert;
-import frc.demacia.utils.log.Log;
+import frc.robot.RobotPose.PoseLogger;
 import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator.OdometryData;
 
 /**
@@ -99,15 +99,15 @@ public final class PhoenixOdometryThread extends Thread {
     private double lastFailureSeconds = Double.NEGATIVE_INFINITY;
     /** The alert stays on this long after the last failed cycle (seconds). */
     private static final double FAILURE_ALERT_SECONDS = 1.0;
-    private final ConsoleAlert failureAlert = ConsoleAlert.error("odometry thread: a signal stopped updating");
+    private static final String FAILURE_TEXT = "odometry thread: a signal stopped updating";
     private static final String READER_ERROR_TEXT = "odometry thread: the reader threw (stack trace in the console)";
     /** When the reader last threw (FPGA seconds), and when its stack trace was last printed. */
     private volatile double lastReaderErrorSeconds = Double.NEGATIVE_INFINITY;
     private double lastStackTraceSeconds = Double.NEGATIVE_INFINITY;
     /** No sample for longer than this raises the stall alert (seconds). */
     private static final double STALL_ALERT_SECONDS = 0.1;
-    private final ConsoleAlert stallAlert = ConsoleAlert.error(
-            "odometry thread: no samples (thread stopped or stuck), the pose is frozen");
+    private static final String STALL_TEXT =
+            "odometry thread: no samples (thread stopped or stuck), the pose is frozen";
     /** When {@link #getNewSamples()} last got a sample, or the thread started (FPGA seconds). */
     private double lastSampleSeconds;
 
@@ -226,12 +226,13 @@ public final class PhoenixOdometryThread extends Thread {
             failedCyclesSeen = failed;
             lastFailureSeconds = now;
         }
-        failureAlert.set(now - lastFailureSeconds < FAILURE_ALERT_SECONDS);
-        Log.alert(READER_ERROR_TEXT, now - lastReaderErrorSeconds < FAILURE_ALERT_SECONDS);
+        PoseLogger logger = PoseLogger.get();
+        logger.alert(FAILURE_TEXT, AlertType.kError, now - lastFailureSeconds < FAILURE_ALERT_SECONDS);
+        logger.alert(READER_ERROR_TEXT, AlertType.kWarning, now - lastReaderErrorSeconds < FAILURE_ALERT_SECONDS);
         if (!samples.isEmpty()) {
             lastSampleSeconds = now;
         }
-        stallAlert.set(!isAlive() || now - lastSampleSeconds > STALL_ALERT_SECONDS);
+        logger.alert(STALL_TEXT, AlertType.kError, !isAlive() || now - lastSampleSeconds > STALL_ALERT_SECONDS);
         return samples;
     }
 

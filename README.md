@@ -145,10 +145,11 @@ Pose2d pose = RobotPose.getInstance().getEstimatedPose();
   above; see [docs/design.md](docs/design.md#250-hz-odometry).
 - **Dashboard generator:** `BaseVisionSource.setOnCreate(callback)` is called with every
   vision source as it is created.
-- **Your own logger:** all logging goes through `frc.demacia.utils.log.Log` (`putData` for dashboard
-  entries, `alert` for alerts). The package ships a small stand-in of the team's `Log` and
-  `ConsoleAlert` (plain WPILib: SmartDashboard and Alerts) in `Infrastructures/src/main/java/frc/demacia/utils/log`.
-  To use the team logs, delete those two files; no other change is needed.
+- **Your own logger:** all dashboard entries and alerts go through the `PoseLogger` interface
+  (`putData` for entries, `alert` for alerts). The default, `PoseLogger.WPILIB`, uses
+  SmartDashboard and WPILib Alerts. To use your team's logger, implement the two methods and
+  call `PoseLogger.set(...)` once in `Robot`'s constructor, before `RobotPose.initialize` and
+  before the vision sources are created (example in the `PoseLogger` Javadoc).
 
 ## Migrating from DemaciaCode
 
@@ -204,5 +205,4 @@ All paths are relative to `Infrastructures/src/main/java/frc/robot/RobotPose`.
 | `Vision/VisionTypes/QuestFrameFilter.java` | Selects which Quest frames are used (jump and lost-tracking handling, re-alignment, 10 Hz thinning). |
 | `Vision/visionConfigs/*Config.java` | One config class per source type. |
 | `Vision/LimelightHelpers.java` | Limelight's official helper library. |
-
-Outside this folder: `Infrastructures/src/main/java/frc/demacia/utils/log/Log.java` and `ConsoleAlert.java` are the stand-in for the team logger. Delete them when using the real one.
+| `PoseLogger.java` | Where dashboard entries and alerts go. SmartDashboard and WPILib Alerts by default; set your own logger with `PoseLogger.set`. |
