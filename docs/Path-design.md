@@ -24,7 +24,8 @@ the pose from a `Supplier<Pose2d>`, so any pose source works, for example [Robot
 - [11. v1 and v2 scope](#11-v1-and-v2-scope)
 - [12. Open items for the user](#12-open-items-for-the-user)
 - [13. Test cases](#13-test-cases)
-- [Appendix A. JSON schema](#appendix-a-json-schema)
+- [Appendix A. JSON sketch (future editor, not v1)](#appendix-a-json-sketch-future-editor-not-v1)
+- [Appendix B. Test oracle: grid passes](#appendix-b-test-oracle-grid-passes)
 
 ## 2. Summary
 
@@ -44,21 +45,22 @@ Command follow = new FollowPathCommand(path, swerve::getPose, swerve::getFieldSp
 Points are in meters, in the blue-alliance field frame. Optional per point: an angle (`withAngle`), a
 speed limit at that point (`withVelocity`), a corner radius (`withRadius`), a stop with an optional
 wait (`stop()`, `stop(seconds)`). Per path: limits (`PathConstraints`), a face-target point, events
-at a distance, a fraction or a point. The command takes the pose, the measured field speeds, and the
+at a fraction of the path or at a point. The command takes the pose, the measured field speeds, and the
 drivetrain's field-relative drive method.
 
 ### 2.2 What the library does
 
 1. **Geometry, in the `Path` constructor (blue frame).** Each middle point gets a circle that passes
    through the point. Lines tangent to the circles join them. The result is line, arc, line, ...,
-   line, and every point lies exactly on it. The path is a function of arc length s (meters along the
-   path). Sharp corners (more than 150 deg) and corners where no arc fits become stops.
+   line, and every point where the path turns lies exactly on it (a point on a straight line is only a pass
+   marker, section 5.8.3). The path is a function of arc length s (meters along the path). Sharp corners (more than 150 deg) and corners where no arc fits become stops.
 2. **Alliance flip, in `initialize()`.** On red, the built path is mirrored or rotated once.
 3. **Heading and speed profiles, in `initialize()`.** The heading is piecewise linear in s between
    points that have an angle. The speed is a closed-form profile per span (a piece of path with
-   constant limits): speed up along the motor curve, cruise, slow down. Junction speeds come from one
-   backward and one forward pass. Stops split the profile.
-4. **Follower, every 20 ms.** Project the pose onto the path to get progress s*. Command the speed
+   constant limits): speed up along the motor curve, cruise, slow down. Arcs are driven at constant speed,
+   so the speed changes only on lines. Junction speeds come from one backward and one forward pass. Stops
+   split the profile.
+4. **Follower, every 20 ms.** The robot must start within 0.5 m of P0. Project the pose onto the path to get progress s*. Command the speed
    with a jerk-aware online trapezoid law whose limits come from the profile (each loop it speeds up, holds or brakes so
    that it can still meet every limit ahead with the jerk and deceleration limits), the direction from the path
    tangent a little ahead, a cross-track correction toward the path, and omega from the heading
@@ -72,21 +74,23 @@ drivetrain's field-relative drive method.
 | Decision | Choice | Reason |
 |---|---|---|
 | Parameter | Everything is a function of arc length s, never of time | A robot that falls behind is never "late"; braking stays tied to position |
-| Corner shape | Circle through the waypoint, center on the inner bisector; lines tangent to the circles (section 5.2) | Every waypoint lies exactly on the path |
+| Corner shape | Circle through the waypoint, center on the inner bisector; lines tangent to the circles (section 5.2) | Every waypoint where the path turns lies exactly on the path; a point on a straight line is a pass marker (section 5.8.3) |
 | Corner radius | Automatic: `min(R_MAX, d/2 or d/4, bulge cap)`, shrink loop if a check fails, stop below R_MIN; `withRadius(r)` override (section 5.7) | Fast corners without wild bulges; always a valid path |
 | Very sharp corners | Turn above TAU_STOP = 150 deg becomes a stop unless `withRadius` is given (section 5.6.4) | A stop is about as fast at 150 deg and keeps the robot on the drawn lines |
 | Continuity | G1 (line + arc) in v1; clothoids are v2 if a logged criterion says so (section 5.12) | Closed-form geometry; the speed profile handles the curvature step |
 | User stop | `stop()`, `stop(dwell)`, `withVelocity(0)`; removes the corner's arc (section 5.8.7) | At rest an arc buys nothing; swerve changes direction at rest |
 | Heading | Piecewise linear in s between anchors, from the start heading to the first anchor, hold after the last; shortest way; face-target mode (section 6) | Constant heading rate per span, so the speed caps stay exact |
-| Speed profile | Closed-form trapezoid per span with motor-curve speed-up, traction-ellipse arc modes, junction passes (section 7) | Equals the time-optimal grid profile in the common case; stays inside the limiter |
+| Speed profile | Closed-form trapezoid per span with motor-curve speed-up, constant speed on every arc, junction passes (section 7) | Equals the time-optimal grid profile when every arc is driven at its curvature cap; stays inside the limiter |
 | Runtime speed | Jerk-aware online trapezoid law (brief decision 18): limits from the per-span profile, stopping distance from (v, a), jerkMax default 50 m/s^3 (sections 7.13, 8.3.7) | No stall at the start or after a stop; braking by position; jerk-limited speed with no overshoot in simulation |
 | Projection | Windowed, monotonic progress, window capped at the next stop (section 8.2.3) | No jumps to another branch of a self-approaching path |
 | Finish | 0.03 m, 2 deg, 0.1 s settle; timeout `1.5·profileTime + 1 s`; zero speed once on failure (section 8.7) | Brief decision; a command that never ends blocks autonomous sequences |
-| Alliance | `FlipMode` NONE / MIRROR / ROTATE, default ROTATE, applied once to the built path (sections 5.13, 8.10) | The 2027 field is unknown |
+| Alliance | `FlipMode` NONE / MIRROR / ROTATE in `PathFollowerConfig`, default ROTATE, applied once to the built path (sections 5.13, 8.10) | The 2027 field is unknown |
+| Start | The robot must start within 0.5 m of P0, else `FAILED_START_TOO_FAR`; no mid-path start (section 8.2.5) | Simple, and a wrong flip or a wrong path shows at once |
+| Settings | Three public config records: `PathConstraints`, `PathsConfig`, `PathFollowerConfig`; everything else is an internal constant (sections 9.6, 10) | Few knobs for students; one place for each value |
 | Limits | `PathConstraints(vMax, aAcc, aDec, aLat, omegaMax, alphaMax, jerkMax)`, defaults from `KinematicsConfig` at 90% (section 7.2) | The profile then never fights the acceleration limiter |
 | Kinematics module | Not changed. Missing settings are proposed (section 12) | No edits to working code |
 | Pose input | `Supplier<Pose2d>` plus `Supplier<ChassisSpeeds>`; no RobotPose dependency | Works with any pose source |
-| Editor | Java API only in v1; a JSON schema is defined (Appendix A) | Room for a later path editor |
+| Editor | Java API only in v1; a JSON sketch for a future editor (Appendix A) | Room for a later path editor |
 
 ## 3. Notation and conventions
 
@@ -96,14 +100,14 @@ All symbols in this document. ASCII names are used for Greek letters, one spelli
 |---|---|---|---|
 | field frame | WPILib field frame, blue-alliance origin | | x toward the red wall, y left, angles CCW positive. All user input is in this frame on both alliances |
 | robot frame | WPILib robot frame | | x forward, y left, CCW positive |
-| P_i | waypoint i, i = 0..n-1 | m | n >= 2 after merging points closer than EPS_DUP |
+| P_i | waypoint i, i = 0..n-1 | m | n >= 2 after merging points closer than EPS_DUP; the geometry uses the points left after straight middle points are set aside as PASS markers (5.8.3) |
 | d_j | length of leg j, `abs(P_{j+1} - P_j)`, j = 0..n-2 | m | the straight line the user drew |
 | u_in,i, u_out,i | unit directions `unit(P_i - P_{i-1})`, `unit(P_{i+1} - P_i)` | | |
 | tau_turn,i | turn angle at corner i | rad | in [0, pi]; 0 = straight on, pi = U-turn |
 | gamma_i | half the interior angle, `(pi - tau_turn,i)/2` | rad | `cos(gamma_i) = sin(tau_turn,i/2)` |
 | sigma_i | turn sign, `sign(cross(u_in,i, u_out,i))` | | +1 left (CCW), -1 right, 0 straight |
 | b_i | unit inner bisector at P_i, `unit(-u_in + u_out)` | | points into the corner |
-| r_i, C_i | corner circle radius and center | m | r = 0 means a point element (endpoint, STOP, PASS) |
+| r_i, C_i | corner circle radius and center | m | r = 0 means a point element (endpoint, STOP) |
 | h_j, lambda_j | signed tangent offset and length of the line on leg j | m | section 5.4 |
 | uD, uD_perp | unit vector from element j to j+1 and its left normal | | section 5.4 |
 | Q_in, Q_out | arc entry and exit points | m | |
@@ -112,7 +116,7 @@ All symbols in this document. ASCII names are used for Greek letters, one spelli
 | rot90, cross, mod2pi, wrap | `rot90(x, y) = (-y, x)`; `cross(a, b) = a.x·b.y - a.y·b.x`; mod2pi into [0, 2·pi); wrap into [-pi, pi) | | wrap = `MathUtil.angleModulus` |
 | s | arc length from the path start | m | s in [0, L] |
 | L | total path length | m | L > 0 (a zero-length path is rejected) |
-| k, m | segment index, number of segments | | m = 2n-3 for n >= 3 (zero-length STOP / PASS entries kept) |
+| k, m | segment index, number of segments | | m = 2n-3 for n >= 3 (zero-length STOP entries kept) |
 | s_start,k, l_k | start and length of segment k | m | |
 | s(P_i) | s of waypoint i | m | section 5.9.4 |
 | q | local arc length inside a segment or span, `q = s - s_start` | m | |
@@ -120,7 +124,7 @@ All symbols in this document. ASCII names are used for Greek letters, one spelli
 | kappa(s) | signed curvature | 1/m | + left turn, - right turn; line 0, arc `sigma/r` |
 | theta_T(s) | angle of T(s) (direction of travel) | rad | not the robot heading |
 | p | robot position from the pose supplier | m | field frame, blue origin |
-| s*, s0, s_hi, s_prev | projected progress, progress at start, highest accepted s*, last s* | m | |
+| s*, s_hi, s_prev | projected progress, highest accepted s*, last s* | m | all start at 0 (section 8.2.5) |
 | sMin, sMax | projection window | m | section 8.2.3 |
 | e_n | signed cross-track error `(p - x(s*))·N(s*)` | m | + = robot LEFT of the path |
 | e_t | along-track residual `(p - x(s*))·T(s*)` | m | 0 unless the projection is clamped |
@@ -139,7 +143,7 @@ All symbols in this document. ASCII names are used for Greek letters, one spelli
 | c | cross-track correction speed, `clamp(-k_n·e_n, -c_max, c_max)` | m/s | + = toward the left |
 | V | field velocity command `v_t·T(s_L) + c·N(s*)` | m/s | field frame. The brief's form is `V = v(s*)·T(s*) - k_n·e_n·N(s*)`: left error pushes right |
 | V_meas | measured field velocity (speed supplier) | m/s | field frame |
-| v0, v0_par, v0_perp | start speed `max(0, V_meas·T(s0))`, its components along and across | m/s | |
+| v0, v0_par, v0_perp | start speed `max(0, V_meas·T(0))`, its components along and across | m/s | |
 | vBack(s) | runtime speed envelope: caps plus the backward pass only | m/s | 0 at stops and at L |
 | vProf(s) | vBack after the forward pass from v0 | m/s | time, timeout, logging |
 | K, k, j | number of spans, span index k = 0..K-1, junction index j = 0..K | | junction j = start of span j, junction K = end |
@@ -151,7 +155,6 @@ All symbols in this document. ASCII names are used for Greek letters, one spelli
 | a, a_t, a_n | tangential acceleration (+ speeding up), tangential, lateral `v^2·kappa` | m/s^2 | a_n + toward N |
 | aAccEff(v, s) | effective speed-up limit at speed v and progress s | m/s^2 | section 7.6.5 |
 | a_0, v_free, v_knee | motor-curve stall acceleration (`0.9·maxForwardAccel`), free speed, knee speed | m/s^2, m/s, m/s | section 7.9 |
-| rho | arc traction share in ARC_SHARED mode (ARC_RHO) | | section 7.8 |
 | R_mod | largest distance from the robot center to a module | m | robot frame |
 | vWheelMax | `KinematicsConfig.maxAllowedModuleVelocity` | m/s | |
 | e_allow | heading lag allowed at a heading kink (HEADING_LAG_ALLOWED) | rad | |
@@ -162,7 +165,7 @@ All symbols in this document. ASCII names are used for Greek letters, one spelli
 | d_h, v_h | hand-over distance before a goal and the speed there, `v_h = k_p·d_h` | m, m/s | section 8.3.7 |
 | t, dt, dt_nom | time, measured loop period, nominal loop period | s | dt_nom = 0.02 s |
 | t_k, t0[k] | time of span k, profile time at the start of span k | s | |
-| profileTime | offline simulation of the speed law from s0 to L (with hand-over tails) plus steer times and dwells at stops | s | section 7.13.6 |
+| profileTime | offline simulation of the speed law from 0 to L (with hand-over tails) plus the dwells at stops | s | section 7.13.6 |
 | t_timeout | `1.5·profileTime + 1.0` | s | |
 | k_n, k_p, k_theta | cross-track gain, goal-capture gain, heading gain | 1/s | |
 | tau_lag | lookahead time of the follower | s | a setting |
@@ -170,9 +173,8 @@ All symbols in this document. ASCII names are used for Greek letters, one spelli
 | s_L, s_v | lookahead points for direction and for speed | m | section 8.4 |
 | d_lin | `aDec/k_p^2`, edge of the linear zone of the goal law | m | |
 | vsqrt(d; a, k) | sqrt goal law | m/s | section 8.3.7 |
-| g(e_n) | off-path slowdown factor | | in [g_min, 1] |
-| FL, FW | field length and width | m | config; placeholder pair 16.54 x 8.07 |
-| target, pT, phi_off | face-target point, `pT = target - p`, heading offset | m, m, rad | |
+| FL, FW | field length and width | m | `PathFollowerConfig` fields; placeholder pair 16.54 x 8.07 |
+| target, pT | face-target point, `pT = target - p` | m | |
 
 Constants (EPS_DUP, R_MIN, TAU_STOP, ...) are named in capitals and defined once, in section 10.
 
@@ -195,8 +197,8 @@ Constants (EPS_DUP, R_MIN, TAU_STOP, ...) are named in capitals and defined once
 
 Key numbers of the shared example (all (script)): r = 1.4142 m, C = (3, 2.5858), L = 5.9769 m,
 s(P1) = 2.9885 m. Pure trapezoid profile without a jerk limit: 3.2723 s; with `P1.stop()`: L = 5.6569 m and
-4.0148 s (motion 3.8839 s plus 0.1309 s module steer). Expected v1 run time with the jerk law (jerkMax = 50):
-3.52 s, timeout 6.28 s; with `P1.stop()`: 4.32 s + 0.13 s steer, timeout 7.68 s.
+3.8839 s. Expected v1 run time with the jerk law (jerkMax = 50): 3.54 s, timeout 6.31 s; with `P1.stop()`: 4.32 s,
+timeout 7.48 s.
 
 ## 4. Lessons from existing code
 
@@ -318,11 +320,11 @@ d < 2r, with no check.
 | Finish without position or heading check (path-ido, 2026) | Finish test, section 8.7 |
 | Arc correction sign reverses (path-ido) | One signed e_n for lines and arcs, section 8.3.1 |
 | Arc length wrong above 180 deg (path-ido) | Sweep by mod2pi, section 5.5 |
-| Collinear points and duplicates (path-ido) | PASS points, kink corners, merging, section 5.8 |
+| Collinear points and duplicates (path-ido) | PASS markers, merging, section 5.8 |
 | Straight-line distance for the speed (2025) | d_go along the path, section 8.3.7 |
 | Euclidean progress (2025) | Orthogonal projection, section 5.10 |
 | Heading check without abs, deadbands (2025, 2026) | `abs(wrap(...))`, no deadband, sections 8.5.2, 8.7.2 |
-| `FIELD_LENGTH = -1`, red conversion keeps the rotation (2025, 2026) | Flip config with real field size, section 5.13 |
+| `FIELD_LENGTH = -1`, red conversion keeps the rotation (2025, 2026) | Flip mode with a real field size, section 5.13 |
 | Two independent PIDs on x and y for the finish (2025, 2026) | One 2D capture law, section 8.3.7 |
 | Ramp from the measured speed (2026) | Ramp from the previous command, section 8.3.7 |
 | Unwrapped heading errors (2026) | `wrap` on every angle difference, section 8.5.4 |
@@ -339,8 +341,9 @@ The geometry is built once, in the `Path` constructor, in the blue frame.
 ### 5.1 Scope and constants
 
 Symbols are in section 3. The geometry constants (EPS_DUP, EPS_ANG, EPS_LEN, EPS_WRAP, EPS_CENTER,
-R_MIN, R_MAX, D_BULGE, EPS_DEV, TAU_STOP, SHRINK, MAX_ITER, KINK_ITERS, KINK_TOL) are defined in
-section 10. The tunable ones are fields of `PathGeometryConfig` (section 9.6); the epsilons are internal.
+R_MIN, R_MAX, D_BULGE, EPS_DEV, TAU_STOP, SHRINK, MAX_ITER, PASS_TOL) are defined in section 10. All of them
+are internal `static final` constants of the geometry builder (**Decision**, user, simplification pass: there is
+no geometry config record). The user's per-point knobs are `withRadius` and `stop`.
 
 ### 5.2 The idea, from scratch
 
@@ -372,7 +375,7 @@ crosses P_i heading exactly halfway between the two leg directions. For a 90 deg
 
 Why the robot does not simply drive along the leg: the leg passes through P_i, and P_i is on the circle,
 so the leg *cuts* the circle (a secant). It is not tangent to it. A robot driving along the leg would
-hit the circle at an angle, which is a kink. The tangent line from P_{i-1} is the leg rotated slightly
+hit the circle at an angle, a corner in the direction of travel. The tangent line from P_{i-1} is the leg rotated slightly
 outward, by an angle called the deviation (14.06 deg in the worked example (script)).
 
 Diagram A: where the circle goes (worked example, right turn at P1; not to scale).
@@ -466,8 +469,8 @@ waypoint Path.java:50 divides by zero.
 
 ### 5.4 Tangent lines (one formula for all cases)
 
-Treat every element as a circle. A corner with an arc is `(C_i, r_i, sigma_i)`. P_0, P_{n-1}, STOP entries
-and PASS points are "point circles": `(P_i, r = 0, sigma = 0)`. The line on leg j joins element j to
+Treat every element as a circle. A corner with an arc is `(C_i, r_i, sigma_i)`. P_0, P_{n-1} and STOP entries
+are "point circles": `(P_i, r = 0, sigma = 0)`. The line on leg j joins element j to
 element j+1. One formula covers the endpoint tangent, the outer tangent and the inner tangent:
 
 ```
@@ -693,8 +696,8 @@ Each cell is arc time / stop time, in seconds (script):
 
 **Inference:** the crossover depends mostly on a_lat relative to a_acc and a_dec, not on the angle alone. At
 150 deg the arc is at best break-even (a_lat = 4) and loses clearly when a_lat = 2. A stop also keeps the
-robot on the user's polyline, with no bulge. **Recommendation** (accepted by the user): TAU_STOP = 150 deg,
-configurable; set it to 180 deg to disable it. An explicit `.withRadius(r)` ignores TAU_STOP, which is how the
+robot on the user's polyline, with no bulge. **Recommendation** (accepted by the user): TAU_STOP = 150 deg, an
+internal constant since the simplification pass. An explicit `.withRadius(r)` ignores TAU_STOP, which is how the
 user asks for a hairpin. **Uncertain:** v2 could choose per corner by comparing profile times.
 
 ### 5.7 Radius selection
@@ -722,8 +725,7 @@ control F2/F3, the quality. That is what the bulge cap and the checks add.
 
 ```
 k(j) = 2 if leg j touches P_0, P_{n-1} or a user STOP point (section 5.8.7), else 4
-       (a leg that touches a straight waypoint, which may become a PASS point or a kink corner (5.8.3), uses 4:
-        the straight waypoint counts as a corner, because a kink corner puts a circle on that leg)
+       (straight middle points are set aside before this rule (5.8.3), so a leg here joins two kept points)
 r_auto,i = min( R_MAX,
                 d_{i-1} / k(i-1),
                 d_i     / k(i),
@@ -753,14 +755,14 @@ initial r_i:
     .withRadius(x), x <  R_MIN : r_i = 0       (explicit stop corner, e.g. .withRadius(0))
     otherwise                  : r_i = r_auto,i;   if r_i < R_MIN: r_i = 0
 loop (at most MAX_ITER times):
-    build circles, solve kink corners (5.8.3), build lines (5.4) and arcs (5.5)
+    build circles, lines (5.4) and arcs (5.5)
     bad = corners touching a line that fails F1 or F2, plus corners whose arc fails F3   (only corners with r > 0)
     if bad is empty: done
     targets = automatic corners in bad;  if none: targets = bad (override corners) and record a warning
     for i in targets: r_i = SHRINK * r_i;  if r_i < R_MIN: r_i = 0  (stop corner)
 ```
 
-`.withRadius(x)` is ignored, with warning W6 (section 9.12), on P_0, on P_{n-1} and on a straight waypoint
+`.withRadius(x)` is ignored, with warning W4 (section 9.12), on P_0, on P_{n-1} and on a straight waypoint
 (tau_turn < EPS_ANG); a straight waypoint then follows section 5.8.3. `.withRadius(r > 0)` together with a user
 stop is an error (V30, section 9.12).
 
@@ -772,10 +774,9 @@ stop is an error (V30, section 9.12).
 - **Shrinking fixes the failures** (**Inference**): the deviations go to 0 as `r/d` goes to 0, so lines approach
   their legs and sweeps approach tau_turn.
 - **Warnings** (**Recommendation**): W1 (corner became a stop) and W2 (radius shrunk), section 9.12, reported once
-  at build time with `DriverStation.reportWarning`. Never throw at run time.
-- **Stop fallback**: a corner with `r_i = 0` and a real direction change becomes a zero-length STOP segment, and
-  the speed profile gives v = 0 at its s. If the direction change is below EPS_ANG, it is a PASS point instead,
-  with no stop (section 5.8.3).
+  at build time through `PathLogger.alert` and kept in `Path.warnings()`. Never throw at run time.
+- **Stop fallback**: a corner with `r_i = 0` becomes a zero-length STOP segment, and the speed profile gives v = 0
+  at its s.
 
 Random check: 5,000 random paths with 3 to 7 points uniform on a 16 x 8 m field, TAU_STOP disabled (script):
 - Every path built and passed F1 to F3. At most 18 passes were needed. The deviation checks shrank 866 of
@@ -795,7 +796,7 @@ Random check: 5,000 random paths with 3 to 7 points uniform on a 16 x 8 m field,
 | All points within EPS_DUP of each other | one point left after merging | constructor throws (V6, section 9.12). A path with L = 0 does not exist |
 | n = 2 | two points | one line P0 to P1, m = 1. **Fact:** path-ido does the same (Path.java:65-67) |
 | Duplicate / near-duplicate | `abs(P_{k+1} - P_k) < EPS_DUP` | drop the later point; merge its attributes into the kept point, later value wins, warning W3 |
-| Collinear, straight on | `tau_turn,i < EPS_ANG` | straight waypoint: a point element (r = 0). If the lines meeting there kink by >= EPS_ANG, it becomes a kink corner (5.8.3) |
+| Collinear, straight on | `tau_turn,i < EPS_ANG` | set aside before building: a PASS marker at the closest path point, warning W5 if the path misses it by more than PASS_TOL = 0.01 m (5.8.3) |
 | U-turn | `tau_turn,i > pi - EPS_ANG` | stop by default (TAU_STOP). With `.withRadius`: teardrop arc, sigma from a neighbor (5.8.4) |
 | Very sharp corner | tau_turn near pi | bulge cap, then TAU_STOP gives a stop |
 | Very long legs | `d >> R_MAX` | radius independent of d; lines lie almost on the legs; nothing special |
@@ -818,54 +819,34 @@ path-ido divides by zero at Path.java:50. Example: (0,0),(2,0),(2.0005,0),(2,2) 
 with L = 4.2263 and r = 1.0 (script). The merged waypoint keeps one s value. Events and attributes that
 referred to the dropped point map to the kept point; the user's indices stay valid (section 5.9.5).
 
-#### 5.8.3 Collinear (straight) waypoints and kink corners
+#### 5.8.3 Collinear (straight) waypoints: PASS markers
 
-"sigma = 0, no arc, merge lines" is right only when the merged line actually passes through the point. With
-waypoint-on-circle, the lines next to an arc corner are **not** on the legs: they are rotated outward. So a
-waypoint on the leg can be missed. Example: (0,0),(1,0),(2,0),(2,2). If (1,0) is simply dropped, the line from
-(0,0) to circle 2 passes 0.2429 m from it (script). That breaks decision 1.
+**Decision** (user, simplification pass). A middle waypoint with `tau_turn,i < EPS_ANG` that is not a user stop is a
+**PASS marker**:
+1. It is set aside before the corner construction. The geometry is built from the remaining points, so the path is
+   exactly the path without that point (the two legs through it form one straight leg).
+2. Its s is the s of the closest point of the built path, searched between the s of its kept neighbors. That s is a
+   span boundary (section 7.3.1) and carries the point's angle, `withVelocity` and events. A PASS marker adds no
+   segment to the table.
+3. The miss distance `d_i = abs(x(s(P_i)) - P_i)` is checked. If `d_i > PASS_TOL = 0.01 m`, the build emits warning
+   W5, which names the point and d_i and suggests `.stop()` on it or removing it. The path is **not** changed.
 
-**Recommendation** (accepted by the user), which keeps every waypoint on the path and keeps G1:
-1. A straight waypoint (tau_turn,i < EPS_ANG) starts as a point element (r = 0, sigma = 0). The lines on both
-   sides end exactly at P_i.
-2. Measure the kink at P_i: `kink_i = atan2(cross(T_in, T_out), dot(T_in, T_out))` between the line arriving
-   and the line leaving.
-3. If `abs(kink_i) < EPS_ANG`, P_i is a **PASS point**: a zero-length segment with no stop and no arc. The two
-   lines on either side are collinear. This happens when both neighbors are points or stops, for example
-   (0,0),(2,0),(4,0), or by symmetry. Example: in (0,0),(3,0),(3,3),(3,6),(6,6), the inner tangent between the
-   corners passes exactly through (3,3).
-4. Otherwise P_i becomes a **kink corner**: a circle through P_i with `sigma_i = sign(kink_i)` and radius
-   `min(R_MAX, d_{i-1}/k(i-1), d_i/k(i))`. The bisector is chosen by a fixed-point iteration:
-   ```
-   theta_P = theta_T(T_in) + kink_i/2               (start: bisect the kink of the point version)
-   repeat up to KINK_ITERS:
-       b_i = sigma_i * rot90(cos theta_P, sin theta_P);  C_i = P_i + r_i*b_i
-       rebuild only the two lines touching corner i (5.4)
-       kink_i = signed angle(T_in, T_out);  theta_new = theta_T(T_in) + kink_i/2
-       if abs(wrap(theta_new - theta_P)) < KINK_TOL: break
-       theta_P = theta_new
-   tau_turn,i = abs(kink_i)  (used by F3)
-   ```
-   Why iterate: the direction at P_i must lie between the arriving and leaving line directions, or the arc would
-   have to go nearly all the way around. The lines depend on the circle, and the circle depends on the direction.
-   With adjacent straight waypoints, sweep over all of them in turn (Gauss-Seidel) until all converge. If the
-   iteration does not converge, or the radius shrinks below R_MIN, the corner becomes a STOP (warning W1).
+This **relaxes "every waypoint lies exactly on the path" for straight middle points only.** Next to an arc corner
+the line is rotated outward (section 5.2), so a point on the leg can be missed. Every point where the path turns,
+every stop and both endpoints are still exactly on the path. A user stop on a straight point (`.stop()`) works as
+before: it is a STOP entry and both lines end exactly at P_i (section 5.8.7). No extra arc is added through such a point.
 
 Results (script):
-- (0,0),(1,0),(2,0),(2,2): kink at (1,0) is -5.153 deg as a point. Converged in 5 iterations to 1e-12. Kink corner
-  r = 0.25, sweep -5.186 deg, arc length 0.0226 m, waypoint error 0. L = 4.0439.
-- (0,0),(3,0),(3,3),(3,6),(0,6): kink -10.306 deg at (3,3). Converged immediately (symmetric start). r = 0.75,
-  sweep -10.454 deg, L = 12.2744.
-- (0,0),(3,0),(3,2),(3,4),(3,6),(0,6), two straight points: converged in 8 sweeps. Both kink arcs have sweep
-  -5.171 deg. L = 12.1779.
-- Without the iteration (bisector taken from the point-version kink only), the arc in the first case would have
-  to sweep nearly a full circle, so F3 fails and the shrink loop turns the corner into a STOP. With path-ido's
-  sign = 0 handling, the center lands on the leg and the first line has zero length (section 4.1, issue b).
+- (0,0),(2,0),(4,0): one line of 4.0 m; PASS marker at s = 2.0, miss 0, no warning.
+- (0,0),(3,0),(3,3),(3,6),(6,6): (3,3) is set aside; r = 1.5 at both corners; the inner tangent between the two
+  opposite corners passes exactly through (3,3) by symmetry: s(P2) = 6.3395, miss 0, L = 12.6790, no warning.
+- (0,0),(1,0),(2,0),(2,2): the path is that of (0,0),(2,0),(2,2) (r = 1.0, L = 4.2263). The first line heads
+  -14.06 deg and misses (1,0) by 0.2429 m (marker at s = 0.9700): warning W5. With `(1,0).stop()` the point is a STOP
+  and the path passes through it (GEO-28).
+- (0,0),(3,0),(3,3),(3,6),(0,6), two left turns: the middle line is x = 3.4393, so (3,3) is missed by 0.4393 m:
+  warning W5.
 
-**Uncertain:** convergence is shown on these cases only, not proven. The error shrank by a factor between about
-0.01 and 0.5 per sweep. Kink arcs are short and tight (r = 0.25 m), so the speed profile caps v at
-`sqrt(aLat·r)`, for example 1.0 m/s at aLat = 4 m/s^2, for about 2 cm. Prefer events at a distance or a
-fraction over extra waypoints on straight legs (warning W8 says so).
+Prefer events at a fraction or at a turning point over extra points on straight legs (warning W5 says so).
 
 #### 5.8.4 U-turn (tau_turn = 180 deg)
 
@@ -904,8 +885,8 @@ fraction over extra waypoints on straight legs (warning W8 says so).
 
 All epsilons are in section 10. The rationale for each:
 - EPS_DUP = 1 mm is far below pose accuracy (about 1 to 3 cm) and far above rounding.
-- EPS_ANG = 1e-4 rad: a straight waypoint whose kink is below this is missed by at most `d·EPS_ANG/2`, which is
-  0.4 mm on an 8 m leg.
+- EPS_ANG = 1e-4 rad: a middle point that turns by less than this is straight, a PASS marker (section 5.8.3).
+  Treating it as straight moves the leg by at most `d·EPS_ANG/2`, 0.4 mm on an 8 m leg.
 - EPS_LEN = 1e-6 m guards the square root in section 5.4 and zero-length segments.
 - EPS_WRAP = 1e-9 rad is far above rounding (about 1e-15) and far below any real sweep (at least EPS_ANG).
 
@@ -916,9 +897,9 @@ All epsilons are in section 10. The rationale for each:
 - P_i becomes a STOP entry: zero length, `r_i = 0`, sigma ignored. This is the same entry as an automatic stop
   corner or `.withRadius(0)`. It carries a `userStop` flag and the dwell time for the follower. The geometry
   ignores the dwell. `s(P_i) = s_start` of the entry.
-- The check happens before the radius rules. A user stop is never given a radius, never shrunk, never a kink
-  corner and never a PASS point, even when P_i is collinear (tau_turn,i < EPS_ANG) or would kink. The robot is at
-  rest there, so any direction change between the two lines is allowed.
+- The check happens before the radius rules. A user stop is never given a radius, never shrunk and never a PASS
+  marker, even when P_i is collinear (tau_turn,i < EPS_ANG). The robot is at rest there, so any direction change
+  between the two lines is allowed.
 - `.withRadius(r)` with r > 0 on the same point is an **error**: `IllegalArgumentException` from the `Path`
   constructor (V30). `.withRadius(0)` with `.stop()` is allowed (same meaning).
 - Both lines touching P_i are point-to-element tangents (section 5.4 with `r = 0, sigma = 0` at P_i). If the
@@ -949,14 +930,15 @@ The segments are: line 2.5186; arc C = (2.7929, 1.2071), dphi = +111.51 deg, len
 #### 5.9.1 Table layout
 
 For n >= 3 the table has `m = 2n - 3` entries in order line, corner, line, corner, ..., line. The line on leg j is
-segment `2j`, and corner i is segment `2i - 1`. A corner entry is an ARC, a STOP (zero length, the speed profile
-gives v = 0) or a PASS (zero length, no stop). Keeping zero-length entries keeps this index map fixed.
+segment `2j`, and corner i is segment `2i - 1`. A corner entry is an ARC or a STOP (zero length, the speed profile
+gives v = 0). Keeping zero-length STOP entries keeps this index map fixed. Here n counts the points left after
+merging duplicates and setting straight middle points aside (5.8.3).
 
 ```
 segment k: type, s_start,k, l_k, plus
   LINE : A (start point), T (unit direction)                    end = A + l*T
   ARC  : C, r, phi0, dphi (signed), sigma = sign(dphi), s_wp (s of its waypoint)
-  STOP / PASS : point P, T_in, T_out, corner index, userStop flag, dwell
+  STOP : point P, T_in, T_out, corner index, userStop flag, dwell
 s_start,0 = 0;  s_start,k+1 = s_start,k + l_k;  L = s_start,m-1 + l_m-1
 ```
 
@@ -975,7 +957,7 @@ With `q = s - s_start,k`:
 Derivation for the arc: `x = C + r·(cos phi, sin phi)` and `dphi/ds = sigma/r` give `dx/ds = sigma·(-sin phi, cos phi)`,
 which has unit length. `dT/ds = (sigma/r)·rot90(T) = kappa·N`, the Frenet relation with this sign convention.
 `kappa·N = -(x - C)/r^2` always points at the center. theta_T is the direction of travel, not the robot heading;
-the heading is a separate profile (section 6). STOP/PASS: `x = P`; T, N and kappa come from the next
+the heading is a separate profile (section 6). STOP: `x = P`; T, N and kappa come from the next
 segment (right limits, section 5.9.3).
 
 Worked example on the shared example (script, s = 3.0 checked by hand):
@@ -1008,8 +990,9 @@ STOP entries both evaluations agree because the path is G1.
 
 These s values are needed by the heading profile, `withVelocity`, stops and events.
 - `s(P_0) = 0` and `s(P_{n-1}) = L`.
-- ARC corner (including kink corners): `s_wp = s_start + r·w_in` (section 5.5).
-- STOP and PASS: `s_start` of the zero-length entry.
+- ARC corner: `s_wp = s_start + r·w_in` (section 5.5).
+- STOP: `s_start` of the zero-length entry.
+- PASS marker: the s of the closest path point (section 5.8.3).
 - Merged duplicates: the s of the kept point.
 
 Example: s(P1) = 2.9885 (script). It is the midpoint of the arc here only because the corner is symmetric;
@@ -1017,8 +1000,8 @@ in general it is not.
 
 #### 5.9.5 Events: fraction and point index to s
 
-Events are converted to s when they are added to the `Path` (section 9.7):
-- distance: `s_event = s` as given, in [0, L];
+Events are converted to s when they are added to the `Path` (section 9.7). There are two kinds (**Decision**, user,
+simplification pass):
 - fraction f in [0, 1]: `s_event = f·L`;
 - point index i (the user's index, before merging): `s_event = s(P_i)` from section 5.9.4; a merged point maps to
   the kept point.
@@ -1070,7 +1053,7 @@ Examples on the shared arc (sigma = -1, phi0 = 149.06 deg, abs(dphi) = 118.12 de
   by 103.4 deg, so clamp to the start (q = 0). The windowed search then picks line 0 if it is nearer.
 - p = C = (3, 2.5858) with s_prev = 2.5: `s* = 2.5`, `e_n = sigma·r = -1.4142`, no NaN.
 
-#### 5.10.3 STOP / PASS entries
+#### 5.10.3 STOP entries
 
 Distance to the point P, with `s* = s_start`. These never beat the neighboring lines, which end at the same point,
 so they matter only for tie-breaking.
@@ -1094,9 +1077,6 @@ project(p, sMin, sMax, s_prev):
   away; the follower would think it had finished. The follower's window [1.97, 2.15] (eps_back 0.03, ahead 0.15)
   returns s* = 1.9723 on the first leg, with e_n = +0.3352 (script).
 - e_t is computed by the follower (section 8.2.3); it is non-zero when the result is clamped at a window edge.
-- Optional build-time check (warning W9): sample the path every 0.05 m and warn if two samples with
-  `abs(s1 - s2) > 2·ahead_max = 1.0 m` are closer than 0.3 m. The window then still keeps s* local, but a start
-  or a large pose jump near such a place deserves attention.
 - e_n sign: `+` means the robot is left of the path. In the velocity command `V = v_t·T + c·N` with
   `c = -k_n·e_n`, a positive e_n pushes the robot right, back toward the path.
 
@@ -1154,7 +1134,7 @@ and e_n late on the arc:
 about `a_lat·0.05/k_n`, for example `2.83·0.05/3 = 0.047 m`. Clothoids do not remove it; the follower's lookahead
 does (section 8.3.4). Clothoids matter when the robot is pushed near its limits (the last row), which the aLat cap
 is meant to prevent. This supports G1 in v1. The v1 speed law limits only the tangential jerk; the **vector** jerk of the command at
-line/arc joints (100 to 325 m/s^3 in the plant simulation, section 7.13.8) is not limited, and clothoids are the v2 fix for it. The toy model is not a swerve model (no module steering, no limiter).
+line/arc joints (110 to 320 m/s^3 in the plant simulation, section 7.13.8) is not limited, and clothoids are the v2 fix for it. The toy model is not a swerve model (no module steering, no limiter).
 **Uncertain** how closely it matches the robot.
 
 #### 5.12.2 Options
@@ -1217,11 +1197,11 @@ large but dE is small, the fix is in the follower (tau_lag), not in the geometry
 
 ### 5.13 Alliance flip of the geometry
 
-Field length FL and width FW come from `FieldDimensions` (section 9.9), never hardcoded. **Fact** (RobotPose.java:94-95):
+Field length FL and width FW are fields of `PathFollowerConfig` (section 9.6), never hardcoded. **Fact** (RobotPose.java:94-95):
 the pose code reads them from `AprilTagFieldLayout.loadField(AprilTagFields.kDefaultField)`. **Recommendation:**
-`FieldDimensions.fromDefaultField()` uses the same source by default. Examples in this document use the placeholder
+`PathFollowerConfig.defaults()` uses the same source. Examples in this document use the placeholder
 pair **FL = 16.54 m, FW = 8.07 m**; verify against the official field layout of the season. The mode is one enum,
-`FlipMode` NONE / MIRROR / ROTATE, default ROTATE (section 9.9).
+`FlipMode` NONE / MIRROR / ROTATE, default ROTATE (sections 9.6, 9.9).
 
 | | MIRROR (about x = FL/2) | ROTATE (180 deg about the field center) |
 |---|---|---|
@@ -1235,16 +1215,14 @@ pair **FL = 16.54 m, FW = 8.07 m**; verify against the official field layout of 
 | left normal N | **recomputed** as `rot90(T')` from the flipped geometry, never transformed as a vector (a mirrored N would flip e_n and push the robot away from the path) | recomputed the same way (equals -N) |
 | s table, lengths, L, waypoint s, events | unchanged | unchanged |
 | face-target point | transformed as a point | transformed as a point |
-| face-target offset phi_off | `-phi_off` | unchanged |
 
 Why: both maps are isometries, so all lengths and s values are kept. A mirror reverses orientation, so CCW becomes
-CW and every sign of turn flips. A rotation keeps orientation. The offset rule follows from
-`pi - (atan2(pT) + phi_off) = atan2(mirrored pT) - phi_off` (hand).
+CW and every sign of turn flips. A rotation keeps orientation.
 
 **Recommendation:** build the geometry once in the blue frame, then transform the built segment table. Do not flip
 the waypoints and rebuild. The construction is equivariant under both maps, except for tie-breaks that are not
 mirror-symmetric: the U-turn default sigma = +1, and the order of shrink passes. Flipping the built table guarantees
-an exact mirror image with identical s values. It is O(m), memoized in the `Path` (`path.flipped(flipConfig)`,
+an exact mirror image with identical s values. It is O(m), memoized in the `Path` (`path.flipped(config)`,
 section 9.4), and runs in the follow command's `initialize()`, once the alliance is known.
 
 Worked example (placeholder FL = 16.54, FW = 8.07) (script):
@@ -1267,36 +1245,38 @@ Worked example (placeholder FL = 16.54, FW = 8.07) (script):
 | Distance to arc | `abs(p - C) - r`, positive outside (CircleSegmant.java:21-23) | `e_n = sigma·(r - abs(vC))`, positive = left of the path | ours is signed by side |
 | Distance to line | unsigned distance to the infinite line (LineSegmant.java:14-21) | signed e_n, projection clamped to the segment | ours is signed and segment-bounded |
 | Remaining distance on a line | Euclidean distance to the end (LineSegmant.java:24-26) | s-based, L - s* | ours is projected |
-| Collinear points | sign 0: center on the leg, zero-length first line (Path.java:51) | PASS point or kink corner (5.8.3) | **disagree** |
+| Collinear points | sign 0: center on the leg, zero-length first line (Path.java:51) | PASS marker, set aside before building (5.8.3) | **disagree** |
 | Duplicates | no check; divides by zero (Path.java:50) | merged at 1 mm | **disagree** |
 | n = 2 | single line (Path.java:65-67) | single line | same |
-| Segment order | line, arc, ..., line, `2n-3` entries (Path.java:70) | same, plus zero-length STOP/PASS entries in corner slots | same index map |
+| Segment order | line, arc, ..., line, `2n-3` entries (Path.java:70) | same, plus zero-length STOP entries in corner slots | same index map |
 
 ### 5.15 Pseudocode
 
 ```
-build(points, cfg) -> SegmentTable                                  // in the Path constructor, blue frame
-    P = mergeDuplicates(points, EPS_DUP)                            // warning W3
+build(points) -> SegmentTable                                        // in the Path constructor, blue frame
+    P = mergeDuplicates(points, EPS_DUP)                             // warning W3
     if |P| == 1: throw V6
     validate stop + withRadius(r > 0) -> throw V30
-    if |P| == 2: return [LINE(P0, P1)]
-    for i in 1..n-2:
-        compute tau_turn,i, sigma_i, b_i                            (5.3)
-        kind_i = USER_STOP if P_i.isStop() else (STRAIGHT if tau_turn,i < EPS_ANG else CORNER)
-        if CORNER and tau_turn,i > pi - EPS_ANG: sigma_i = neighborSign(i) or +1;  b_i = -u_in
-        r_i = initialRadius(i)                                      (5.7.2, 5.7.3; USER_STOP: 0; STRAIGHT: no bulge term)
-    repeat up to MAX_ITER:
-        for STRAIGHT i: decide PASS or kink corner, run kink fixed point (5.8.3)
-        lines = [tangent(elem j, elem j+1) for j in 0..n-2]          (5.4; r = 0 elements are points)
-        arcs  = [sweep(i) for corners with r_i > 0]                  (5.5)
-        bad = failing(F1, F2, F3)
-        if bad empty: break
-        shrink(bad)                                                  (automatic corners first; never a user stop)
-    return table(lines, arcs, STOP/PASS entries) with s_start, l, s_wp, userStop, dwell
+    passPoints = middle points with tau_turn < EPS_ANG that are not user stops; remove them from P    (5.8.3)
+    if |P| == 2: table = [LINE(P0, P1)]
+    else:
+        for i in 1..n-2:
+            compute tau_turn,i, sigma_i, b_i                         (5.3)
+            if not USER_STOP and tau_turn,i > pi - EPS_ANG: sigma_i = neighborSign(i) or +1;  b_i = -u_in
+            r_i = initialRadius(i)                                   (5.7.2, 5.7.3; USER_STOP: 0)
+        repeat up to MAX_ITER:
+            lines = [tangent(elem j, elem j+1) for j in 0..n-2]       (5.4; r = 0 elements are points)
+            arcs  = [sweep(i) for corners with r_i > 0]               (5.5)
+            bad = failing(F1, F2, F3)
+            if bad empty: break
+            shrink(bad)                                               (automatic corners first; never a user stop)
+        table = (lines, arcs, STOP entries) with s_start, l, s_wp, userStop, dwell
+    for P_i in passPoints: s(P_i) = closest s on the table; warning W5 if the miss > PASS_TOL     (5.8.3)
+    return table
 
 evaluate(table, s) -> (x, T, N, kappa, theta_T)                      (5.9.2, 5.9.3; evaluateLeft for left limits)
 project(table, p, sMin, sMax, s_prev) -> (s*, e_n)                   (5.10)
-flipped(table, flipConfig) -> table                                  (5.13, memoized in Path)
+flipped(table, mode, FL, FW) -> table                                (5.13, memoized in Path)
 ```
 
 Tests: section 13.1.
@@ -1312,15 +1292,15 @@ the measured heading.
 
 (**Decision**, brief decision 4 and integration resolution R1.)
 - **Anchors** are the waypoints that have `withAngle`. Each anchor fixes theta at its s.
-- **Before the first anchor:** theta is linear in s from the measured start heading theta0 at the start
-  progress (s = 0, or s0 for a mid-path start, section 6.8) to the first anchor.
+- **Before the first anchor:** theta is linear in s from the measured start heading theta0 at s = 0 (section 6.8)
+  to the first anchor.
 - **Between anchors:** theta is linear in s, turning the short way (at most 180 deg per interval).
 - **After the last anchor:** theta holds the last anchor's angle.
 - **No anchor at all:** theta holds theta0 for the whole path.
 - theta(s) is **continuous** everywhere. There are no steps. At a stop point the ROTATE state only corrects a
   residual heading error of more than 3 deg (section 6.7).
 - **Face-target mode** (section 6.9) replaces the anchors. If both are given, the anchors are ignored, with
-  warning W10.
+  warning W4.
 
 Why linear in s and not a smooth curve: the speed caps that come from the heading (rotation cap, alpha limits,
 wheel-speed cap) are constant on a span only if theta' is constant there (section 7.3.2). With linear pieces,
@@ -1329,8 +1309,8 @@ spans and would need sub-spans, as face-target mode does (**Inference**).
 
 ### 6.2 Anchors and their s
 
-- The anchor of waypoint P_a sits at `s_a = s(P_a)` (section 5.9.4): inside its arc for a corner, at the STOP or
-  PASS entry, at 0 for P_0 and at L for P_{n-1}.
+- The anchor of waypoint P_a sits at `s_a = s(P_a)` (section 5.9.4): inside its arc for a corner, at the STOP entry
+  or the PASS marker, at 0 for P_0 and at L for P_{n-1}.
 - P_0 with an angle is an anchor at s = 0. Then theta(0) is that angle, not theta0. If the robot's measured heading
   differs, that is a tracking error, which the heading feedback removes while the robot drives (section 8.5.2;
   simulated: a 30 deg error is within 2 deg after 0.50 s at k_theta = 4). theta(s) itself has no step.
@@ -1341,13 +1321,11 @@ spans and would need sub-spans, as face-target mode does (**Inference**).
 
 ```
 shortTurn(d) = angleModulus(d);   if abs(d) > pi - 1e-9: d = +pi           (exact half turn: CCW)
-pts = [(s_start, theta_start)]
-      theta_start = angle of an anchor at s_start if there is one, else theta0 (measured, radians)
-for each anchor (s_a, theta_a) with s_a > s_start, in increasing s:
+pts = [(0, theta_start)]
+      theta_start = angle of P_0 if it has withAngle, else theta0 (measured, radians)
+for each anchor (s_a, theta_a) with s_a > 0, in increasing s:
     th_prev = last unwrapped value in pts
     pts.append( (s_a, th_prev + shortTurn(theta_a - th_prev)) )             (stored unwrapped)
-if no anchor has s_a > s_start and some anchor has s_a <= s_start:
-    pts = [(s_start, last such anchor's angle)]                             (hold, section 6.8)
 theta(s)  = linear interpolation in pts; held after the last point
 theta'(s) = (th_b - th_a)/(s_b - s_a) on [s_a, s_b];  0 after the last point
 ```
@@ -1364,8 +1342,8 @@ theta'(s) = (th_b - th_a)/(s_b - s_a) on [s_a, s_b];  0 after the last point
 ### 6.4 theta' per span
 
 The speed profile splits the path into spans (section 7.3.1). Every anchor is a waypoint, and every waypoint s is a
-span boundary, so each span lies inside one linear piece of theta and has a constant `theta'[k]`. The start progress
-s_start is also the first boundary of the profile. The table field `dtheta[k]` of the profile (section 7.1) is this
+span boundary, so each span lies inside one linear piece of theta and has a constant `theta'[k]`. s = 0 is also the
+first boundary of the profile. The table field `dtheta[k]` of the profile (section 7.1) is this
 value.
 
 ### 6.5 Omega feed-forward
@@ -1414,39 +1392,38 @@ feedback term.
 - The heading-kink cap is skipped at a stop, because v = 0 there and omega_ff is already 0.
 - A deliberate turn in place at a stop (a heading step) is not part of v1 (section 11).
 
-### 6.8 Mid-path start
+### 6.8 Start heading
 
-The follower supports a start at s0 > 0 (section 8.2.5). The heading profile then starts at s_start = s0 with the
-measured theta0, linear to the first anchor with `s_a > s0`. Anchors with `s_a <= s0` are ignored, except that if
-no anchor lies ahead, theta holds the last anchor before s0 (the "hold after the last anchor" rule)
-(**Recommendation**). Example (hand): robot at s0 = 1.0 on the shared example with measured heading 10 deg:
-theta goes from 10 deg at s = 1.0 to 90 deg at 2.9885, `theta' = 1.3963/1.9885 = 0.7022 rad/m`.
+The heading profile always starts at s = 0 with the robot's measured heading theta0, or with P_0's angle if P_0 has
+`withAngle` (**Decision**, user, simplification pass: no mid-path start; the robot starts within 0.5 m of P0,
+section 8.2.5). There is no rule for anchors behind the robot. Example (hand): shared example, measured heading 10 deg:
+theta goes from 10 deg at s = 0 to 90 deg at 2.9885, `theta' = 1.3963/2.9885 = 0.4672 rad/m`.
 
 ### 6.9 Face-target mode
 
-The follower's version is final (resolution R1): the reference is computed from the **robot position**, with an
-offset, and freezes near the target.
+The follower's version is final (resolution R1): the reference is computed from the **robot position** and freezes
+near the target. The robot's front faces the target (**Decision**, user, simplification pass).
 
 ```
 pT        = target - p
-theta_ref = atan2(pT.y, pT.x) + phi_off
+theta_ref = atan2(pT.y, pT.x)
 omega_ff  = (pT.y*V.x - pT.x*V.y) / abs(pT)^2        (V = this loop's field velocity command)
 if abs(pT) < r_face_min (0.5 m): theta_ref = last value, omega_ff = 0       (freeze)
-finish heading theta_end = atan2(target - P_end) + phi_off   (the frozen value if P_end is inside r_face_min)
+finish heading theta_end = atan2(target - P_end)     (the frozen value if P_end is inside r_face_min)
 ```
 
 Derivation (section 8.5.3): `theta = atan2(pT)` and `d(pT)/dt = -dp/dt`, so
 `dtheta/dt = (pT.y·dp_x - pT.x·dp_y)/abs(pT)^2`; the command V stands for dp/dt.
 
 Speed caps in face-target mode. The profile predicts the robot on the path, so it uses
-`theta_FT(s) = atan2(target - x(s)) + phi_off`, with the same freeze:
+`theta_FT(s) = atan2(target - x(s))`, with the same freeze:
 
 ```
 theta'_FT(s) = (pT.y*T.x - pT.x*T.y) / abs(pT)^2      with pT = target - x(s)      (0 inside r_face_min)
 ```
 
-The offset is a constant, so it does not change theta'. theta'_FT varies continuously, so the profile uses
-sub-spans of FT_SPAN = 0.10 m (section 7.3.1) with conservative caps:
+theta'_FT varies continuously, so the profile uses sub-spans of FT_SPAN = 0.10 m (section 7.3.1) with conservative
+caps:
 - theta'_max and theta''_max = the largest abs values on the sub-span (at its ends and at the closest approach to the
   target, if inside it);
 - `vCap <= omegaMax/theta'_max`, `vCap <= sqrt(0.5·alphaMax/theta''_max)`, `aA, aD <= 0.5·alphaMax/theta'_max`
@@ -1458,7 +1435,7 @@ Example (hand, script): a straight path passing 1.0 m from the target. theta'_ma
 2·pi/1.0 = 6.28 m/s, not binding); theta''_max = (3·sqrt(3)/8)/1.0^2 = 0.6495 rad/m^2, so
 `vCap <= sqrt(0.5·4·pi/0.6495) = 3.110 m/s` near the target, and `aA, aD <= 6.28 m/s^2`. A path passing exactly at
 r_face_min = 0.5 m reaches theta' = 2 rad/m at the freeze boundary, where the kink cap is
-`sqrt(2·4·pi·0.0873)/2 = 0.740 m/s`. Warning W11 tells the user when the path passes within r_face_min.
+`sqrt(2·4·pi·0.0873)/2 = 0.740 m/s`. There is no warning for this; the heading simply freezes there.
 
 ### 6.10 Alliance flip of headings
 
@@ -1494,14 +1471,15 @@ Caps from the heading:
   `1.2501^2/(2·4·pi) = 0.0622 rad = 3.56 deg <= 5 deg`.
 - Wheel cap with R_mod = 0.3889 m: `4.05/(1 + 0.5256·0.3889) = 3.363 m/s`, above the 2.7241 peak.
 - Result: the trapezoid profile time (no jerk limit) is 3.2723 s, the same as with no heading (script); no heading cap binds, so the
-  v1 run time (3.52 s with the jerk law) is unchanged as well.
+  v1 run time (3.54 s with the jerk law) is unchanged as well.
 
 Variants (script):
 - **P1 at 180 deg.** The change is exactly 180 deg, so it turns CCW (+pi). theta' = pi/2.9885 = 1.0512 rad/m; the
-  kink cap at P1 is `1.481/1.0512 = 1.4088 m/s` and binds; both arc spans become ARC_SHARED (section 7.8). Profile time
-  **3.5780 s** with the span method; the grid oracle gives 3.4372 s (section 7.16).
+  kink cap at P1 is `1.481/1.0512 = 1.4088 m/s` and binds, so the whole arc is driven at 1.4088 m/s (section 7.8).
+  Trapezoid profile time **4.2812 s** with the span method (v1 time with the jerk law 4.54 s); the grid oracle, which
+  may change speed on the arc, gives 3.4372 s (Appendix B).
 - **P1.stop().** theta' = (pi/2)/2.8284 = 0.5554 rad/m on [0, 2.8284], 0 after. The robot reaches 90 deg exactly at
-  the stop; ROTATE is skipped unless the residual is more than 3 deg. Profile unchanged (trapezoid 4.0148 s; jerk law 4.32 s + 0.13 s steer).
+  the stop; ROTATE is skipped unless the residual is more than 3 deg. Profile unchanged (trapezoid 3.8839 s; jerk law 4.32 s).
 - **P0.withAngle(0)** gives the same profile as the measured theta0 = 0.
 
 ### 6.12 Edge cases
@@ -1511,17 +1489,17 @@ Variants (script):
   over 0.1 m gives theta' = 31.4 rad/m and `vCap = 2·pi/31.4 = 0.2 m/s`. That is correct physics.
 - theta' at s = 0 with v0 > 0: omega_ff starts at `theta'·v0` while the robot rotates at its measured omega; the omega
   rate limit (initialized from the measured omega, section 8.14) smooths it.
-- Face target and anchors both set: anchors ignored, W10.
+- Face target and anchors both set: anchors ignored, W4.
 - Short path (L < L_short): the follower goes straight to CAPTURE_END with theta_end = theta(L).
 
 ### 6.13 Pseudocode
 
 ```
-buildHeading(path(flipped), theta0, s_start, faceTarget?) -> HeadingProfile
-    if faceTarget: return FaceTargetHeading(target, phi_off, r_face_min)          // 6.9; sub-span caps in 7.3.1
+buildHeading(path(flipped), theta0, faceTarget?) -> HeadingProfile
+    if faceTarget: return FaceTargetHeading(target, R_FACE_MIN)                   // 6.9; sub-span caps in 7.3.1
     anchors = [(s(P_a), angle(P_a)) for waypoints with withAngle], sorted by s
     pts = points of section 6.3 (unwrapped, shortTurn per interval)
-    return PiecewiseLinear(pts)          // theta(s), theta'(s) on [s_start, L], held after the last point
+    return PiecewiseLinear(pts)          // theta(s), theta'(s) on [0, L], held after the last point
 
 runtime (each loop):
     theta_ref = theta(s*);  omega_ff = theta'(s*) * v_t                          // 8.5.1
@@ -1547,14 +1525,14 @@ speeding up, holding and braking, testing whether it can still reach every upcom
 D. Its limits are this profile's junction speeds vB, span caps vCap and decelerations aD.
 
 The profile is built once, in the follow command's `initialize()`, after the flip and the heading profile, because
-it needs the measured start speed, heading and progress. It is a short table, one row per span:
+it needs the measured start speed and heading. It is a short table, one row per span:
 
 | Field (span k) | Meaning | Unit |
 |---|---|---|
-| `s0[k]`, `l[k]` | start and length of the span | m |
+| `sStart[k]`, `l[k]` | start and length of the span | m |
 | `kappa[k]` | curvature (constant on the span) | 1/m |
 | `dtheta[k]` | heading slope theta' (constant on the span, section 6.4) | rad/m |
-| `mode[k]` | LINE, ARC_FULL or ARC_SHARED (section 7.8) | |
+| `kind[k]` | LINE or ARC; an ARC span has aA = aD = 0 (constant speed, section 7.8) | |
 | `vCap[k]` | span cap: highest allowed speed on the span | m/s |
 | `aA[k]`, `aD[k]` | speed-up limit at rest, slow-down limit | m/s^2 |
 | `vB[j]` | junction speed after the backward pass (j = 0..K) | m/s |
@@ -1624,20 +1602,19 @@ Notes:
 
 The record keeps its fields (brief decisions 6 and 18). Two optional inputs go to the command (section 9.10):
 - the `KinematicsConfig` (`withKinematics`): `maxForwardAccel` and `freeSpeed` (motor curve), `maxAllowedModuleVelocity`
-  (wheel cap), `maxSkidAccel` (overspeed check), `maxSteerRate` (steer time at stops);
+  (wheel cap), and the limiter limits for warning C2;
 - the `PathsConfig` (`withPathsConfig`), whose `moduleRadius` is R_mod: the largest distance from the robot center to a module.
   `DemaciaKinematics` keeps the module positions private with no getter (DemaciaKinematics.java:58, :66), so the user
   computes R_mod from the same module locations.
 
-If the config is missing, the motor-curve cap and the overspeed check are skipped, and the steer time uses
-`new KinematicsConfig().maxSteerRate` (12 rad/s). If R_mod is 0 or missing, the wheel-speed cap is skipped.
+If the config is missing, the motor-curve cap is skipped. If R_mod is 0 or missing, the wheel-speed cap is skipped.
 `DemaciaKinematics.desaturate` and the limiter still protect the hardware.
 
 #### 7.2.3 Edge cases
 
 - A per-path override above the config-derived value (e.g. `aLat = 10` with `maxSkidAccel = 8`): allowed, warning C2.
   The limiter clips it, and the robot falls behind the profile time.
-- `vMax > maxAllowedModuleVelocity`: the robot can never reach it. Warning C3; the wheel cap clamps the effective cap
+- `vMax > maxAllowedModuleVelocity`: the robot can never reach it. Warning C2; the wheel cap clamps the effective cap
   to `0.9·maxAllowedModuleVelocity`.
 
 ### 7.3 Spans
@@ -1645,10 +1622,10 @@ If the config is missing, the motor-curve cap and the overspeed check are skippe
 #### 7.3.1 Span boundaries
 
 A span is an interval of s with no boundary inside it. Collect the boundaries:
-1. {s_start, L}, where s_start = 0, or s0 for a mid-path start (section 8.2.5); the profile covers [s_start, L];
-2. the start of every segment, s_start,k (section 5.9.1). STOP and PASS entries have length 0, so they add only their s;
-3. the s of every waypoint P_i (section 5.9.4). A middle waypoint with an arc lies inside its arc (at the midpoint
-   only for a symmetric corner), so this splits the arc;
+1. {0, L}; the profile covers [0, L] (there is no mid-path start, section 8.2.5);
+2. the start of every segment, s_start,k (section 5.9.1). STOP entries have length 0, so they add only their s;
+3. the s of every waypoint P_i (section 5.9.4), PASS markers included. A middle waypoint with an arc lies inside its
+   arc (at the midpoint only for a symmetric corner), so this splits the arc;
 4. every stop point: automatic STOP corners (section 5.7.3) and user stops (section 5.8.7);
 5. (face-target mode only) sub-span boundaries every FT_SPAN = 0.10 m (section 6.9);
 6. (v2) the ends of speed zones.
@@ -1674,7 +1651,8 @@ curve to the exit): a trapezoid in the v^2 against s picture. The grid method co
 sample; on the shared example both give 3.2723 s (script).
 
 Exceptions, where speed-dependent limits make a pure trapezoid inexact:
-- speed changes on an arc: the traction ellipse makes the arc's speed-up limit depend on v (section 7.8);
+- arcs: the traction ellipse makes the speed-change limit on an arc depend on v; v1 avoids this by driving every arc
+  at constant speed (section 7.8);
 - speed-up above the motor-curve knee, handled in closed form (section 7.9);
 - face-target heading: theta' changes continuously, handled by sub-spans with conservative caps (section 6.9);
 - v2 clothoids: kappa changes linearly, handled by sub-spans.
@@ -1683,7 +1661,7 @@ Exceptions, where speed-dependent limits make a pure trapezoid inexact:
 
 Shared example, geometry of section 5.11, heading of section 6.11 (script):
 
-| k | Kind | s0 | l | kappa | theta' |
+| k | Kind | start | l | kappa | theta' |
 |---|---|---|---|---|---|
 | 0 | line 0 | 0.0000 | 1.5307 | 0 | 0.5256 |
 | 1 | arc, entry to P1 | 1.5307 | 1.4578 | -0.7071 | 0.5256 |
@@ -1699,7 +1677,7 @@ Spans k = 0..K-1, junctions j = 0..K. Junction j is the start of span j; junctio
 
 ```
 span cap      vCap[k] = min( vMax,
-                             curvature cap (mode-dependent, section 7.8),
+                             sqrt(aLat/abs(kappa[k]))                     (on an arc, section 7.4.3),
                              omegaMax/abs(theta'[k])                      (if theta'[k] != 0),
                              0.9*vWheelMax/(1 + abs(theta'[k])*R_mod)     (if R_mod known) )
 junction cap  J[j]    = min( vCap[j-1], vCap[j],                          (the spans on both sides)
@@ -1709,27 +1687,30 @@ junction cap  J[j]    = min( vCap[j-1], vCap[j],                          (the s
               J[first junction of a sub-profile after a stop] uses the normal caps, NOT 0     (section 7.10.2)
 ```
 
+On an arc span aA = aD = 0, so the junction passes give all junctions of one arc the same speed (section 7.8).
+
 #### 7.4.1 vMax
 
 `vCap[k] <= vMax`. Example: vMax = 4 gives vCap = 4 on both lines of the shared example.
 
 #### 7.4.2 withVelocity (point cap at a junction)
 
-**Decision** (**Recommendation**, kept by the integration): the cap applies at the waypoint's single s value only. It
-means "pass this point no faster than v_w". The backward pass brakes before the point and the forward pass speeds up
-after it, so the robot never cruises at v_w. Reasons: the waypoint's s is exact (decision 1), and a neighborhood would
-need a length nobody specified; ranges are v2 speed zones (decision 5).
+**Decision** (**Recommendation**, kept by the integration; the arc case changed in the simplification pass): the cap
+applies at the waypoint's single s value. On a straight part (a PASS marker, section 5.8.3) it means "pass this point
+no faster than v_w": the backward pass brakes before the point and the forward pass speeds up after it, so the robot
+never cruises at v_w. On a corner the point lies on an arc, and every arc is driven at constant speed (section 7.8),
+so **the whole arc** is driven at no more than v_w. Ranges are v2 speed zones (decision 5).
 
 Rules:
 - `withVelocity(0)` means `stop()` (decision 15). `withVelocity(v)` with v < 0 throws (V11).
 - `P_0.withVelocity(v)`: ignored, warning W4. The start speed is the measured speed.
-- `P_{n-1}.withVelocity(v)`: ignored in v1, warning W5 (the end speed is 0). In v2 it becomes the end speed (section 7.4.7).
-- A value above vMax has no effect (warning C3).
+- `P_{n-1}.withVelocity(v)`: ignored in v1, warning W4 (the end speed is 0). In v2 it becomes the end speed (section 7.4.7).
+- A value above vMax has no effect (warning C2).
 
-Example: `P1.withVelocity(1.0)` on the shared example sets J[2] = 1.0. Both arc spans must change speed, so they become
-ARC_SHARED (cap 2.1273, aA = aD = 1.8). Junctions [0, 2.1273, 1.0, 2.1273, 0]; braking for P1 starts on the arc at
-`s = 2.9885 - (2.1273^2 - 1.0^2)/(2·1.8) = 2.0092 m`; profile time **3.7751 s** (script). The grid oracle with the exact
-ellipse gives 3.5770 s (section 7.8).
+Example: `P1.withVelocity(1.0)` on the shared example sets J[2] = 1.0. With aA = aD = 0 on the arc the passes carry it
+over the whole arc: junctions vF = [0, 1.0, 1.0, 1.0, 0]. Braking for the arc entry starts on line 0 at s = 0.8487 m
+(peak 2.2566 m/s); trapezoid profile time **5.2576 s** (script), v1 time 5.52 s with the jerk law. The grid oracle
+with the exact ellipse, which may change speed on the arc, gives 3.5770 s (Appendix B).
 
 #### 7.4.3 Curvature cap
 
@@ -1739,8 +1720,7 @@ v <= sqrt(aLat / abs(kappa))        (no cap if kappa = 0)
 
 Derivation: lateral acceleration on a curve is `a_n = v^2·abs(kappa)`; `a_n <= aLat` gives the formula.
 Examples: r = 1.4142 m, aLat = 4 gives `sqrt(4·1.4142) = 2.3784 m/s`; aLat = 7.2 (DEF) gives 3.191 m/s; r = 0.3 m,
-aLat = 4 gives 1.0954 m/s. In ARC_SHARED mode the cap uses `rho·aLat`: r = 1.4142, rho = 0.8 gives
-`sqrt(0.8·4·1.4142) = 2.1273 m/s`.
+aLat = 4 gives 1.0954 m/s.
 
 #### 7.4.4 Rotation cap
 
@@ -1755,7 +1735,8 @@ robot must slow down to turn in time.
 #### 7.4.6 Heading-kink cap (alpha)
 
 At a junction where theta' changes by dtheta': `J <= sqrt(2·alphaMax·e_allow)/abs(dtheta')` (derivation in section 6.6).
-Skipped at stop points (v = 0). Example: shared example, P1: 2.818 m/s (not binding); P1 at 180 deg: 1.4088 m/s (binding).
+Skipped at stop points (v = 0). Example: shared example, P1: 2.818 m/s (not binding); P1 at 180 deg: 1.4088 m/s (binding:
+the whole arc is driven at it, section 7.8).
 
 #### 7.4.7 End speed
 
@@ -1800,6 +1781,7 @@ v_end^2 = v_start^2 + 2*a*l          (exact for constant a)
 ```
 J[j] = junction caps (section 7.4);  vB = copy(J)
 backward:  for j = K-1 down to 0:  vB[j] = min(vB[j], sqrt(vB[j+1]^2 + 2*aD[j]*l[j]))
+                                   if span j is a line that starts at an arc exit: vB[j] = min(vB[j], vJerk(j))   (section 7.8)
 forward:   vF = copy(vB);  vF[0] = min(vF[0], v0)
            for j = 1 .. K:         vF[j] = min(vF[j], F_{j-1}(vF[j-1], l[j-1]))
 ```
@@ -1811,7 +1793,7 @@ One backward pass followed by one forward pass is enough (**Inference**): the fo
 lower vF[j] makes `vF[j] <= sqrt(vF[j+1]^2 + 2·aD·l)` easier to meet, so it cannot break a braking constraint.
 Cost: O(K), with K typically 4 to 20 (a 20 m grid needs about 1000 samples).
 
-Worked example (shared example, EX, ARC_FULL on both arc spans so aA = aD = 0 there) (hand, script):
+Worked example (shared example, EX; aA = aD = 0 on both arc spans, section 7.8) (hand, script):
 
 | j | J (cap) | vB (backward) | vF (forward, v0 = 0) |
 |---|---|---|---|
@@ -1839,8 +1821,8 @@ must end at 0 with aDec = 3.
 
 ```
 V_meas  = measured field velocity (vx, vy) at initialize()
-v0_par  = V_meas·T(s0)          (component along the path)
-v0_perp = V_meas·N(s0)          (component across the path, + = moving left)
+v0_par  = V_meas·T(0)           (component along the path)
+v0_perp = V_meas·N(0)           (component across the path, + = moving left)
 v0      = max(0, v0_par)
 ```
 
@@ -1864,31 +1846,27 @@ the speed-up in time, at run time:
 ```
 v_cmd[k] = min( vBack(s*_k), v_cmd[k-1] + aAccEff(v_cmd[k-1], s*_k) * dt )
 v_cmd[-1] = v0                                       (dt measured by the follower, nominal 0.02 s)
-aAccEff(v, s) = min( aAcc*sqrt(max(0, 1 - (v^2*abs(kappa(s))/aLat)^2)),       (traction ellipse, exact)
+aAccEff(v, s) = 0 on an arc (no speed-up on an arc, section 7.8); on a line:
+                min( aAcc,
                      alphaMax/abs(theta'(s))                                  (if theta' != 0),
                      0.9*maxForwardAccel*max(0, 1 - v/freeSpeed) )            (motor curve, if the config is given)
 ```
 
 - `dv/dt = a` in time is the same constraint as `v·dv/ds = a` in s. If the robot tracks, it moves exactly along vProf.
 - Braking stays tied to position (vBack(s*)), so stops and corners are safe even if the robot falls behind.
-- The ramp uses the **exact** aAccEff, not the span's constant aA. On an ARC_FULL span (aA = 0), a robot below the cap
-  can still speed up, up to vBack <= vCap.
+- The ramp uses the motor curve exactly, not the span's constant aA. On an arc it holds the speed the robot had at the
+  arc entry.
 - The follower adds the lag lead and the hand-over point on top (section 8.3.7).
 
 Example (no jerk limit): from rest with aAcc = 3, the commands are 0.06, 0.12, 0.18 m/s in successive loops, until they meet
 vBack. With the v1 law and jerkMax = 50 they are 0.01, 0.04, 0.09, 0.15 m/s (section 7.13.4).
 
-#### 7.6.6 Initial overspeed
+#### 7.6.6 Start faster than the envelope: no check
 
-Case v0 > vBack(s0): the robot is already too fast to brake for something ahead.
-- vProf(s0) = vBack(s0) < v0. The runtime command is vBack(s*), so the robot is told to slow down at once. The limiter
-  brakes at up to maxSkidAccel, more than aDec because of the 0.9 margin.
-- Feasibility check at build time: run the backward pass again with `a_hard = maxSkidAccel` (8 m/s^2 by default) on every
-  span. If `v0 > vHard(s0)`, the robot **cannot** meet the caps: warning C4 "initial overspeed: start infeasible". It
-  will be over the curvature cap for a while and the cross-track error grows. Do not throw; the robot must still drive.
-- Example: v0 = 3.0 m/s, an arc with cap 1.5 m/s starts 0.5 m ahead, aDec = 3. `vBack(0) = sqrt(1.5^2 + 2·3·0.5) = 2.291 < 3.0`:
-  overspeed. `vHard(0) = sqrt(2.25 + 2·8·0.5) = 3.20 >= 3.0`: recoverable with the limiter's extra braking, no warning from this
-  jerk-free check. The v1 check includes the jerk ramp-in and does warn for this case (section 7.13.9).
+**Decision** (user, simplification pass): there is no start-speed check and no warning for it. If v0 > vBack(0),
+the jerk law brakes at once, from any start state, still jerk-limited, and the limiter bounds the acceleration
+(section 7.13.4). A start that cannot meet a cap ahead shows as a cross-track error on that arc, which the follower
+corrects.
 
 #### 7.6.7 Robot starts moving sideways
 
@@ -1898,12 +1876,11 @@ Case v0 > vBack(s0): the robot is already too fast to brake for something ahead.
   v0_perp = 1.0, maxSkidAccel = 8: 0.125 s and 0.0625 m.
 - The traction used is shared automatically by the limiter's skid disk, so the robot just falls a little behind.
 - v0_par < 0 (moving backward along the path): v0 = 0. The limiter brakes the backward motion first.
-- Warning C5 if `abs(v0_perp) > SIDEWAYS_WARN` (0.5 m/s): the path was probably started from the wrong place.
 
 ### 7.7 Closed form inside a span
 
 For span k with entry speed `v_in = vF[k]`, exit speed `v_out = vF[k+1]`, cap `vCap = vCap[k]`, length l and
-`q = s - s0[k]` in [0, l]:
+`q = s - sStart[k]` in [0, l]:
 
 ```
 vProf(q) = min( vCap,  F_k(v_in, q),  sqrt(v_out^2 + 2*aD*(l - q)) )
@@ -1922,7 +1899,7 @@ q2 = l - (vCap^2 - v_out^2)/(2*aD)           (slow-down starts)
 if q1 <= q2:  cruise exists.  t = (vCap - v_in)/aA + (q2 - q1)/vCap + (vCap - v_out)/aD
 else:         peak at q* = (v_out^2 - v_in^2 + 2*aD*l)/(2*(aA + aD)),  v_p = sqrt(v_in^2 + 2*aA*q*)
               t = (v_p - v_in)/aA + (v_p - v_out)/aD
-aA = aD = 0 (ARC_FULL, then v_in = v_out):  v = v_in on the whole span,  t = l/v_in
+aA = aD = 0 (an arc, section 7.8; then v_in = v_out):  v = v_in on the whole span,  t = l/v_in
 ```
 
 a(q) is +a(v) in speed-up, 0 in cruise, and -aD in slow-down.
@@ -1936,75 +1913,117 @@ Worked example, span 0 (line 0: v_in = 0, v_out = 2.3784, vCap = 4, l = 1.5307, 
 
 Span 3 (v_in = 2.3784, v_out = 0): `q* = (0 - 5.6569 + 9.1842)/12 = 0.2939`, `v_p = 2.7241`, `t = 0.1152 + 0.9080 = 1.0233 s`.
 
-Edge cases: v_in = v_out = 0 with aA = aD = 0 cannot happen (the arc-mode rule switches such a span to ARC_SHARED; if it
-ever happens, throw at build time: it is a bug). vCap = 0 only at a zero-length span, which is merged away. Clamp the
+Edge cases: an arc span with v_in = v_out = 0 cannot happen: the path starts and ends on a line, every stop has a line on each
+side (section 8.1), and a line ends with a speed > 0; if it ever happens, throw at build time (it is a bug). vCap = 0 only at a
+zero-length span, which is merged away. Clamp the
 radicands at 0; if q1 or q2 lands outside [0, l], use the "else" branch.
 
-### 7.8 Arcs: traction ellipse in the span method
+### 7.8 Arcs at constant speed
 
 Tangential and lateral acceleration share the tire grip. The record has a limit per direction, so the limit is an ellipse:
 
 ```
 (a_t / aT)^2 + (a_n / aLat)^2 <= 1,   aT = aAcc (speeding up) or aDec (braking),   a_n = v^2*abs(kappa)
--> a_t,avail(v, kappa) = aT * sqrt(max(0, 1 - (v^2*abs(kappa)/aLat)^2))
 ```
 
 If aAcc = aDec = aLat = a_max, this is the friction circle. **Inference**: every point of the ellipse has
 `a_t^2 + a_n^2 <= max(aT, aLat)^2`, so if aAcc, aDec and aLat are each <= maxSkidAccel, the profile stays inside the
-limiter's skid disk. Example: v = 2.0, kappa = 0.7071: a_n = 2.828; with aLat = 4, `a_t,avail = 3·sqrt(1 - 0.5) = 2.121 m/s^2`.
+limiter's skid disk.
 
-**What the span method loses.** a_t,avail depends on v, so on an arc the best profile is not a trapezoid. At the arc's
-own cap a_t,avail = 0. Two conservative arc modes replace it:
-
-| Mode | Cap | aA, aD on the span | Ellipse check |
-|---|---|---|---|
-| ARC_FULL | `sqrt(aLat/abs(kappa))` | 0, 0 (constant speed) | a_t = 0, a_n <= aLat: on the ellipse |
-| ARC_SHARED | `sqrt(rho·aLat/abs(kappa))` | `aAcc·sqrt(1 - rho^2)`, `aDec·sqrt(1 - rho^2)` | `(a_n/aLat)^2 <= rho^2`, `(a_t/aT)^2 <= 1 - rho^2`: sum <= 1 |
-
-ARC_RHO = rho = 0.8 (**Recommendation**): the arc cap drops to sqrt(0.8) = 89.4% and the arc's tangential limits to 60%.
-Example: r = 1.4142, aLat = 4, aAcc = aDec = 3, rho = 0.8 gives cap 2.1273 m/s and aA = aD = 1.8 m/s^2; at the cap
-a_n = 3.2 = 0.8·aLat and a_t = 1.8 = 0.6·aT; 0.64 + 0.36 = 1.
-
-**Mode rule** (mechanical, at most one change per arc span):
+**Rule** (**Decision**, user, simplification pass; it replaces the earlier two arc modes, one at the arc's cap and one
+with a traction share for speed changes on the arc): **every arc is driven at constant speed; the speed changes only on
+lines.** On every arc span `aA = aD = 0` and the span cap is `min(vMax, sqrt(aLat/abs(kappa)), rotation cap, wheel cap)`.
+The junction passes then give all junctions of one arc the same speed, the **arc speed**:
 
 ```
-mode[k] = ARC_FULL for every arc span
-repeat
-    compute vCap, aA, aD from the modes; run both junction passes
-    for every arc span k in ARC_FULL:
-        if min(vF[k], vF[k+1]) < vCap[k] - 1e-9: mode[k] = ARC_SHARED     (it must change speed)
-until no mode changed
+v_arc = min( sqrt(aLat/abs(kappa)),                curvature cap (7.4.3)
+             withVelocity of the arc's waypoint,     point cap (7.4.2)
+             heading-kink cap at the waypoint,       (7.4.6)
+             rotation and wheel caps of both arc spans,
+             vB at the arc exit,                     backward pass, jerk-aware on the line after the arc (below)
+             vF at the arc entry )                   forward pass: the speed reached on a short line before it
 ```
 
-ARC_FULL is exact whenever the arc is driven at its cap, the common case, because the backward pass brakes on the line
-before the arc. ARC_SHARED is used only where the speed must change on the arc: a `withVelocity` or heading-kink cap at
-the arc's waypoint, braking carried back through a very short following line, or touching arcs with different caps. A
-user stop never lies on an arc (section 5.8.7).
+On the arc `a_t = 0` and `a_n = v_arc^2·abs(kappa) <= aLat`, so the arc is inside the ellipse by construction, with no
+mode loop and no traction share to tune. The runtime law follows the same rule: it reaches the arc speed with a = 0 by the
+arc entry and holds it on the arc; it does not speed up on an arc and brakes there only in an emergency (section 7.13.4).
+A speed-up on the line after an arc starts at the arc exit.
 
-Time penalty against the grid with the exact ellipse (script):
+**Cost.** The span method is exact (equal to the grid oracle with the exact ellipse, Appendix B) whenever every arc is
+driven at its curvature cap, the common case, because the backward pass brakes on the line before the arc. When a point
+cap on the arc binds, the whole arc is driven at that cap, not only the point (script):
 
-| Path | Grid + ellipse | Span method (rho = 0.8) | Penalty |
+| Path | Grid + ellipse (Appendix B) | Span method, constant-speed arcs | Penalty | Earlier arc rule (removed) |
+|---|---|---|---|---|
+| Shared example, EX | 3.2723 s | 3.2723 s | 0.00% | 3.2723 s |
+| Shared example + P1.withVelocity(1.0) | 3.5770 s | 5.2576 s (arc at 1.0) | +47.0% | 3.7751 s |
+| Tight arc: (0,0), (4,0).withRadius(0.3), (4,4) | 4.3210 s | 4.3210 s | 0.00% | 4.3210 s |
+| Tight arc + P1.withVelocity(0.5) | 4.4469 s | 5.1528 s (arc at 0.5) | +15.9% | 4.5577 s |
+| (0,0), (4,0), (4,1): short exit line, r = 0.5 | 3.0920 s | 3.0919 s | 0.00% | 3.0919 s |
+| Shared example, DEF + motor curve (no heading anchors) | 2.3101 s | 2.3101 s | 0.00% | 2.3101 s |
+| Tight arc, DEF + motor curve | 3.1056 s | 3.1055 s | 0.00% | 3.1055 s |
+
+With the shared example's P1 `withAngle(90 deg)` anchor and DEF + motor curve, the heading-kink cap at P1 (2.8176 m/s) is
+below the arc cap (3.191 m/s), so the whole arc is driven at 2.8176 m/s: junctions vF = [0, 2.8176, 2.8176, 2.8176, 0], span
+time **2.4549 s** (script; 2.439 s with the earlier rule). With EX the anchor changes nothing (its kink cap 2.818 is above the
+EX arc cap 2.3784).
+
+**Recommendation** for users: a speed limit on a corner point slows the whole arc. To slow down only briefly, put the limit on a
+point of a straight part (a PASS marker), or make the corner tighter with `withRadius`.
+
+**Runtime check** (ideal tracking, 50 Hz, the law of section 7.13; script). Largest traction-ellipse use
+`(a_t/aT)^2 + (a_n/aLat)^2` at an arc entry, relative to the profile limits:
+
+| Path, jerkMax 50 | Use at arc entry | v1 time (ideal) |
+|---|---|---|
+| Shared example, EX / DEF + motor | 0.9703 / 0.9955 | 3.54 s / 2.78 s |
+| Tight arc, EX / DEF + motor | 0.9472 / 0.8892 | 4.62 s / 3.58 s |
+| Two arcs joined by a 0.77 m line, the second faster: (0,0), (4,0), (5,1.2).withRadius(1.0), (9,1.2), EX | 0.9639 | 5.22 s |
+| Two arcs joined by a 0.12 m line: (0,0), (4,0), (4.6,0.8).withRadius(1.0), (9,0.8), EX | 1.0000 | 6.30 s |
+| Shared example + P1.withVelocity(1.0), EX | 0.0312 | 5.52 s |
+
+Over jerkMax 10 to 150 on these paths the use never exceeded 1: it is exactly 1.0000 where the robot enters an arc at its
+curvature cap with a = 0 (the 0.12 m case), and at most 0.9982 elsewhere (shared example, jerkMax 10). So it stays <= 0.81 of
+the drivetrain limits with PROFILE_MARGIN = 0.9. Random span chains with the room-to-brake rule (script): 600 chains of lines with
+random aD, constant-speed arcs and point caps, and 1000 chains from the reviewer's generator, which adds short lines (0.02 to 0.3 m)
+after arcs into slower arcs, line caps, stops and the end. Whenever jerkMax is below the threshold of warning C2
+(`max(aAcc, aDec)/(5·dt_nom)`), the use stayed <= 0.99995 in all 1096 such chains (without the rule, 23 of the reviewer's 673 chains
+below the threshold exceeded 1, up to 1.339). Above the threshold the law is effectively jerk-free, can reach an arc entry still
+braking, and reached 1.97 (1.59 of the drivetrain limits) in 16 of 504 such chains; the jerk-free reference column of section 7.13.7
+reaches 2.0 the same way. On the 0.12 m line the jerk-limited law gains little speed, so the second arc is driven slower than the closed-form
+profile assumes (span time 5.69 s against 6.30 s); profileTime comes from the law, so the timeout is right.
+
+**Room to brake after an arc** (**Decision**, review of the simplification pass). The jerk-free backward pass leaves the line after
+an arc exactly the jerk-free braking distance to the next limit. The jerk law needs more (it ramps the deceleration in and out), so on
+a line about that short it ran out of room and braked at aDec while still on the arc, beyond the ellipse. So for every line span j that
+starts at an arc exit, the backward pass also applies
+
+```
+vJerk(j) = the largest v such that, for every later constraint q of the sub-profile,
+           stopDist(v, 0, vt_q, jerkMax, D_q) + STOP_DIST_MARGIN <= s_q - s_j
+           (q: every later junction with vt_q = vB[q], and the hand-over point s_goal - d_h with vt = v_h;
+            D_q = min aD over the line spans between, as in section 7.13.4)
+```
+
+found by bisection on [0, vB[j]] (stopDist grows with v, so the test is monotone; 60 steps). It caps vB at the arc exit, and the pass
+(aD = 0 on the arc) carries it to the whole arc. From the arc exit at a = 0 the law can then meet every limit after the arc with jerk,
+so it never has to brake on the arc. Lines that do not start at an arc exit keep the jerk-free pass: the law brakes on the line before
+them. Cases from the review (ideal tracking, jerkMax 50 unless stated; script):
+
+| Path | Arc speed before -> after | Ellipse use on the arc before -> after | v1 time before -> after |
 |---|---|---|---|
-| Shared example, EX | 3.2723 s | 3.2723 s | 0.00% |
-| Shared example + P1.withVelocity(1.0) | 3.5770 s | 3.7751 s (both arc spans ARC_SHARED) | +5.54% |
-| Tight arc: (0,0), (4,0).withRadius(0.3), (4,4) | 4.3210 s | 4.3210 s | 0.00% |
-| Tight arc + P1.withVelocity(0.5) | 4.4469 s | 4.5577 s | +2.49% |
-| (0,0), (4,0), (4,1): short exit line, r = 0.5 | 3.0920 s | 3.0919 s | 0.00% |
-| Shared example, DEF + motor curve (no heading anchors) | 2.3101 s | 2.3101 s | 0.00% |
-| Tight arc, DEF + motor curve | 3.1056 s | 3.1055 s | 0.00% |
+| DEF: (0,0), (6,0).withRadius(2), (6,3.2).withRadius(0.5), (3,3.2) | 3.7947 -> 3.4425 m/s | 1.033 -> 0.964 | 4.64 -> 4.84 s |
+| DEF: line 3 m, arc r = 2 (2 m), 0.75 m line, arc r = 0.5 (0.8 m), line 2 m | 3.795 -> 3.035 m/s | 1.224 -> 0.869 | 3.70 -> 3.72 s |
+| Same with a 1.0 m line | 3.795 -> 3.510 m/s | 1.033 -> 0.989 | 3.72 -> 3.72 s |
+| EX, same chain with a 1.0 m line | 2.828 -> 2.689 m/s | 1.378 -> 0.907 | 4.78 -> 4.84 s |
+| EX, jerkMax 30, 1.0 m line | 2.828 -> 2.601 m/s | 1.259 -> 0.971 | 4.84 -> 4.92 s |
 
-With the shared example's P1 `withAngle(90 deg)` anchor and DEF + motor curve, the heading-kink cap at P1 (2.818 m/s) is below the arc
-cap (3.191 m/s), so both arc spans must change speed and become ARC_SHARED: junctions [0, 2.8541, 2.8176, 2.8541, 0], span time
-**2.439 s** (script; arc cap `sqrt(0.8·7.2·1.4142) = 2.8541`). With EX the anchor changes nothing (its kink cap 2.818 is above the EX
-arc cap 2.3784).
+The rule costs time only where the line after an arc is short against the braking it must hold (up to +0.26 s in the cases tried, a
+0.5 m line at DEF). It changes no path of the rest of this document: their lines after arcs are long enough, so every vB, span time and
+v1 time quoted elsewhere is the same (script).
 
-For comparison on the "+ withVelocity(1.0)" path: rho = 0.9 gives +8.76% and rho = 0.707 gives +5.77%; ARC_SHARED on every
-arc costs +5.22% even on the plain path; ignoring the ellipse gives 3.5386 s, faster but not traction-safe
-(`sqrt(aDec^2 + aLat^2) = 5 > aLat` on the arc). A second grid script with a different sampling of the arc gives 3.5761 s
-for the same oracle case; the 0.0009 s difference is the O(ds) error of the explicit grid step (section 7.16).
-
-Speed-up on an ARC_SHARED span uses the constant `aA = min(aAcc·sqrt(1 - rho^2), 0.9·maxForwardAccel·(1 - vCap/freeSpeed))`:
-the motor limit is taken at the span cap. Arc caps are low speeds, so this costs little.
+Edge case: an arc right after the start or a stop is entered at the speed reached on the line before it; a very short line
+there (possible only with `withRadius`) gives a slow arc.
 
 ### 7.9 Motor curve on the speed-up phase
 
@@ -2050,7 +2069,7 @@ Effect on whole paths (script):
 - Shared example, EX: the knee 3.53 m/s is above the 2.7241 m/s peak, so no change: 3.2723 s.
 - Shared example, DEF, no heading anchors: constant 7.2 (outside the limiter above 1.06 m/s) 2.2573 s; exact motor ramp **2.3101 s** (+2.3%);
   the motor limit folded into a constant per span, `aA = min(7.2, 9·(1 - vCap/5.3)) = 2.12` on lines, 2.8188 s (+22%);
-  tight arc path +26% for the folded constant. With the P1 heading anchor (DEF + motor): 2.439 s (section 7.8).
+  tight arc path +26% for the folded constant. With the P1 heading anchor (DEF + motor): 2.4549 s (section 7.8).
 - So a pure constant-acceleration trapezoid is either outside the limiter (fast, wrong) or 22 to 33% slow (folded). The
   closed-form motor ramp fixes both at no time cost: span method = grid method to 4 decimals.
 
@@ -2063,14 +2082,14 @@ constant. The limiter agrees: braking is free from the forward limit (**Fact** S
 
 | Source | Geometry | Profile |
 |---|---|---|
-| Automatic STOP corner: tau_turn > TAU_STOP, r below R_MIN after the shrink loop, `.withRadius(x < R_MIN)`, kink-corner fallback (sections 5.6.4, 5.7.3, 5.8.3) | zero-length STOP entry, lines on both sides | junction speed 0 |
+| Automatic STOP corner: tau_turn > TAU_STOP, r below R_MIN after the shrink loop, `.withRadius(x < R_MIN)` (sections 5.6.4, 5.7.3) | zero-length STOP entry, lines on both sides | junction speed 0 |
 | User stop: `.stop()`, `withVelocity(0)`, `.stop(dwellSeconds)` on a middle waypoint | the corner's arc is **removed** (section 5.8.7) | junction speed 0, plus the dwell |
 | Last point | end of the path | J[K] = 0 (default); `.stop(d)` there adds a dwell after the finish test (section 8.6) |
 | `.stop()` on P_0 | ignored (the path starts at rest, W4) | none; `stop(d)` on P_0 delays the start by d |
 
 #### 7.10.2 Profile math at a stop
 
-A stop at s_c is a span boundary with J = 0. **The profile is split there into sub-profiles** [s_start, s_c1],
+A stop at s_c is a span boundary with J = 0. **The profile is split there into sub-profiles** [0, s_c1],
 [s_c1, s_c2], ..., [s_cN, L]. Each is built on its own, with the same span rules:
 - Sub-profile j ends with J = 0 at s_c.
 - Sub-profile j+1 **starts** at s_c with its first junction cap set by the normal rules (vMax, the caps of its first
@@ -2086,32 +2105,30 @@ is `v^2/(2·aD)`. Restart: `vProf(q) = min(vCap, F(0, q), braking term)`; at run
 - **Approach**: vBack_j goes to 0 as s* goes to s_c. A purely position-indexed command would creep and never arrive. The
   speed law brakes to the hand-over point (s_c - d_h, v_h = k_p·d_h), not to 0 at s_c; the 2D CAPTURE_STOP law then commands
   `k_p·(P_c - p)`, which is not 0 until the robot is there (section 8.3.7).
-- **Arrival** (section 8.6): `abs(d_go) <= stop_pos_tol` (0.03 m) along-track and `abs(V_meas) <= STOP_SPEED` (0.1 m/s).
+- **Arrival** (section 8.6): `abs(d_go) <= pos_tol` (0.03 m) along-track and `abs(V_meas) <= STOP_SPEED` (0.1 m/s).
 - **Leave**: the follower switches to sub-profile j+1, where vBack(s_c) is the restart envelope (4.0 m/s in the example
   below), and the speed law restarts from (~0, 0).
 
-#### 7.10.4 Dwell and module steer
+#### 7.10.4 Dwell
 
 Order (decision 15, section 8.6): arrive, then correct a residual heading error if it is more than 3 deg (ROTATE, section
-6.7), then dwell, then leave. The profile counts:
+6.7), then dwell, then leave. The profile counts only the user's `dwellSeconds` (`.stop(0.5)`: 0.5 s).
 
-| Item | Formula | Example |
-|---|---|---|
-| Dwell | the user's `dwellSeconds` | `.stop(0.5)`: 0.5 s |
-| Module steer to the new travel direction | `min(dpsi, pi - dpsi)/maxSteerRate`, where dpsi is the change of travel direction. The kinematics reverses a module instead of turning it more than 90 deg (**Fact** DemaciaKinematics.java:194-197); maxSteerRate = 12 rad/s (**Fact** KinematicsConfig.java:41) | dpsi = 90 deg (from +45 deg to -45 deg): `(pi/2)/12 = 0.1309 s` |
-
-There is no turn-in-place term: theta is continuous through the stop (section 6.7).
+There is no turn-in-place term (theta is continuous through the stop, section 6.7), and the dwell is the only stop term
+(**Decision**, user, simplification pass). The modules turn to the new travel direction in at most `90 deg/maxSteerRate = (pi/2)/12 =
+0.13 s` (the kinematics reverses a module instead of turning it more than 90 deg, **Fact** DemaciaKinematics.java:194-197;
+maxSteerRate, KinematicsConfig.java:41); the timeout margin covers it.
 
 #### 7.10.5 Time with stops
 
 ```
-profileTime = sum over sub-profiles (sum over spans t_k) + sum over stops (t_steer + dwell) + dwell at the last point
+profileTime = sum over sub-profiles (sum over spans t_k) + sum over stops (dwell) + dwell at the last point
 t_timeout   = 1.5 * profileTime + 1.0                           (decision 10)
 ```
 
 In v1 the motion part comes from the offline simulation of the speed law, including the hand-over tail
 `max(0, ln(d_h/pos_tol)/k_p)` per goal (0.170 s for d_h = 0.05, k_p = 3; 0 when d_h < pos_tol, i.e. jerkMax < 13.5 m/s^3); see section 7.13.6. The closed-form span sum is the no-jerk
-lower bound. profileTime is computed from s_start (s0 for a mid-path start, resolution R5).
+lower bound. profileTime always covers the whole path from s = 0 (there is no mid-path start, section 8.2.5).
 
 #### 7.10.6 Example: P1.stop() on the shared example
 
@@ -2128,16 +2145,16 @@ Geometry (section 5.8.7): LINE 2.8284 m, STOP at s = 2.8284, LINE 2.8284 m; L = 
 - Heading: theta' = 0.5554 rad/m before the stop, 0 after; the robot reaches 90 deg at the stop (section 6.11).
 - Motion time 3.8839 s (matches `2·sqrt(2.8284/3) = 1.9420` per leg).
 
-| Variant | Trapezoid motion (no jerk limit) | Steer | Dwell | Trapezoid total | v1 profileTime (jerk law, jerkMax = 50) | v1 timeout |
-|---|---|---|---|---|---|---|
-| P1.stop() | 3.8839 | 0.1309 | 0 | 4.0148 s | **4.32 + 0.13 = 4.45 s** | **7.68 s** |
-| P1.stop(0.5) | 3.8839 | 0.1309 | 0.5 | 4.5148 s | 4.95 s | 8.43 s |
-| P1.stop(1.5) | 3.8839 | 0.1309 | 1.5 | 5.5148 s | 5.95 s | 9.93 s |
-| P1.stop(0.5), P1.withAngle(0), P2.withAngle(90 deg): the heading turns on the second leg (theta' = 0.5554), no cap binds (hand) | 3.8839 | 0.1309 | 0.5 | 4.5148 s | 4.95 s | 8.43 s |
-| no stop (arc, shared example) | 3.2723 | 0 | 0 | 3.2723 s | 3.52 s | 6.28 s |
+| Variant | Trapezoid motion (no jerk limit) | Dwell | Trapezoid total | v1 profileTime (jerk law, jerkMax = 50) | v1 timeout |
+|---|---|---|---|---|---|
+| P1.stop() | 3.8839 | 0 | 3.8839 s | **4.32 s** | **7.48 s** |
+| P1.stop(0.5) | 3.8839 | 0.5 | 4.3839 s | 4.82 s | 8.23 s |
+| P1.stop(1.5) | 3.8839 | 1.5 | 5.3839 s | 5.82 s | 9.73 s |
+| P1.stop(0.5), P1.withAngle(0), P2.withAngle(90 deg): the heading turns on the second leg (theta' = 0.5554), no cap binds (hand) | 3.8839 | 0.5 | 4.3839 s | 4.82 s | 8.23 s |
+| no stop (arc, shared example) | 3.2723 | 0 | 3.2723 s | 3.54 s | 6.31 s |
 
-The stop costs 0.74 s here with the trapezoid (0.80 s with the jerk law, 4.32 against 3.52 s). Keeping the arc with a stop on it (the rule before decision 17) would take 4.1048 s of motion
-(script), 0.22 s slower than the two straight lines, with braking on the arc. That supports decision 17.
+The stop costs 0.61 s here with the trapezoid (0.78 s with the jerk law, 4.32 against 3.54 s). Keeping the arc with a stop on it (the rule before decision 17) would take 4.1048 s of motion
+(script, computed with the earlier arc rule that allowed braking on the arc), 0.22 s slower than the two straight lines. That supports decision 17.
 
 ### 7.11 Swerve wheel-speed limit with rotation
 
@@ -2179,8 +2196,8 @@ below the knee. Then:
 
 ```
 t0[0] = 0,  t0[k+1] = t0[k] + t_k
-spanTime    = sum of sub-profile span times + stop items (section 7.10.5)    (no-jerk lower bound, logging)
-profileTime = offline speed-law time + hand-over tails + stop items          (v1, section 7.13.6)
+spanTime    = sum of sub-profile span times + dwells (section 7.10.5)       (no-jerk lower bound, logging)
+profileTime = offline speed-law time + hand-over tails + dwells              (v1, section 7.13.6)
 t_timeout   = 1.5 * profileTime + 1.0 s
 ```
 
@@ -2188,7 +2205,7 @@ Time to a point inside a span (for logging) adds the phase times before q. Use v
 
 Examples (closed form, no jerk limit):
 - Shared example: `1.0233 + 0.6129 + 0.6129 + 1.0233 = 3.2723 s` (script). This is the lower bound for the run time, not the v1
-  timeout base: the v1 profileTime is 3.52 s (speed law with jerkMax = 50 and the hand-over tail), timeout 6.28 s (section 7.13.7).
+  timeout base: the v1 profileTime is 3.54 s (speed law with jerkMax = 50 and the hand-over tail), timeout 6.31 s (section 7.13.7).
 - Arc span at constant speed: `1.4577/2.3784 = 0.6129 s`.
 
 ### 7.13 Runtime speed law: jerk-aware online trapezoid
@@ -2213,14 +2230,14 @@ a in the stopping distance and decides before each step.
 
 ```
 v_cmd, a_cmd      the command state, integrated from the law's own commands every loop
-init:             v_cmd = v0 = max(0, V_meas·T(s0)),  a_cmd = 0
+init:             v_cmd = v0 = max(0, V_meas·T(0)),  a_cmd = 0
 after a stop:     v_cmd = max(0, V_meas·T_out) (~= 0),  a_cmd = 0
 ```
 
-The measured velocity is used only at initialize, at each restart after a stop, and in the overspeed check. It is never fed back
+The measured velocity is used only at initialize and at each restart after a stop. It is never fed back
 every loop (the 2026 bug). The position input is the follower's lag-led progress `s_v = min(s* + v_cmd·tau_lag, s_goal - d_h)`.
-**The lead is required at run time** (the offline profileTime run uses tau_lag = 0, section 7.13.6): without it the plant simulation passes the goal by 2.4 cm (shared example), 4.5 cm
-(P1.stop()) and 7.2 cm (tight arc); with tau_lag = 0.05 s none of the runs passes the goal.
+**The lead is required at run time** (the offline profileTime run uses tau_lag = 0, section 7.13.6): without it the plant simulation passes the goal by 2.7 cm (shared example), 4.5 cm
+(P1.stop()) and 6.2 cm (tight arc); with tau_lag = 0.05 s none of the runs passes the goal.
 
 #### 7.13.3 Stopping distance from (v, a) to a target speed v_t
 
@@ -2282,45 +2299,54 @@ Edge cases: v <= v_t and a <= 0: distance 0. v <= v_t with a > 0: phase 0 may st
 
 #### 7.13.4 The decision, once per loop
 
-Inputs: the state (v, a) = (v_cmd, a_cmd), the position s = s_v, the current span k with cap `cap = g(e_n)·vCap[k]` (also limited
+Inputs: the state (v, a) = (v_cmd, a_cmd), the position s = s_v, the current span k with cap `cap = vCap[k]` (also limited
 by the speed budget of section 8.3.9), and the constraint list of the current sub-profile:
 
 ```
 for every junction j ahead in the sub-profile:   (s_j, vt_j = vB[j], D_j)
 the goal (stop or end):                           (s_goal - d_h, vt = v_h = k_p*d_h, D_goal)     (hand-over point, 8.3.7)
-D_j    = min(aDec, aD of every ARC_SHARED span overlapping [s, s_j])        (per constraint; ARC_FULL spans have constant
-                                                                              speed by construction and do not lower D_j)
-D_goal = min(aDec, aD of every ARC_SHARED span overlapping [s, s_goal - d_h]) (the same rule for the hand-over point)
+D_j    = min(aD[k] of every line span overlapping [s, s_j])     (aD[k] = min(aDec, alphaMax/abs(theta'[k])); arc spans
+                                                                  have constant speed and are skipped; aDec if none)
+D_goal = the same rule over [s, s_goal - d_h]
 ```
 
+Two kinds of constraint (**Decision**, simplification pass, with the constant-speed arcs of section 7.8):
+- an **arc entry** (a junction from a line span into an arc span) and the **hand-over point** must be reached with
+  v <= vt **and a = 0, unless the robot is already below vt** (safe() skips a constraint once v1 <= vt and a1 <= 0), because the arc
+  then holds its speed and the CAPTURE law starts from a = 0;
+- every other junction (between two line spans: a PASS marker, a heading anchor on a line, a face-target sub-span)
+  only needs v <= vt. Its test is skipped while `v1 + max(0, a1)^2/(2·jerkMax) <= vt`, because ramping a to 0 from there
+  can never pass vt. Without this skip the law forces a = 0 at every such junction: on a 6 m line cut into 0.1 m
+  face-target sub-spans it took 4.80 s instead of 3.08 s (EX; DEF + motor 4.70 instead of 2.46 s; the uncut line 3.06 and
+  2.42 s) (script).
+
 Braking deceleration, chosen in the loop that reaches **brake** (resolution of a review finding: the minimum over all constraints
-would let an ARC_SHARED span far ahead weaken the braking for a nearer junction):
+would let a low-aD span far ahead weaken the braking for a nearer junction):
 
 ```
 failed  = the constraints whose stopDist test failed for the candidates tried this loop (the binding ones)
 D_brake = max(D_j over failed)                       if failed is not empty
         = D_j of the nearest constraint              otherwise (brake reached through the cap or landing tests only)
-D_brake = min(D_brake, aD_cur)                       aD_cur = deceleration limit of the current span (aDec on a line,
-                                                     aDec·sqrt(1 - rho^2) on an ARC_SHARED span); safety clamp
+D_brake = min(D_brake, aD_cur)                       aD_cur = aD[k] of the current line span; aDec on an arc
+                                                     (emergency only, below); safety clamp
 ```
 
-Every D_j covers the current span, so `D_j <= aD_cur` already holds whenever the current span is a line or ARC_SHARED; the clamp only
-guards rounding and future changes. On an ARC_FULL span the law does not need to brake by construction; if it ever does (a robot pushed
-above the cap), aD_cur = aDec·sqrt(1 - rho^2).
+Every D_j covers the current span when it is a line, so `D_j <= aD_cur` already holds there; the clamp only guards rounding and
+future changes. On an arc the law does not need to brake by construction: the jerk-aware pass of section 7.8 leaves room to meet
+every limit after the arc with jerk jerkMax from a = 0 at the arc exit. If it ever must (a robot pushed above the arc speed, a cut by the speed budget), it brakes at aDec. That is an emergency:
+the ellipse is exceeded for a moment and the limiter's skid disk bounds the vector.
 
 stopDist is conservative when the current deceleration b already exceeds D_j (it still plans with b, then at most D_j).
 
-**Traction clamp on every candidate.** All candidates ("up", "toward 0", "keep" and "brake") are clamped to `a1 >= -aD_cur`.
-Without it, a robot that enters an ARC_SHARED span below vB while still braking skips that junction constraint (v1 <= vt and
-a1 <= 0), and the line's larger deceleration carries onto the arc for a loop or two. In the review's random check this happened in
-1 of 600 span chains: 2.17 m/s² of deceleration against aD = 1.3 on the arc, using 1.42 of the traction ellipse (script). When the clamp
+**Traction clamp on every candidate.** All candidates ("up", "toward 0", "keep" and "brake") are clamped to `a1 >= -aD_cur`, so
+the deceleration of one line span does not carry onto a following line span whose aD is lower (heading-limited). When the clamp
 cuts a deceleration that is larger than aD_cur, that one loop can step the acceleration by more than jerkMax·dt. Recommendation:
 accept that step. Traction takes priority over the jerk limit, because exceeding traction skids the wheels while a single jerk step
 does not.
 
 All junctions of the sub-profile are checked every loop; there are only a handful. Candidates, tried in order:
-1. **up**: `a1 = min(a + jerkMax·dt, Amax(v, s))`, with `Amax = aAccEff` (section 7.6.5: traction ellipse, alphaMax/abs(theta'),
-   0.9·motor curve);
+1. **up**, only on a line span (never on an arc, section 7.8): `a1 = min(a + jerkMax·dt, Amax(v, s))`, with `Amax = aAccEff`
+   (section 7.6.5: alphaMax/abs(theta'), 0.9·motor curve);
 2. **toward 0**: `a1 = a - sign(a)·min(abs(a), jerkMax·dt)`;
 3. **keep**: `a1 = a`.
 
@@ -2332,27 +2358,32 @@ v1 = v + (a + a1)/2*dt,   s1 = s + (v + v1)/2*dt            (state after this lo
 safe(v1, a1, s1) =
     not (v1 > cap and a1 >= 0)
     and not (a1 > 0 and v1 + a1^2/(2*jerkMax) > cap)        (can still level off at the cap: cruise mode)
-    and for every constraint: (v1 <= vt_j and a1 <= 0)  or  stopDist(v1, a1, vt_j, jerkMax, D_j) + STOP_DIST_MARGIN <= s_j - s1
+    and for every constraint j:
+          (v1 <= vt_j and a1 <= 0)
+          or (j is a line-to-line junction and v1 + max(0, a1)^2/(2*jerkMax) <= vt_j)
+          or stopDist(v1, a1, vt_j, jerkMax, D_j) + STOP_DIST_MARGIN <= s_j - s1
     and a1 >= -sqrt(2*jerkMax*v1)                            (candidates 2 and 3; landing rule)
 ```
 
 - **One-step lookahead** handles the 50 Hz quantization: the test is made on the state after the next step, so the law never commits
   to a step it could not undo. dt is the follower's measured dt (section 8.2.2).
 - **Cruise mode**: at the cap, "up" fails the level-off test and "toward 0" keeps a = 0. The same mechanism lands on every v_t with
-  a = 0. In the shared-example simulations the speed at each junction was 0.4 to 3.4 mm/s below vB. In random span chains the speed
-  interpolated exactly at a junction was up to 2.5 mm/s above vB (review script, lines only) and up to 3.6 mm/s above vB (600 chains
-  with LINE and ARC_SHARED spans, jerkMax 10 to 150, script), back at or below vB at the next 20 ms sample; no run stalled. The 0.9
-  profile margin covers this.
-- **Per-constraint braking check** (script): a 3 m line to vB = 1.0 m/s, then a 1 m ARC_SHARED span (aD = 1.8) to vB = 0.5 m/s,
-  jerkMax 50, aAcc = aDec = 3. With D_brake as above the robot reaches the first junction 0.020 m/s below vB and the second 0.018 m/s
-  below. With the minimum over all constraints (D_brake = 1.8) it would reach the first junction 0.939 m/s **above** vB.
+  a = 0. In the ideal-tracking runs (EX and DEF, jerkMax 30 to 150) the speed at an arc entry was 2 to 47 mm/s below vB, and the
+  arc was then driven at that speed (no "up" on an arc); against the earlier arc rule this changed the times of section 7.13.7 by
+  0 to +0.02 s at jerkMax 50 (-0.16 to +0.16 s over jerkMax 10 to 150). In the random span chains of section 7.8 the speed
+  interpolated exactly at a junction never exceeded vB while jerkMax is below the C2 threshold; above it, up to 6.7 mm/s above vB
+  (jerkMax 150), back at or below vB at the next 20 ms sample. No run stalled (script). The 0.9 profile margin covers this.
+- **Per-constraint braking check** (script): a 3 m line to vB = 1.0 m/s, then a 1 m line whose aD is lowered to 1.8 m/s^2 by the
+  heading (alphaMax/abs(theta')) to vB = 0.5 m/s, then a 2 m line; jerkMax 50, aAcc = aDec = 3. With D_brake as above the robot
+  reaches both junctions 0.020 m/s below vB. With the minimum over all constraints (D_brake = 1.8) it would reach the first
+  junction 0.939 m/s **above** vB.
 - **Landing rule** `abs(a) <= sqrt(2·jerkMax·v)`: ramping out from deceleration b loses `b^2/(2·jerkMax)` of speed, so a larger
   deceleration would reach v = 0 with a != 0 and force a jump. Without it, jerkMax = 30 at DEF showed spikes of 270 to 330 m/s^3.
 - **Speed floor**: if v1 <= 0 anyway, set v1 = 0 and a1 = max(a1, 0); with the landing rule it did not occur in any simulation.
 - STOP_DIST_MARGIN = 0.005 m (**Recommendation**) covers rounding and projection noise; a `v·dt` term is not needed because of the
   one-step lookahead (it only cost 0.06 to 0.2 s).
-- A sudden drop of Amax (an arc entry while speeding up far below its cap) may cut a by more than jerkMax·dt: traction wins. It did
-  not occur in the simulations.
+- A sudden drop of Amax (the motor curve) may cut a by more than jerkMax·dt: traction wins. In the simulations it occurred only
+  with jerkMax = 10 at DEF + motor (one step of up to 79 m/s^3 per run).
 
 Worked loop (shared example, jerkMax = 30, D = 3, dt = 0.02; a made-up state already too late): v = 2.60, a = +3.0 at s = 1.00 m;
 binding constraint the arc entry, vt = 2.3784 at s = 1.5307 m.
@@ -2365,7 +2396,7 @@ binding constraint the arc entry, vt = 2.3784 at s = 1.5307 m.
 
 In a consistent run from rest (ideal tracking): with jerkMax = 30, a starts to drop at s = 0.938 m (v = 2.37) and the speed peaks at
 2.52 m/s at s = 1.184 m; with jerkMax = 50, a starts to drop at s = 1.034 m and the speed peaks at 2.58 m/s (the trapezoid peak is
-2.72 m/s); the arc is entered at 2.376 and 2.375 m/s, below its cap 2.3784.
+2.72 m/s); the arc is entered at 2.376 and 2.360 m/s, below its cap 2.3784, with a = 0, and driven at that speed.
 
 Start from rest on line 0 (EX, jerkMax = 50, Amax = 3) (hand, script): a = 1, 2, 3, 3, 3, ... m/s^2 and
 `v_cmd = 0.01, 0.04, 0.09, 0.15, 0.21, 0.27 m/s` in the first six loops.
@@ -2375,10 +2406,9 @@ Start from rest on line 0 (EX, jerkMax = 50, Amax = 3) (hand, script): a = 1, 2,
 | Follower term (section 8.3) | v1 treatment | Breaks the jerk limit? |
 |---|---|---|
 | vBack(s_v) braking envelope | replaced: the law's constraints use the same vB, vCap, aD | no |
-| speed-up ramp `v_prev + aAccEff·dt` | replaced by "up" (Amax = aAccEff) | no |
+| speed-up ramp `v_prev + aAccEff·dt` | replaced by "up" (Amax = aAccEff), on lines only | no |
 | goal law vsqrt(d_go) in TRACK | **removed from TRACK**; the law's last constraint is the hand-over point (s_goal - d_h, v_h = k_p·d_h). vsqrt would cut the jerk-limited speed instantly near the goal | n/a |
 | CAPTURE 2D law `V = k_p·(P - p)` | entered at d_go <= d_h (not d_lin). At entry `abs(V) = k_p·d_h = v_h`, so the speed is continuous; the deceleration steps from 0 to `k_p^2·d_h` | one step of `k_p^2·d_h/dt`, which is <= jerkMax with `d_h = min(D_H_MAX, jerkMax·dt/k_p^2)`: jerkMax = 50 gives d_h = 0.05 m, step 22.5 m/s^3; jerkMax = 10 gives d_h = 0.0222 m, step 10 m/s^3 |
-| off-path factor g(e_n) | scales the cap: cap = g·vCap[k]; the law brakes at the jerk limit, so the robot is briefly above g·vCap | no (g is a soft slowdown) |
 | speed budget `sqrt(vMax^2 - c^2)` | enters the cap, so normally jerk-limited. If c jumps (vision), v_t is cut **instantly** to the budget and the state is reset: v_cmd = cut value, a_cmd = min(a_cmd, 0) | yes, rarely; it protects the modules, and desaturate would cut anyway |
 | lag lead tau_lag | kept, **required** (7.13.2) | no |
 | stop arrival, ROTATE, DWELL | unchanged; restart state (max(0, V_meas·T_out), 0) | no |
@@ -2390,12 +2420,14 @@ not jerk-limited (section 7.13.8).
 
 **Recommendation:** profileTime simulates the same law offline with ideal tracking (`s += v·dt`, dt = 0.02 s) and **tau_lag = 0**
 (`s_v = s`) from v0 to each goal. The lead compensates the real drivetrain lag, which the offline model does not have; with the lead the
-ideal run would brake early for nothing (shared example, independent review script: 3.67 s with the lead, 3.51 s without; the
-physics script gives 3.52 s without, the value used in this document). The law
-adds the hand-over tail `max(0, ln(d_h/pos_tol)/k_p)` per goal (`ln(0.05/0.03)/3 = 0.170 s` for d_h = 0.05, k_p = 3; 0 if d_h < pos_tol), and adds the stop items
-(steer, dwell). Cost: a few hundred steps times a handful of constraints, about 10^4 stopDist calls, well under a millisecond in Java
-(**Inference**, not measured). It is exactly the runtime law, so the time is what a perfectly tracking robot would do. The closed-form
-span times of section 7.12 are the no-jerk lower bound.
+ideal run would brake early for nothing (shared example: 3.68 s with the lead, 3.54 s without (script)). The law
+adds the hand-over tail `max(0, ln(d_h/pos_tol)/k_p)` per goal (`ln(0.05/0.03)/3 = 0.170 s` for d_h = 0.05, k_p = 3; 0 if d_h < pos_tol), and adds the
+dwells. Cost: a few hundred steps times a handful of constraints, about 10^4 stopDist calls, well under a millisecond in Java
+(**Inference**, not measured). It is exactly the runtime law, including the hand-over rule of section 8.3.7e, so the time is what a
+perfectly tracking robot would do. A guard ends the offline run after `10·spanTime + 10 s` of simulated time (`spanTime` = the
+closed-form lower bound); then profileTime is the guard time and warning C2's channel reports a bug (`profile simulation did not reach
+the goal`). It was never reached in the scripts once the hand-over rule was in place. The closed-form span times of section 7.12 are
+the no-jerk lower bound.
 
 #### 7.13.7 Default jerk and time cost
 
@@ -2403,34 +2435,37 @@ New `PathConstraints` field `jerkMax`, validated > 0. **Default 50 m/s^3** (**Re
 `KinematicsConfig` has no jerk setting, so the value lives in `PathsConfig.maxJerk` (default 50, section 9.6). Justification: at 50 Hz a step of
 acceleration A already looks like a jerk of A/dt (150 m/s^3 for 3 m/s^2, 360 for 7.2). For the limit to shape anything, a full
 acceleration change should take at least about 5 loops: `jerkMax <= A/(5·dt) = 7.2/0.1 = 72 m/s^3` at DEF. Below that, time grows
-quickly. jerkMax = 50 spreads 0 -> 7.2 m/s^2 over 0.144 s (7 loops) and 0 -> 3 m/s^2 over 0.06 s (3 loops). Warning C11 when
-`jerkMax > max(aAcc, aDec)/(5·dt_nom)`: the limit is too high to have an effect at 50 Hz.
+quickly. jerkMax = 50 spreads 0 -> 7.2 m/s^2 over 0.144 s (7 loops) and 0 -> 3 m/s^2 over 0.06 s (3 loops). Warning C2 when
+`jerkMax > max(aAcc, aDec)/(5·dt_nom)`: the limit is then too high to have an effect at 50 Hz, and the law can reach an arc entry
+still braking (section 7.8).
 
 Time to within 0.03 m of the end, including the hand-over tail (ideal tracking, 50 Hz, margin 5 mm; no stop items):
 
 | Path / constraints | No jerk limit | jerkMax = 10 | 30 | **50** | 150 |
 |---|---|---|---|---|---|
-| Shared example, EX | 3.38 s | 3.76 (+11.2%) | 3.54 (+4.7%) | **3.52 (+4.1%)** | 3.50 (+3.6%) |
+| Shared example, EX | 3.38 s | 3.76 (+11.2%) | 3.54 (+4.7%) | **3.54 (+4.7%)** | 3.50 (+3.6%) |
 | P1.stop(), EX | 4.08 | 4.80 (+17.6%) | 4.40 (+7.8%) | **4.32 (+5.9%)** | 4.28 (+4.9%) |
-| Tight arc r = 0.3, EX | 4.38 | 5.14 (+17.4%) | 4.68 (+6.8%) | **4.62 (+5.5%)** | 4.54 (+3.7%) |
-| Shared example, DEF + motor (no heading anchors) | 2.42 | 3.46 (+43.0%) | 2.88 (+19.0%) | **2.78 (+14.9%)** | 2.62 (+8.3%) |
+| Tight arc r = 0.3, EX | 4.46 | 5.12 (+14.8%) | 4.70 (+5.4%) | **4.62 (+3.6%)** | 4.56 (+2.2%) |
+| Shared example, DEF + motor (no heading anchors) | 2.42 | 3.30 (+36.4%) | 2.86 (+18.2%) | **2.78 (+14.9%)** | 2.60 (+7.4%) |
 | P1.stop(), DEF + motor (no heading anchors) | 2.96 | 4.96 (+67.6%) | 3.84 (+29.7%) | **3.28 (+10.8%)** | 3.08 (+4.1%) |
-| Tight arc, DEF + motor | 3.36 | 4.54 (+35.1%) | 3.78 (+12.5%) | **3.56 (+6.0%)** | 3.38 (+0.6%) |
+| Tight arc, DEF + motor | 3.26 | 4.70 (+44.2%) | 3.80 (+16.6%) | **3.58 (+9.8%)** | 3.46 (+6.1%) |
 
 The times have the 0.02 s resolution of the simulation. Even jerkMax = 150 costs a few percent: that is the 50 Hz quantization of the
 decision, not the jerk itself. The "no jerk limit" column differs from the closed-form 3.2723 s because it ends at 0.03 m through the
-hand-over tail instead of braking to 0 at L.
+hand-over tail instead of braking to 0 at L. It is a reference only: without a jerk limit the law reaches an arc entry still braking
+(section 7.8).
 
 v1 profileTime and timeout (jerkMax = 50, EX unless stated):
 
-| Path | Law (ideal) | + stop items | profileTime | Timeout `1.5·profileTime + 1` |
+| Path | Law (ideal) | + dwells | profileTime | Timeout `1.5·profileTime + 1` |
 |---|---|---|---|---|
-| Shared example | 3.52 s | - | 3.52 s | **6.28 s** |
-| P1.stop() | 4.32 s | + 0.1309 s steer | 4.45 s | **7.68 s** |
-| P1.stop(0.5) | 4.32 s | + 0.1309 + 0.5 | 4.95 s | 8.43 s |
-| P1.stop(1.5) | 4.32 s | + 0.1309 + 1.5 | 5.95 s | 9.93 s |
+| Shared example | 3.54 s | - | 3.54 s | **6.31 s** |
+| P1.stop() | 4.32 s | - | 4.32 s | **7.48 s** |
+| P1.stop(0.5) | 4.32 s | + 0.5 | 4.82 s | 8.23 s |
+| P1.stop(1.5) | 4.32 s | + 1.5 | 5.82 s | 9.73 s |
 | Tight arc r = 0.3 | 4.62 s | - | 4.62 s | 7.93 s |
 | Shared example, DEF + motor (no heading anchors) | 2.78 s | - | 2.78 s | 5.17 s |
+| Shared example + P1.withVelocity(1.0) (whole arc at 1.0 m/s) | 5.52 s | - | 5.52 s | 9.28 s |
 
 #### 7.13.8 Plant simulation
 
@@ -2441,46 +2476,42 @@ means the robot never passed the goal.
 
 | Path, constraints | jerkMax | Stop: t, error, overshoot | End: t, error, overshoot | Max tangential jerk [m/s^3] | Max vector jerk [m/s^3] |
 |---|---|---|---|---|---|
-| Shared example, EX | 30 | | 3.50 s, 1.9 cm, -1.9 cm | 30.0 | 193 |
-| Shared example, EX | **50** | | **3.44 s, 1.7 cm, -1.7 cm** | 50.0 | 150 |
+| Shared example, EX | 30 | | 3.48 s, 1.8 cm, -1.8 cm | 30.0 | 161 |
+| Shared example, EX | **50** | | **3.42 s, 1.8 cm, -1.8 cm** | 50.0 | 133 |
 | P1.stop(), EX | 30 | 2.08 s, 1.8 cm, -1.8 cm | 4.18 s, 1.8 cm, -1.8 cm | 30.0 | 111 |
 | P1.stop(), EX | **50** | **2.04 s, 1.4 cm, -1.4 cm** | **4.10 s, 1.4 cm, -1.4 cm** | 50.0 | 135 |
-| Tight arc, EX | 30 | | 4.54 s, 1.8 cm, -1.8 cm | 30.0 | 152 |
-| Tight arc, EX | **50** | | **4.46 s, 1.1 cm, -1.1 cm** | 50.0 | 290 |
-| Shared example, DEF + motor (no heading anchors) | 50 | | 2.54 s, 1.4 cm, -1.3 cm | 50.0 | 325 |
+| Tight arc, EX | 30 | | 4.56 s, 1.6 cm, -1.6 cm | 30.0 | 152 |
+| Tight arc, EX | **50** | | **4.52 s, 1.5 cm, -1.5 cm** | 50.0 | 127 |
+| Shared example, DEF + motor (no heading anchors) | 50 | | 2.56 s, 1.3 cm, -1.3 cm | 50.0 | 317 |
 | P1.stop(), DEF + motor (no heading anchors) | 50 | 1.50 s, 0.9 cm, -0.9 cm | 3.00 s, 1.1 cm, -1.1 cm | 50.0 | 179 |
-| Tight arc, DEF + motor | 50 | | 3.36 s, 0.8 cm, -0.8 cm | 50.0 | 320 |
+| Tight arc, DEF + motor | 50 | | 3.40 s, 0.7 cm, -0.7 cm | 50.0 | 317 |
 
-- **No overshoot** of any stop or end in any run; arrival error 0.8 to 2.2 cm, inside the 3 cm tolerance. The tangential jerk never
+- All runs use the law of section 7.13.4 with constant-speed arcs. **No overshoot** of any stop or end in any run; arrival error
+  0.7 to 1.8 cm, inside the 3 cm tolerance. The tangential jerk never
   exceeds jerkMax. The plant finishes sooner than the ideal run because the ideal run's tail is a fixed exponential while the plant
   enters the 3 cm zone with some speed left (**Inference**).
 - Two fixes came from the simulation and are part of the law: the landing rule, and `d_h <= jerkMax·dt/k_p^2` (without it the
   hand-over step was 22 m/s^3 with jerkMax = 10).
-- The **vector** jerk of the command (100 to 325 m/s^3) is **not** limited by this law. Its sources (**Inference**): the G1 curvature
+- The **vector** jerk of the command (110 to 320 m/s^3) is **not** limited by this law. Its sources (**Inference**): the G1 curvature
   step at arc joints (a_n jumps by up to aLat, i.e. aLat/dt = 200 to 360 m/s^3), the cross-track correction, the CAPTURE hand-over. The
   limiter limits acceleration, not jerk. Clothoids (v2, section 5.12.3) are the fix for arc joints.
 - These are model results, not robot results (**Uncertain** how well the toy plant matches the robot).
 
-#### 7.13.9 Initial overspeed with the jerk law
-
-Check at initialize: for every constraint, `stopDist(v0, 0, vt_j, jerkMax, maxSkidAccel) <= s_j - s0`; if not, warning C4 and drive
-anyway (the law brakes at once, still jerk-limited; no emergency override is added, the limiter still bounds the acceleration).
-Example: v0 = 3.0, a cap of 1.5 m/s 0.5 m ahead: jerkMax = 30 needs 1.006 m (triangular case), jerkMax = 50 needs 0.782 m (full D):
-both > 0.5 m, so C4 is issued. The same case passes the jerk-free check of section 7.6.6, because the jerk ramp-in costs distance.
-
-#### 7.13.10 Pseudocode (law only)
+#### 7.13.9 Pseudocode (law only)
 
 ```
 step(v, a, s, cap):                              # once per loop, s = s_v (lag-led, clamped at s_goal - d_h)
-  cons = [(s_j, vB[j], D_j) for junctions ahead] + [(s_goal - d_h, k_p*d_h, D_goal)]
+  cons = [(s_j, vB[j], D_j, isArcEntry(j)) for junctions ahead] + [(s_goal - d_h, k_p*d_h, D_goal, true)]
+  onArc = (span at s is an arc);  aD_cur = aDec if onArc else aD[span at s]
   failed = {}
-  for a1 in [min(a + jerkMax*dt, Amax(v, s)), a - sign(a)*min(abs(a), jerkMax*dt), a]:
+  cands = ([] if onArc else [min(a + jerkMax*dt, Amax(v, s))]) + [a - sign(a)*min(abs(a), jerkMax*dt), a]   # no "up" on an arc
+  for a1 in cands:
       a1 = max(a1, -aD_cur)                                                     # traction clamp (may exceed jerkMax for one loop)
       v1 = v + (a + a1)/2*dt;  if v1 < 0: continue
-      if a1 is not the first candidate and a1 < -sqrt(2*jerkMax*v1): continue    # landing rule
+      if a1 is not "up" and a1 < -sqrt(2*jerkMax*v1): continue                    # landing rule
       s1 = s + (v + v1)/2*dt
       if safe(v1, a1, s1, cons, cap, failed): return (v1, a1)
-  D_brake = max(Dj for (sj, vt, Dj) in failed) if failed else cons[0].Dj         # binding constraints, else the nearest
+  D_brake = max(Dj for c in failed) if failed else cons[0].Dj                    # binding constraints, else the nearest
   D_brake = min(D_brake, aD_cur)                                                # safety clamp
   a1 = min(a + jerkMax*dt, max(a - jerkMax*dt, -D_brake, -sqrt(2*jerkMax*v)))    # brake
   v1 = v + (a + a1)/2*dt;  if v1 <= 0: (v1, a1) = (0, max(a1, 0))
@@ -2490,18 +2521,19 @@ safe(v1, a1, s1, cons, cap, failed):
   ok = true
   if v1 > cap and a1 >= 0: ok = false
   if a1 > 0 and v1 + a1^2/(2*jerkMax) > cap: ok = false
-  for c = (sj, vt, Dj) in cons:
+  for c = (sj, vt, Dj, needA0) in cons:                    # needA0: arc entry or hand-over point
       if v1 <= vt and a1 <= 0: continue
+      if not needA0 and v1 + max(0, a1)^2/(2*jerkMax) <= vt: continue             # line-to-line junction: speed only
       if stopDist(v1, a1, vt, jerkMax, Dj) + STOP_DIST_MARGIN > sj - s1: ok = false; failed.add(c)
   return ok
 ```
 
-#### 7.13.11 Lookup and feed-forward acceleration
+#### 7.13.10 Lookup and feed-forward acceleration
 
 Lookup of the profile, used for the law's caps, for logging, and in the jerkMax-free limit:
-1. Find span k with `s0[k] <= s < s0[k] + l[k]` (binary search on s0, or a cursor from the last span). Clamp s to the current
+1. Find span k with `sStart[k] <= s < sStart[k] + l[k]` (binary search on sStart, or a cursor from the last span). Clamp s to the current
    sub-profile.
-2. `q = s - s0[k]`.
+2. `q = s - sStart[k]`.
 3. `vBack(q) = min(vCap[k], sqrt(vB[k+1]^2 + 2·aD[k]·(l[k] - q)))`: one sqrt, no table interpolation.
 4. `vProf(q)` (logging) `= min(vCap[k], F_k(vF[k], q), sqrt(vF[k+1]^2 + 2·aD[k]·(l[k] - q)))`.
 
@@ -2522,7 +2554,7 @@ through unchanged (:80); an allowed change is returned unchanged (:116-126), so 
 
 | Profile quantity | Limiter limit | Condition (margin 0.9) |
 |---|---|---|
-| a_t, a_n on arcs (both arc modes are on the ellipse) | skid disk maxSkidAccel | aAcc, aDec, aLat <= 0.9·maxSkidAccel |
+| a_n on arcs (a_t = 0 there, section 7.8), a_t on lines | skid disk maxSkidAccel | aAcc, aDec, aLat <= 0.9·maxSkidAccel |
 | speed-up a_t | forward: `maxForwardAccel·(1 - v/freeSpeed)` | the speed-up phase follows 0.9 of that curve |
 | any acceleration, any direction in the robot frame | tilt box | <= 0.9·min(tiltFront, tiltSide); a box contains its inscribed disk |
 | omega, alpha | none (passed through) | the follower limits alpha itself (section 8.5.2) |
@@ -2531,7 +2563,7 @@ With DEF all hold: 7.2 <= 7.2 (skid 8), 7.2 <= 10.8 (tilt 12), and the speed-up 
 
 **Inference: the profile has the limiter's own shape** (skid-limited changes, motor-curve speed-up) at 90%, so the two
 never disagree. **Recommendation: keep the limiter.** In normal driving it does nothing; it still catches jumps in the
-cross-track term when a vision update moves the pose, the start transient (sideways or overspeed start), and s* jumping
+cross-track term when a vision update moves the pose, the start transient (a sideways or fast start), and s* jumping
 forward. Lag when it engages: a velocity step dv takes `dv/maxSkidAccel`; a 0.5 m/s step takes 0.0625 s (about 3 loops)
 with about `dv^2/(2·a) = 0.016 m` of drift. At the start, misaligned modules hold the sent speed back (cosine scaling,
 DemaciaKinematics.java:198), so the start is delayed by the module steer time, at most `90 deg/12 rad/s = 0.13 s`; braking
@@ -2548,25 +2580,22 @@ All methods in the s-domain. Example times are for the shared example with EX un
 
 #### 7.15.1 Trapezoid (constant acceleration), grid passes
 
-`v_{i+1}^2 = v_i^2 + 2·a·ds_i` (backward with aDec, forward with aAcc, samples every 0.02 m).
-- Smoothness: v continuous; a piecewise constant with steps; jerk unbounded.
-- Caps and stops: exact for any cap shape; a stop is a sample with v = 0. Speed-dependent limits (ellipse, motor curve) are
-  exact because a is evaluated at each sample.
-- Cost: about 1000 samples for 20 m, two O(N) loops, about 56 kB.
-- Example: **3.2723 s**; DEF + motor curve 2.3101 s (no heading anchors; 2.439 s with the P1 anchor).
-- **Inference**: for a point-mass model with these bounds, forward-backward passes are time-optimal, so this is the
-  reference for the other methods.
+`v_{i+1}^2 = v_i^2 + 2·a·ds_i` on samples every 0.02 m, backward with aDec and forward with aAcc, with the exact ellipse and motor
+curve at each sample. **Inference**: for a point-mass model with these bounds, forward-backward passes are time-optimal, so this is
+the reference for the other methods. Example: **3.2723 s**; DEF + motor curve 2.3101 s (no heading anchors). It is the test oracle
+only, not production code; the equations and its use in tests are in Appendix B.
 
 #### 7.15.2 Trapezoid per span (chosen)
 
 The method of sections 7.3 to 7.10: in span k `v(q) = min(vCap_k, F_k(v_in, q), sqrt(v_out^2 + 2·aD·(l - q)))`, junction passes,
 stops as J = 0 with sub-profiles.
-- Caps and stops: exact on lines and on arcs at constant speed (the common case); conservative (+2.5% to +5.5% in the cases
-  tried) when speed must change on an arc; each leg of a user stop is one span from 0 to 0; face-target needs 0.1 m sub-spans.
+- Caps and stops: exact when every arc is driven at its curvature cap (the common case); conservative when a point cap on an arc
+  binds, because the whole arc is driven at that cap (+16% and +47% in the two cases tried, section 7.8); each leg of a user stop is
+  one span from 0 to 0; face-target needs 0.1 m sub-spans.
 - Cost: O(spans); lookup is one sqrt (plus a bisection in a motor-curve speed-up).
 - Matches the drivetrain: yes, with the motor curve in closed form. A pure constant-acceleration version is either outside
   the limiter or 22 to 33% slow at DEF.
-- Example: **3.2723 s** (equal to 7.15.1); DEF + motor 2.3101 s (equal; no heading anchors); P1.stop() 3.8839 s motion.
+- Example: **3.2723 s** (equal to the grid oracle); DEF + motor 2.3101 s (equal; no heading anchors); P1.stop() 3.8839 s motion.
 - Easy to explain and log ("span 0: up to 2.72 m/s, down to 2.38"); phase and time are exact numbers.
 
 #### 7.15.3 Jerk-limited S-curve
@@ -2623,7 +2652,7 @@ example with DEF (no heading anchors) but a_t reaches 8.49 m/s^2 at low speed, a
 | Method | a continuous? | Caps / stops | Build cost | Matches limiter | Shared example | DEF + motor (no heading anchors) |
 |---|---|---|---|---|---|---|
 | 1 Grid trapezoid + ellipse + motor | no | exact / sample v = 0 | ~1000 samples | yes | 3.2723 s | 2.3101 s |
-| **2 Span closed form + motor ramp + arc modes** | no | exact (common case), +2.5..5.5% if speed changes on an arc / junction 0 | O(spans) | yes | **3.2723 s** | **2.3101 s** |
+| **2 Span closed form + motor ramp + constant-speed arcs** | no | exact when every arc is at its curvature cap, +16..47% when a point cap on an arc binds / junction 0 | O(spans) | yes | **3.2723 s** | **2.3101 s** |
 | 2' Span, pure constant-acceleration trapezoid | no | same | O(spans) | no: outside, or slow if folded | 3.2723 s | 2.2573 s (outside) or 2.8188 s (folded) |
 | 3 Per-span S-curve | yes | jerk-aware junction distances / junction 0 | O(spans) + bisection | no extra benefit | 3.3881 s (j=30), 3.6025 s (j=10) | not computed |
 | 4 Motor curve alone | in speed-up | needs a braking model and traction cap | O(spans) | best shape, invalid alone | n/a | 2.2961 s (a_t 8.49 > 7.2) |
@@ -2632,52 +2661,32 @@ example with DEF (no heading anchors) but a_t reaches 8.49 m/s^2 at low speed, a
 #### 7.15.7 Decision
 
 **v1 (with brief decision 18): method 2 for the limits, plus the jerk-aware online law of section 7.13 as the runtime command**
-(default jerkMax = 50 m/s^3; cost +4 to 6% time at EX and +6 to 15% at DEF).
+(default jerkMax = 50 m/s^3; cost +4 to 6% time at EX and +10 to 15% at DEF).
 
 **v1: method 2**, with its refinements: junction speeds from passes across spans; speed-up along
-`min(aAcc, 0.9·motor curve)` in closed form; ARC_FULL/ARC_SHARED arc modes (rho = 0.8); stops as junction 0 with
+`min(aAcc, 0.9·motor curve)` in closed form; constant speed on every arc (simplification pass); stops as junction 0 with
 sub-profiles that restart with normal caps; runtime command = the jerk-aware law (vBack plus the time ramp is its unlimited-jerk
-limit). Reasons: it gives exactly
-the grid's time on every path tried without a speed change on an arc; it is never faster than the grid (always
-traction-safe) and at most 5.5% slower in the cases tried; it stays inside the limiter by construction; it is small, exact
-and easy to debug. **The grid method stays as the test oracle** (span time >= grid time, equal within 1e-3 s when no arc is
-ARC_SHARED). **v2**: speed zones, non-zero end speed, clothoid sub-spans (the lateral jerk at arc joints; the tangential jerk is
+limit). Reasons: it gives exactly the grid's time whenever every arc is driven at its curvature cap; it is never faster than the
+grid (always traction-safe); a point cap on an arc slows the whole arc (+16 to 47% in the cases tried, section 7.8); it stays
+inside the limiter by construction; it is small, exact and easy to debug. **The grid method stays as the test oracle**
+(Appendix B: span time >= grid time, equal within 1e-3 s when every arc is driven at its curvature cap). **v2**: speed zones, non-zero end speed, clothoid sub-spans (the lateral jerk at arc joints; the tangential jerk is
 already limited in v1).
 
-### 7.16 Alternative: grid passes (test oracle)
-
-Test oracle only, not production code (resolution R10).
-1. **Samples**: the boundaries of section 7.3.1; each interval of length l gets `N = max(1, ceil(l/ds - 1e-9))` uniform steps
-   with DEFAULT_DS = 0.02 m. The passes are exact for constant acceleration, so ds sets only the cap resolution. ds 0.02 vs
-   0.005 gives the same 3.2723 s; the sampled peak is 2.7194 vs 2.7238 m/s; the exact 2.7241 lies between samples (script).
-2. **Curvature at a sample**: the segment's kappa; at a boundary, the larger abs(kappa) of the two sides.
-3. **Caps**: as section 7.4, per sample; point caps at their sample; stops and L are 0.
-4. **Passes with the ellipse** (explicit, acceleration at the known neighbor):
-   ```
-   backward: v_i = min(cap_i, sqrt(v_{i+1}^2 + 2*ds_i*aDec*sqrt(max(0, 1 - (v_{i+1}^2*abs(kappa_i)/aLat)^2))))
-   forward:  v_i = min(cap_i, sqrt(v_{i-1}^2 + 2*ds_{i-1}*aAccEff(v_{i-1}, i)))     (Heun step for the motor curve)
-   ```
-   The explicit scheme is off by O(ds) where kappa changes; cap_i is still applied exactly.
-5. **Lookup**: interpolate v^2 linearly (exact for constant a). Example: (0, 0) and (0.02, 0.3464) at s = 0.005 gives 0.1732;
-   interpolating v linearly would give 0.0866.
-6. **Time**: `dt_i = 2·ds_i/(v_i + v_{i+1})`, exact for constant acceleration; e.g. from rest over 0.02 m at 3 m/s^2:
-   `0.04/0.3464 = 0.1155 s = sqrt(2·0.02/3)`.
-
-### 7.17 Full worked example
+### 7.16 Full worked example
 
 Shared example: r = 1.4142, C = (3, 2.5858), sigma = -1; lines 1.5307 m, arc 2.9155 m (sweep -118.12 deg), L = 5.9769 m,
 s(P1) = 2.9885. Constraints EX, start at rest, heading of section 6.11. With alphaMax = 4·pi, the wheel cap (R_mod = 0.3889)
 and the DEF motor curve added, nothing changes: kink cap 2.818, wheel cap 3.363 and motor knee 3.53 are all above the speeds
 reached.
 
-| k | Span | l | Mode | vCap | aA, aD | theta' |
+| k | Span | l | Kind | vCap | aA, aD | theta' |
 |---|---|---|---|---|---|---|
 | 0 | line 0 | 1.5307 | LINE | 4 | 3, 3 | 0.5256 (rotation cap 11.95) |
-| 1 | arc to P1 | 1.4578 | ARC_FULL | 2.3784 | 0, 0 | 0.5256 |
-| 2 | arc from P1 | 1.4577 | ARC_FULL | 2.3784 | 0, 0 | 0 |
+| 1 | arc to P1 | 1.4578 | ARC | 2.3784 | 0, 0 | 0.5256 |
+| 2 | arc from P1 | 1.4577 | ARC | 2.3784 | 0, 0 | 0 |
 | 3 | line 2 | 1.5307 | LINE | 4 | 3, 3 | 0 |
 
-Junctions: vB = [3.8524, 2.3784, 2.3784, 2.3784, 0], vF = [0, 2.3784, 2.3784, 2.3784, 0]. Both arcs stay ARC_FULL.
+Junctions: vB = [3.8524, 2.3784, 2.3784, 2.3784, 0], vF = [0, 2.3784, 2.3784, 2.3784, 0]. The arc speed is the curvature cap 2.3784.
 
 | Phase | s range [m] | Speed [m/s] | Distance [m] | Time [s] |
 |---|---|---|---|---|
@@ -2689,11 +2698,11 @@ Junctions: vB = [3.8524, 2.3784, 2.3784, 2.3784, 0], vF = [0, 2.3784, 2.3784, 2.
 | **Total** | | | 5.9769 | **3.2723 s** |
 
 - Peak: `v^2 = (2·3·1.5307 + 2.3784^2)/2 = 7.4205`, v = 2.7241 m/s. This is the trapezoid without a jerk limit; the v1 law peaks
-  at 2.58 m/s and takes 3.52 s to the 0.03 m tolerance (timeout 6.28 s, section 7.13.7).
+  at 2.58 m/s, drives the arc at 2.360 m/s and takes 3.54 s to the 0.03 m tolerance (timeout 6.31 s, section 7.13.7).
 - Max abs(omega) = `0.5256·2.7241 = 1.43 rad/s`. Max a_n = 4.000 m/s^2 on the arc.
 - Limiter check: 4.0 m/s^2 on the arc against skid 8; speed-up 3 m/s^2 at 2.72 m/s against the motor curve
   `10·(1 - 2.72/5.3) = 4.87`: inside.
-- Grid oracle: the same 3.2723 s; arc start 1.0233 s, P1 1.6362 s, arc end 2.2491 s.
+- Grid oracle (Appendix B): the same 3.2723 s; arc start 1.0233 s, P1 1.6362 s, arc end 2.2491 s.
 
 Runtime samples:
 
@@ -2710,48 +2719,41 @@ profileTime and timeout (jerk law) are in section 7.13.7 where computed:
 
 | Variant | Key numbers | Trapezoid time | v1 profileTime / timeout |
 |---|---|---|---|
-| Main | arc 2.3784, peak 2.7241 | 3.2723 s | 3.52 s / 6.28 s |
-| P1.stop() | two 2.8284 m lines, peaks 2.9130 at s = 1.4142 and 4.2426, steer 0.1309 | 4.0148 s | 4.45 s / 7.68 s |
-| P1.stop(0.5) | + 0.5 dwell | 4.5148 s | 4.95 s / 8.43 s |
-| P1.withVelocity(1.0) (arcs ARC_SHARED: cap 2.1273, a 1.8) | junctions [0, 2.1273, 1.0, 2.1273, 0]; braking from s = 2.0092 | 3.7751 s | not computed |
-| P1 at 180 deg (heading-kink cap) | v(P1) = 1.4088, arcs ARC_SHARED | 3.5780 s (grid oracle 3.4372 s) | not computed |
+| Main | arc 2.3784, peak 2.7241 | 3.2723 s | 3.54 s / 6.31 s |
+| P1.stop() | two 2.8284 m lines, peaks 2.9130 at s = 1.4142 and 4.2426 | 3.8839 s | 4.32 s / 7.48 s |
+| P1.stop(0.5) | + 0.5 dwell | 4.3839 s | 4.82 s / 8.23 s |
+| P1.withVelocity(1.0) | whole arc at 1.0; junctions [0, 1.0, 1.0, 1.0, 0]; braking for the arc from s = 0.8487 | 5.2576 s (grid oracle 3.5770 s) | 5.52 s / 9.28 s |
+| P1 at 180 deg (heading-kink cap) | whole arc at 1.4088 | 4.2812 s (grid oracle 3.4372 s) | 4.54 s / 7.81 s |
 | Measured start v0 = 1.5 | peak 2.9188 | 2.9051 s | not computed |
 | DEF + motor curve, no heading anchors | arc 3.1910, peak 3.7069 | 2.3101 s | 2.78 s / 5.17 s |
-| DEF + motor curve, with the P1 90 deg anchor | kink cap 2.818 < arc cap 3.191: arcs ARC_SHARED (cap 2.8541), junctions [0, 2.8541, 2.8176, 2.8541, 0] | 2.439 s | not computed |
+| DEF + motor curve, with the P1 90 deg anchor | kink cap 2.8176 < arc cap 3.191: whole arc at 2.8176, junctions [0, 2.8176, 2.8176, 2.8176, 0] | 2.4549 s | 2.88 s / 5.32 s |
 | Tight arc (0,0), (4,0).withRadius(0.3), (4,4) | arc 1.0954 | 4.3210 s | 4.62 s / 7.93 s |
 
-### 7.18 Pseudocode
+### 7.17 Pseudocode
 
 ```
-buildProfile(path(flipped), c: PathConstraints, cfg: KinematicsConfig?, R_mod, v0, heading, s_start, profileCfg):
-  spans = splitAt({s_start, L} ∪ segmentStarts ∪ waypointS ∪ stops [∪ FT sub-spans]) restricted to [s_start, L]   # merge < S_EPS
+buildProfile(path(flipped), c: PathConstraints, cfg: KinematicsConfig?, R_mod, v0, heading):
+  spans = splitAt({0, L} ∪ segmentStarts ∪ waypointS ∪ stops [∪ FT sub-spans])            # merge < S_EPS
   for k: kappa[k] = segmentKappa(k); dtheta[k] = heading.slope(k)                       # section 6.4
+  for k: (vCap[k], aA[k], aD[k]) = spanLimits(k)
   for each sub-profile [s_a, s_b] between stops:
-      mode[k] = LINE or ARC_FULL
-      repeat:
-          for k: (vCap[k], aA[k], aD[k]) = spanLimits(k, mode[k])
-          J[j] = min(vCap[j-1], vCap[j], wpVel(j), headingKinkCap(j));  J[first] uses normal caps;  J[last] = 0
-          vB = J; for j = last-1 .. first: vB[j] = min(vB[j], sqrt(vB[j+1]^2 + 2*aD[j]*l[j]))
-          vF = vB; vF[first] = min(vF[first], subStartSpeed)                           # v0 for the first, 0 after a stop
-          for j = first+1 .. last: vF[j] = min(vF[j], Fup(j-1, vF[j-1], l[j-1]))      # trapezoid or motor ramp
-          changed = false
-          for arc k in ARC_FULL: if min(vF[k], vF[k+1]) < vCap[k] - 1e-9: mode[k] = ARC_SHARED; changed = true
-      until not changed
+      J[j] = min(vCap[j-1], vCap[j], wpVel(j), headingKinkCap(j));  J[first] uses normal caps;  J[last] = 0
+      vB = J; for j = last-1 .. first: vB[j] = min(vB[j], sqrt(vB[j+1]^2 + 2*aD[j]*l[j]))
+                                       if line j starts at an arc exit: vB[j] = min(vB[j], vJerk(j))   # 7.8, bisection
+      vF = vB; vF[first] = min(vF[first], subStartSpeed)                           # v0 for the first, 0 after a stop
+      for j = first+1 .. last: vF[j] = min(vF[j], Fup(j-1, vF[j-1], l[j-1]))      # trapezoid or motor ramp; vF[j-1] on an arc
       t_k = spanTime(vF[k], vF[k+1], vCap[k], aA[k], aD[k], l[k])                      # closed form
   spanTimeLowerBound = sum t_k
-  profileTime = offlineSpeedLaw(v0, spans, constraints) + sum_goals handoverTail + sum_stops (steerTime + dwell) + lastDwell   # 7.13.6
-  overspeed check with a_hard = cfg.maxSkidAccel (if cfg); sideways check
+  profileTime = offlineSpeedLaw(v0, spans, constraints, guard = 10*spanTimeLowerBound + 10) + sum_goals handoverTail + sum_stops dwell + lastDwell   # 7.13.6
 
-spanLimits(k, mode):
+spanLimits(k):
   cap = c.vMax; aA = c.aAcc; aD = c.aDec
-  if mode == ARC_FULL:   cap = min(cap, sqrt(c.aLat/abs(kappa))); aA = aD = 0
-  if mode == ARC_SHARED: cap = min(cap, sqrt(rho*c.aLat/abs(kappa))); aA *= sqrt(1-rho^2); aD *= sqrt(1-rho^2)
+  if kappa[k] != 0: cap = min(cap, sqrt(c.aLat/abs(kappa[k]))); aA = aD = 0          # arc: constant speed (7.8)
   if dtheta != 0: cap = min(cap, c.omegaMax/abs(dtheta)); aA = min(aA, c.alphaMax/abs(dtheta)); aD = min(aD, c.alphaMax/abs(dtheta))
   if R_mod > 0 and cfg: cap = min(cap, 0.9*cfg.maxAllowedModuleVelocity/(1 + abs(dtheta)*R_mod))
-  if mode != LINE and cfg: aA = min(aA, 0.9*cfg.maxForwardAccel*max(0, 1 - cap/cfg.freeSpeed))
   return (cap, aA, aD)                       # LINE: Fup uses min(aA, 0.9*motor curve) in closed form
 
-runtime (each loop, current sub-profile):  (v_cmd, a_cmd) = speedLaw.step(v_cmd, a_cmd, s_v, cap)   # 7.13.10; follower 8.3.1, 8.14
+runtime (each loop, current sub-profile):  (v_cmd, a_cmd) = speedLaw.step(v_cmd, a_cmd, s_v, cap)   # 7.13.9; follower 8.3.1, 8.14
 ```
 
 Tests: section 13.3.
@@ -2776,11 +2778,11 @@ The follower uses only these functions of the active (already flipped) path and 
 | `aAccEff(v, s)` | effective speed-up limit (section 7.6.5), the law's Amax | CAPTURE speed-up limit (8.3.7e) |
 | `vProf(s)` | forward-pass profile | logging only |
 | `theta(s)`, `theta'(s)` | heading profile, continuous and unwrapped (section 6) | heading |
-| `profileTime` | from s0 to L plus steer times and dwells (section 7.10.5) | timeout |
+| `profileTime` | from 0 to L plus dwells (section 7.10.5) | timeout |
 | `segmentIndexAt(s)`, segment end, type and radius | segment lookups (section 5.9.3) | window cap, telemetry |
 | `stopPoints()` | sorted s_c of every automatic STOP corner and user stop, each with P_c, T_in, T_out, dwell | stop state machine (8.6) |
 | `events()` | (s_event, action), already converted (section 5.9.5) | events (8.8) |
-| `path.flipped(flipConfig)` | the path flipped for red, memoized (section 5.13) | alliance (8.10) |
+| `path.flipped(config)` | the path flipped for red with the flip mode and field size of the `PathFollowerConfig`, memoized (section 5.13) | alliance (8.10) |
 
 Derived here: `e_t = (p - x(s*))·T(s*)` (0 unless the projection is clamped at a window edge or at the goal).
 
@@ -2790,12 +2792,13 @@ exactly at P_c. Section 8.3.7 relies on this. At a STOP, the geometry's T and N 
 follower uses left limits (`evaluateLeft`, section 5.9.3) whenever s* = s_goal, so e_t, e_n and d_go at a stop refer
 to the leg the robot arrives on.
 
-Alignment with the speed profile: the profile is built once in `initialize()` from v0, theta0 and s0, which the
+Alignment with the speed profile: the profile is built once in `initialize()` from v0 and theta0, which the
 follower passes (section 8.14). Stop points split it into sub-profiles; the follower drives one at a time and moves
 to the next on arrival (section 8.6). The measured field velocity comes from a second supplier,
 `Supplier<ChassisSpeeds>` (section 8.11).
 
-All follower constants are fields of `FollowerConfig` (section 9.6); values and single homes are in section 10.
+The tunable follower settings are fields of `PathFollowerConfig` (section 9.6); the other follower constants are internal.
+Values and single homes are in section 10.
 Worked numbers use EX (section 3) and jerkMax = 50 m/s^3; d_h = 0.05 m with both EX and DEF (it depends on jerkMax and k_p only),
 and the heading linear zone is `4·pi/4^2 = 0.785 rad` with both.
 
@@ -2826,8 +2829,8 @@ dt = clamp(t - t_prev, 0.005, 0.10)      // first loop: dt = dt_nom
 
 dt is used for the window (8.2.3), the speed law (8.3.7), the omega rate limit (8.5.2), the settle timer (8.7) and the
 monitors (8.12). The control laws output velocities, so no gain depends on dt. Example: loops at 0.020, 0.020, 0.061 s;
-the third gives dt = 0.061, and the window uses it. `overrunCount` is incremented when dt > 1.5·dt_nom = 0.03 s. A dt
-above 0.10 s (breakpoint, long GC) is clamped so the window cannot grow without bound.
+the third gives dt = 0.061, and the window uses it. A dt above 0.10 s (breakpoint, long GC) is clamped so the window cannot
+grow without bound.
 
 #### 8.2.3 Projection window
 
@@ -2838,16 +2841,15 @@ v_hat   = max(v_t_prev, abs(V_meas))                  // last commanded tangenti
 ahead   = clamp(k_ahead * v_hat * dt, ahead_min, ahead_max)
 sMin    = max(s_start_sub, s_hi - eps_back)            // s_hi = highest accepted s* (8.2.4)
 sMax    = min(s_prev + ahead, s_end(k_next), s_goal)
-          k_cur = segmentIndexAt(s_prev); k_next = the first positive-length segment after k_cur (STOP / PASS skipped),
+          k_cur = segmentIndexAt(s_prev); k_next = the first positive-length segment after k_cur (STOP skipped),
           or k_cur if it is the last segment; s_end(k) = s_start,k + l_k
           and, for every arc j with s-range meeting [s_prev, sMax]:  sMax = min(sMax, max(s_start_j, s_prev) + max(0.05, (pi/2)*r_j))
 (s*, e_n) = project(p, sMin, sMax, s_prev)
 e_t     = (p - x(s*))·T(s*)
 ```
 
-- Capping at the end of the segment after the current one (k_next) means one loop never jumps over a whole segment. Zero-length STOP and PASS
-  entries are skipped when finding "the next segment"; otherwise a robot at the end of a line followed by a PASS gets
-  sMax = s_prev and stalls.
+- Capping at the end of the segment after the current one (k_next) means one loop never jumps over a whole segment. Zero-length STOP
+  entries are skipped when finding "the next segment".
 - `s_goal` = the next stop point s_c, or L (section 8.6). The window never passes a point where the robot must stop.
 - Arc cap. An arc can sweep more than 180 deg and then its in-line and out-line can cross (section 5.6.1). Inside 90 deg
   of sweep the closest point to any robot not at the center is unique, and a crossing needs more than 180 deg of turning,
@@ -2886,28 +2888,25 @@ When the robot is really pushed back by more than 0.03 m: s* stays at `s_hi - 0.
 T(s*) and catches up. Near a stop, d_go uses e_t (8.3.7), so the remaining distance stays correct. Example: s_hi = 4.20, the
 robot is pushed back and projects at 4.05; the window floor is 4.17, so s* = 4.17 and e_t ~= -0.12 m.
 
-#### 8.2.5 Initial s* (in initialize, before the profile is built)
+#### 8.2.5 Start check (in initialize, before the profile is built)
 
 ```
-candidates = all local minima of abs(p - x(s)) over [0, L]   // global search, done once
-dBest      = min distance over candidates
-s0         = smallest s among candidates with distance <= dBest + d_tie
-s_hi = s_prev = s0
+d0 = abs(p - P0)                        // P0 of the active (flipped) path
+if d0 > startTol (0.5 m): end, result FAILED_START_TOO_FAR, alert A1
+s_hi = s_prev = 0
 ```
 
-- Tie-break toward smaller s. If a path ends near where it starts, a robot at P0 is at distance 0 from s = 0 and maybe
-  0.2 m from s ~= L; noise could pick s ~= L and finish at once. Example: candidates s = 0.00 (0.04 m) and s = 7.60 (0.10 m):
-  `0.10 <= 0.04 + 0.30`, so s0 = 0.00. At a self-crossing both branches tie and the earlier one wins.
-- Mid-path start (for example re-scheduled after a disable): s0 = the closest point (resolution R5). The profile, the
-  heading and profileTime start at s0 (sections 6.8, 7.10.5); passed events are skipped (8.8).
-- Start far from the path, `d0 = abs(p - x(s0))`: above d_far_warn (0.5 m) alert C6 and run normally (the correction
-  clamp makes the robot join at <= c_max laterally); above d_far_abort (3.0 m) do not drive, result
-  `FAILED_START_TOO_FAR` (a wrong flip or a wrong path is likelier than a real start there).
-- Start behind P0 (s0 = 0 and e_t < -eps_back): no special case. s* stays at 0 while the speed law speeds the robot up along
-  T(0); d_go includes -e_t, so the hand-over sees the true distance. Simulated 0.5 m behind P0: done at 4.10 s, against
-  3.94 s from P0 (section 8.15). The extra distance is not in profileTime; the timeout margin covers it. Starting the path
-  at the current pose (rebuilding geometry) is not in v1 (resolution R5).
-- Start state of the speed law: `(v_cmd, a_cmd) = (v0, 0)`, `v0 = max(0, V_meas·T(s0))` (sections 7.6.4, 7.13.2).
+**Decision** (user, simplification pass): there is no mid-path start. The robot must start within startTol = 0.5 m of P0;
+otherwise the command ends at once with `FAILED_START_TOO_FAR` and alert A1 (section 9.12). A wrong flip, a wrong path or a start
+pose that was not set is far likelier than a real start in the middle of a path. There is no global search, no tie-break and no
+skipping of events: the profile, the heading (section 6.8), profileTime and the events all start at s = 0.
+- Start a little behind or beside P0 (within 0.5 m): no special case. s* stays at 0 while the speed law speeds the robot up along
+  T(0); d_go includes -e_t, so the hand-over sees the true distance, and the correction clamp joins the path at <= c_max laterally.
+  Simulated 0.5 m behind P0: done at 4.10 s, against 3.94 s from P0 (section 8.15). The extra distance is not in profileTime; the
+  timeout margin covers it.
+- Start a little ahead of P0 (within 0.5 m): the window (section 8.2.3) catches up by `ahead` (at least 0.15 m) per loop.
+- A path that returns to P0 (a loop): s* starts at 0, so the robot does not finish at once.
+- Start state of the speed law: `(v_cmd, a_cmd) = (v0, 0)`, `v0 = max(0, V_meas·T(0))` (sections 7.6.4, 7.13.2).
 
 ### 8.3 Translation command
 
@@ -2918,7 +2917,7 @@ s_L     = min(s* + v_t_prev * tau_lag, s_goal)                    // lookahead p
 s_v     = min(s* + v_t_prev * tau_lag, s_goal - d_h)              // lag-led progress for the speed law (8.3.7)
 d_go    = (s_goal - s*) - e_t                                     // signed distance to go (8.3.7)
 c       = clamp( -k_n * e_n, -c_max, +c_max )                     // 8.3.2, 8.3.8
-cap     = min( g(e_n) * vCap[span at s_v], sqrt(vMax^2 - c^2) )   // off-path slowdown (8.3.8), speed budget (8.3.9)
+cap     = min( vCap[span at s_v], sqrt(vMax^2 - c^2) )            // speed budget (8.3.9)
 (v_cmd, a_cmd) = speedLaw.step(v_cmd, a_cmd, s_v, cap)            // jerk-aware online trapezoid (section 7.13)
 v_t     = v_cmd
 V       = v_t * T(s_L) + c * N(s*)                                // field frame [m/s]
@@ -2927,8 +2926,8 @@ v_t_prev = v_t
 
 The speed law (brief decision 18) replaces the earlier `min(vBack(s_v), v_t_prev + aAccEff·dt, vsqrt(d_go))`: it brakes by position
 for every limit ahead (junction speeds vB, the hand-over point before the goal), speeds up along aAccEff, and keeps the tangential
-jerk within jerkMax. The off-path factor g and the speed budget enter as its cap, so a slowdown is jerk-limited too; only a sudden
-jump of c cuts v_t instantly to the budget (with the state reset of section 7.13.5).
+jerk within jerkMax. The speed budget enters as its cap, so a slowdown is jerk-limited too; only a sudden jump of c cuts v_t
+instantly to the budget (with the state reset of section 7.13.5).
 
 Sign (stated explicitly): e_n > 0 means the robot is LEFT of the path; `c = -k_n·e_n` is then negative and `c·N` points right,
 back toward the path. With tau_lag = 0, no clamp active and the law at the profile speed, this is the brief's
@@ -2937,16 +2936,15 @@ back toward the path. With tau_lag = 0, no clamp active and the law at the profi
 Worked example (shared example, EX, jerkMax = 50, real geometry) (hand, script):
 - Robot at `p = x(1.4849) + 0.0707·N = (1.7028, 3.3099)` on line 0: `T = (0.5142, 0.8577)`, `N = (-0.8577, 0.5142)`.
   Projection: `s* = 1.4849 m`, `e_n = +0.0707 m` (left), e_t = 0.
-- Law state v_cmd = 2.0 m/s, a_cmd = 3.0 m/s^2 (speeding up); tau_lag = 0.05: `s_L = s_v = 1.4849 + 0.10 = 1.5849`, just inside the arc
-  (`s_goal - d_h = 5.9269` does not clamp). `c = -3·0.0707 = -0.2121 m/s`; cap = min(1·2.3784, sqrt(16 - 0.045) = 3.994) = 2.3784.
-- Law: "up" gives `a1 = min(3.0 + 50·0.02, Amax)`, where Amax on the arc is the ellipse limit
-  `3·sqrt(1 - (2.0^2·0.7071/4)^2) = 2.121 m/s^2`; `v1 = 2.0 + (3.0 + 2.121)/2·0.02 = 2.0512 m/s`. It levels off below the cap
-  (`2.0512 + 2.121^2/100 = 2.0962 < 2.3784`), and the next junction (P1, vB = 2.3784) is above that, so "up" is safe:
-  **v_t = 2.0512 m/s**, a_cmd = 2.121 m/s^2. (The acceleration drops by 0.879 m/s^2 in one loop, 44 m/s^3, because the arc's traction
-  limit starts; this is within jerkMax, and traction would win if it were not, section 7.13.4.)
-- `T(s_L) = (0.5466, 0.8374)` (rotated 2.2 deg into the right turn).
-  `V = 2.0512·(0.5466, 0.8374) - 0.2121·(-0.8577, 0.5142) = (1.3031, 1.6086) m/s`, `abs(V) = 2.0702 m/s`.
-- Check: `N·V = -0.2906 = c + v_t·(T(s_L)·N) = -0.2121 - 0.0785`: the cross-track term plus 0.0785 m/s toward the arc's center from the
+- Law state v_cmd = 2.3604 m/s, a_cmd = 0: the law reached the arc speed with a = 0 at the arc entry (ideal-run value with jerkMax 50,
+  section 7.13.4). tau_lag = 0.05: `s_L = s_v = 1.4849 + 2.3604·0.05 = 1.6029`, inside the arc (`s_goal - d_h = 5.9269` does not clamp).
+  `c = -3·0.0707 = -0.2121 m/s`; cap = min(2.3784, sqrt(16 - 0.045) = 3.994) = 2.3784.
+- Law: s_v is on an arc, so "up" is not tried (section 7.13.4). "toward 0" with a = 0 gives a1 = 0 and v1 = 2.3604, below the cap; the
+  next junction (P1, vB = 2.3784) is above v1 with a1 = 0, so it is safe: **v_t = 2.3604 m/s**, a_cmd = 0. The arc is driven at this
+  speed.
+- `T(s_L) = (0.5572, 0.8303)` (rotated 2.9 deg into the right turn).
+  `V = 2.3604·(0.5572, 0.8303) - 0.2121·(-0.8577, 0.5142) = (1.4972, 1.8509) m/s`, `abs(V) = 2.3807 m/s`.
+- Check: `N·V = -0.3325 = c + v_t·(T(s_L)·N) = -0.2121 - 0.1204`: the cross-track term plus 0.1204 m/s toward the arc's center from the
   lookahead (the curvature feed-forward of section 8.3.4).
 
 #### 8.3.2 Cross-track dynamics on a line
@@ -3054,7 +3052,7 @@ of this chapter (section 8.15) used it.
 **(b) Lag lead, required.** The law's position input `s_v = min(s* + v_t_prev·tau_lag, s_goal - d_h)` starts braking tau_lag earlier,
 compensating the drivetrain lag. It is the s-domain form of `vBack(s) + a·tau`: `vBack(s + v·tau) ~= vBack(s) + (dv/ds)·v·tau`. Example:
 braking zone `vBack(s) = sqrt(2·3·(L - s))`, L - s = 1.0 m, v = 2.449 m/s, tau_lag = 0.05: lead 0.122 m, `vBack(s* + 0.122) = 2.295 m/s`
-instead of 2.449. **tau_lag > 0 is part of the v1 law:** without it the plant simulation passes the goal by 2.4 to 7.2 cm
+instead of 2.449. **tau_lag > 0 is part of the v1 law:** without it the plant simulation passes the goal by 2.7 to 6.2 cm
 (section 7.13.2).
 
 **(c) Goal: the hand-over point.** The signed distance to go along the path is `d_go = (s_goal - s*) - e_t`. On the last line (or the
@@ -3082,8 +3080,15 @@ d = 2.0: 3.317 m/s against the profile's 3.464; 1.0: 2.236 / 2.449; 0.5: 1.414 /
 **(d) Why s_v is clamped at s_goal - d_h.** Without the clamp, the lead would put the law's position past its own hand-over point
 and it would brake to v_h too early. With the clamp the law reaches the hand-over point at v_h.
 
-**(e) CAPTURE (sections 8.6 and 8.7).** When `d_go <= d_h`, the state becomes CAPTURE_STOP or CAPTURE_END and the command becomes the 2D
-position law
+**(e) CAPTURE (sections 8.6 and 8.7).** When `d_go <= d_h`, or when the law has come to rest (`v_cmd = 0`) with
+`d_go <= d_h + 2·STOP_DIST_MARGIN`, the state becomes CAPTURE_STOP or CAPTURE_END and the command becomes the 2D position law. The second
+condition (review of the simplification pass) ends a deadlock: the law can stop a few mm before the hand-over point, where "up" from rest
+needs `STOP_DIST_MARGIN + (13/12)·jerkMax·dt^3` (0.0063 m at jerkMax 150) and less is left, so TRACK would never hand over and the offline
+profileTime loop would not end. It was seen once in 500 random chains (jerkMax 150, at rest 5.2 mm before the hand-over); with the rule the
+robot hands over at rest and CAPTURE starts it from 0 (speed-up limit `v_lim_prev + aAccEff·dt`). The band covers jerkMax up to
+570 m/s^3 (`STOP_DIST_MARGIN/((13/12)·dt^3)`). It acts only at `v_cmd = 0`, so no other run changes: every time in this document is the same (script). The alternative,
+counting the hand-over constraint as met within STOP_DIST_MARGIN of it, also ends the deadlock but changes the last loops of normal runs
+(shared example 3.54 -> 3.52 s), so it was not chosen.
 
 ```
 V_raw  = k_p * (P_goal - p)
@@ -3096,7 +3101,7 @@ V      = V_raw * min(1, v_lim / abs(V_raw))
 At entry `abs(V) = k_p·d_h = v_h`, so the speed is continuous; the deceleration steps from 0 to `k_p^2·d_h = 0.45 m/s^2` in one loop,
 22.5 m/s^3 <= jerkMax (that is the reason for the jerkMax term in d_h). **Inference, seamless hand-off:** on the final line
 `P_goal - p = d_go·T - e_n·N`, so `V = k_p·d_go·T - k_p·e_n·N`; with k_p = k_n the lateral part equals the TRACK correction while c is not
-clamped (warning C9 if k_p != k_n). The reason to switch: s* saturates at s_goal, and after an overshoot the TRACK law cannot push back;
+clamped (keep k_p = k_n; a different value only adds a small step at the hand-off). The reason to switch: s* saturates at s_goal, and after an overshoot the TRACK law cannot push back;
 the 2D law can, in any direction. Example: robot at `P_end + (-0.04, +0.01)` in the path frame with T = x: `V = 3·(0.04, -0.01) = (0.12, -0.03) m/s`,
 `abs(V) = 0.124 <= v_h = 0.15` (no scaling).
 
@@ -3104,20 +3109,17 @@ the 2D law can, in any direction. Example: robot at `P_end + (-0.04, +0.01)` in 
 `max(0, ln(d_h/pos_tol)/k_p) = ln(0.05/0.03)/3 = 0.170 s` per goal (0 when d_h < 0.03 m, i.e. jerkMax < 13.5 m/s^3) (with the earlier vsqrt hand-over at d_lin it was about 0.47 s). profileTime
 includes it (section 7.13.6); the 0.1 s settle is inside the timeout margin.
 
-#### 8.3.8 Correction clamp and off-path slowdown
+#### 8.3.8 Correction clamp
 
 ```
 c = clamp(-k_n*e_n, -c_max, c_max),     c_max = 1.0 m/s
-g(e_n) = clamp(1 - (abs(e_n) - e_slow0)/(e_slow1 - e_slow0), g_min, 1)
 ```
 
 - Clamp: a large error (bump, vision correction, start off the path) should not use the whole speed budget sideways. Above
   `abs(e_n) = c_max/k_n = 0.33 m` the approach is a constant 1 m/s instead of exponential.
-- Slowdown g (**Recommendation**, on by default): far off the path the robot slows, so it rejoins before it cuts the next corner.
-  Example: e_n = 0.5 m: `g = 1 - 0.35/0.6 = 0.417`, so a span cap of 3.0 m/s becomes 1.25 m/s. g scales the speed law's cap, so the
-  slowdown is jerk-limited (the robot is briefly above the reduced cap), not an instant cut. At abs(e_n) <= 0.15 m, g = 1 and the law
-  speeds up again. g >= 0.3 keeps progress, so the robot cannot stall.
 - Example: e_n = -0.5 m (right of the path), k_n = 3: `-k_n·e_n = +1.5`, so c = +1.0 m/s (left, toward the path).
+- Far off the path the robot keeps its profile speed and rejoins at c_max laterally (**Decision**, user, simplification pass); the
+  speed budget (section 8.3.9) keeps abs(V) <= vMax.
 
 #### 8.3.9 Keeping abs(V) <= vMax: tangential first
 
@@ -3165,7 +3167,7 @@ omega_ff  = theta'(s*) * v_t          // v_t = commanded tangential speed of thi
 ```
 
 Reasons for v_t and no lookahead: section 6.5. Example (section 8.3.1): `theta(1.4849) = 44.72 deg`,
-`omega_ff = 0.5256·2.0512 = 1.078 rad/s`.
+`omega_ff = 0.5256·2.3604 = 1.241 rad/s`.
 
 #### 8.5.2 Feedback, clamps, rate limit
 
@@ -3191,7 +3193,7 @@ omega     = clamp(omega_raw, omega_prev - alphaMax*dt, omega_prev + alphaMax*dt)
   DemaciaKinematics.java:271-272) when translation is also below 0.01 m/s; at k_theta = 4 that is abs(e_theta) < 0.14 deg, far inside 2 deg.
 
 Example (EX, continuing 8.5.1): theta_ref - theta = 0.10 rad; `alphaMax/k_theta^2 = 4·pi/16 = 0.785 rad`, so linear: omega_fb = 0.40;
-`omega_raw = 1.078 + 0.40 = 1.478 rad/s` (< 2·pi). With omega_prev = 1.40 the band is `+-4·pi·0.02 = +-0.251`, so omega = 1.478.
+`omega_raw = 1.241 + 0.40 = 1.641 rad/s` (< 2·pi). With omega_prev = 1.40 the band is `+-4·pi·0.02 = +-0.251`, so omega = 1.641.
 Saturation: e_theta = 1.5 rad at rest: `vsqrt = sqrt(2·4·pi·(1.5 - 0.393)) = 5.275 rad/s` (< 2·pi); the rate limit raises omega by 0.251 rad/s
 per loop until then.
 
@@ -3199,7 +3201,7 @@ per loop until then.
 
 Rule and derivation in section 6.9. Example (EX, robot and V of section 8.3.1, target (8.0, 4.0)) (script): `pT = (6.2972, 0.6901)`,
 `abs(pT)^2 = 40.131`; `theta_ref = atan2(0.6901, 6.2972) = 0.1091 rad (6.25 deg)`;
-`omega_ff = (0.6901·1.3031 - 6.2972·1.6086)/40.131 = -0.2300 rad/s` (finite difference agrees). The robot moves up and to the left of its line
+`omega_ff = (0.6901·1.4972 - 6.2972·1.8509)/40.131 = -0.2647 rad/s` (finite difference agrees). The robot moves up and to the left of its line
 to the target, so the bearing turns clockwise. Singularity: `omega_ff ~ v/abs(pT)` grows as the robot nears the target, hence the freeze
 inside r_face_min = 0.5 m. At 0.5 m and 4 m/s across, omega_ff = 8 rad/s > omegaMax: the clamp applies and the error recovers after the pass.
 
@@ -3212,14 +3214,14 @@ FollowTrajectory.java:45-46). Example: theta_ref = 179 deg, theta = -179 deg: ra
 ### 8.6 Stop points
 
 A stop point s_c (vBack(s_c) = 0) is an automatic STOP corner (tau_turn > TAU_STOP, radius below R_MIN after shrinking,
-`.withRadius(x < R_MIN)`, kink-corner fallback) or a user stop (`.stop()`, `withVelocity(0)`, `.stop(dwellSeconds)`). Both are zero-length
-entries with a line on each side (section 5.8.7), so the in-segment is always a line. Kink corners and PASS points are not stops; they become
-stops only with `.stop()`. Each stop has P_c, T_in, T_out, theta(s_c) and a dwell (0 unless `.stop(d)`).
+`.withRadius(x < R_MIN)`) or a user stop (`.stop()`, `withVelocity(0)`, `.stop(dwellSeconds)`). Both are zero-length
+entries with a line on each side (section 5.8.7), so the in-segment is always a line. PASS markers are not stops; `.stop()` on a straight
+point makes it a STOP. Each stop has P_c, T_in, T_out, theta(s_c) and a dwell (0 unless `.stop(d)`).
 
 | State | Command | Leaves when | To |
 |---|---|---|---|
-| TRACK (sub-profile j, s_goal = s_c) | 8.3.1, window capped at s_c | d_go <= d_h (0.05 m) | CAPTURE_STOP |
-| CAPTURE_STOP | 2D law on P_c (8.3.7e); theta_ref = theta(s_c), omega_ff = 0 | arrival: abs(d_go) <= stop_pos_tol (0.03 m, along T_in) AND abs(V_meas) <= STOP_SPEED (0.1 m/s) | ROTATE or DWELL |
+| TRACK (sub-profile j, s_goal = s_c) | 8.3.1, window capped at s_c | d_go <= d_h (0.05 m), or v_cmd = 0 and d_go <= d_h + 2·STOP_DIST_MARGIN (8.3.7e) | CAPTURE_STOP |
+| CAPTURE_STOP | 2D law on P_c (8.3.7e); theta_ref = theta(s_c), omega_ff = 0 | arrival: abs(d_go) <= pos_tol (0.03 m, along T_in) AND abs(V_meas) <= STOP_SPEED (0.1 m/s) | ROTATE or DWELL |
 | on arrival | fire stop events (8.8); switch to sub-profile j+1: s_goal = next stop or L; s* = s_hi = s_prev = s_c | | ROTATE if `abs(wrap(theta(s_c) - theta)) > stop_ang_tol` (3 deg), else DWELL |
 | ROTATE | 2D law on P_c (holds position); theta_ref = theta(s_c), omega_ff = 0, feedback 8.5.2 | `abs(wrap(theta(s_c) - theta)) <= stop_ang_tol` | DWELL |
 | DWELL | same as ROTATE | `now() - t_dwell_start >= dwell` (at once if dwell = 0) | TRACK |
@@ -3232,7 +3234,7 @@ Why:
 - The 2D law is used because the in-leg and out-leg directions differ sharply; a projection near the corner could flip between them.
 - No settle time at a stop, and the lateral error is not part of arrival: TRACK on the next leg corrects it within about 0.33 s.
 - ROTATE only corrects a residual (section 6.7): theta is continuous through s_c. The modules still steer to the new direction, at most 90 deg
-  (DemaciaKinematics.java:194-197); profileTime counts it (section 7.10.4).
+  (DemaciaKinematics.java:194-197); that is not in profileTime (section 7.10.4).
 
 Dwell timing:
 - `t_dwell_start = now()` (FPGA time) when DWELL is entered, after any ROTATE. Measured time, not loop counts: `.stop(1.5)` with one 0.06 s
@@ -3256,15 +3258,15 @@ Example (EX, user stop `.stop(1.5)`; s_c = 3.20 m, P_c = (4, 2), in-leg along +x
   `ln(4/3)/4 = 0.072 s` (4 loops; lag not modelled).
 - DWELL for 1.5 s measured, then release with the law's state (~0, 0); it commands 0.01, 0.04, 0.09, 0.15, ... m/s along T_out.
 
-Edge cases: two stops closer than about 2·d_h plus the braking distance: TRACK may enter CAPTURE_STOP at once after a release (go-stop-go). A stop at s0 (re-schedule on a
-stop): initialize starts in ROTATE if the residual is > 3 deg, otherwise DWELL; the dwell is honored once. Pushed during ROTATE or DWELL: the 2D
+Edge cases: two stops closer than about 2·d_h plus the braking distance: TRACK may enter CAPTURE_STOP at once after a release (go-stop-go).
+Pushed during ROTATE or DWELL: the 2D
 law brings it back; release does not test position again. `.stop()` on P_0: no effect on the path (W4); `.stop(d)` there delays the start by d.
 
 ### 8.7 Finish logic
 
 #### 8.7.1 Hand-off to the end-point controller
 
-The end is the last goal: s_goal = L, P_goal = P_end = x(L). TRACK becomes CAPTURE_END when d_go <= d_h, with the continuous hand-off of
+The end is the last goal: s_goal = L, P_goal = P_end = x(L). TRACK becomes CAPTURE_END when d_go <= d_h (or at rest within d_h + 0.01 m), with the continuous hand-off of
 8.3.7e. A position controller is needed because s* saturates at L: past the end, vBack(L) = 0 and the TRACK law cannot pull the robot back;
 `V = k_p·(P_end - p)` can, in any direction. The heading target in CAPTURE_END is theta_end = theta(L) (or the face-target value, section 6.9),
 with omega_ff = 0 once s* = L.
@@ -3288,13 +3290,14 @@ Simulated (arc path of section 8.15): done at 3.84 to 4.04 s for profileTime 3.6
 #### 8.7.3 Timeout
 
 ```
-t_timeout = 1.5 * profileTime + 1.0         // decision 10; profileTime from s0, with steer times and dwells
+t_timeout = 1.5 * profileTime + 1.0         // decision 10; profileTime with the dwells; 1.5 and 1.0 are PathFollowerConfig fields
 if (t - t_start >= t_timeout) -> end, result FAILED_TIMEOUT
 ```
 
 profileTime comes from the offline simulation of the same speed law (section 7.13.6), with the hand-over tail. Examples (jerkMax = 50,
-EX): shared example 3.52 s, timeout 6.28 s; P1.stop() 4.32 s + 0.13 s steer, timeout 7.68 s; P1.stop(1.5) 5.95 s, timeout 9.93 s; tight arc
-4.62 s, timeout 7.93 s. The dwell is exact, so 1.5 times it is spare margin. The 0.1 s settle is not in profileTime; it fits in the margin. The timeout clock never pauses during ROTATE or DWELL; a robot that cannot reach a stop times out the same way.
+EX): shared example 3.54 s, timeout 6.31 s; P1.stop() 4.32 s, timeout 7.48 s; P1.stop(1.5) 5.82 s, timeout 9.73 s; tight arc
+4.62 s, timeout 7.93 s. The dwell is exact, so 1.5 times it is spare margin. The 0.1 s settle and the modules' turn at a stop (at most 0.13 s)
+are not in profileTime; they fit in the margin. The timeout clock never pauses during ROTATE or DWELL; a robot that cannot reach a stop times out the same way.
 
 #### 8.7.4 After a failure
 
@@ -3319,18 +3322,16 @@ for events in ascending s_event (same s: in the order added):
 
 - Fires once: the latch plus monotonic s*. Skipped crossings: if s* jumps from 0.95 to 1.12 in one loop, every event in (0.95, 1.12] fires in that
   loop, in order. A loop never "misses" an event (the 2026 time window could, FollowTrajectory.java:52).
-- s = 0: fires on the first execute when s0 < 0.05.
+- s = 0 (fraction 0 or point 0): fires on the first execute.
 - Events at a stop point (an event placed by that waypoint's index gives `s_event = s_c` exactly) fire on arrival, before ROTATE and DWELL; the
-  crossing rule would fire them while the robot is still sliding through. Events in `(s_c, s_c + 0.03]` fire on release or just after; use
-  `s_c + epsilon` for "on leaving".
+  crossing rule would fire them while the robot is still sliding through.
 - s = L and events within pos_tol of L: the robot can finish with s* = L - 0.02, so on a successful finish every unfired event fires before
   `isFinished` returns true.
-- Mid-path start (s0 > 0.05): events with `s_event < s0 - 0.05` are skipped and logged; `.fireIfStartedPast()` makes one fire on the first loop.
 - Timeout or interrupt: unfired events do not fire.
 - An event command that requires the drivetrain would cancel the follower; the `FollowPathCommand` constructor rejects it (V20).
 
-Example (shared example): events at s = 1.0 (intake down) and s = L = 5.9769 (shoot). s* goes 0.95 -> 1.12: intake fires once. The robot finishes at
-s* = 5.9569: shoot fires at the finish.
+Example (shared example): events at fraction 0.2 (s = 1.1954, intake down) and at point 2 (s = L = 5.9769, shoot). s* goes 1.10 -> 1.27:
+intake fires once. The robot finishes at s* = 5.9569: shoot fires at the finish.
 
 ### 8.9 Re-plan hook (design only, v2)
 
@@ -3353,10 +3354,10 @@ The callback (`Function<ReplanRequest, ReplanDecision>`, CONTINUE or ABORT) fire
 
 ### 8.10 Alliance flip at runtime
 
-- In `initialize()`, once: read `DriverStation.getAlliance()`. Red: `activePath = path.flipped(flipConfig)`; blue: the path itself; empty (no
-  Driver Station yet): blue, alert C7. With `FlipMode.NONE` the path is never flipped.
+- In `initialize()`, once: read `DriverStation.getAlliance()`. Red: `activePath = path.flipped(config)`; blue: the path itself; empty (no
+  Driver Station yet): blue, alert A2. With `FlipMode.NONE` the path is never flipped.
 - `flipped` is memoized inside the `Path`, so scheduling the command again does not rebuild anything. The face target is flipped with the same
-  transform and mode (offset rule in section 5.13).
+  transform and mode (section 5.13).
 - Poses from the supplier are always blue-origin (RobotPose.java:267 documents `getEstimatedPose` that way). The flipped path is in the same frame,
   so the follower has no alliance branches after initialize.
 - Never per loop: it would cost work every loop, and a mid-run alliance change would make the path jump.
@@ -3401,66 +3402,58 @@ abs(e_theta) < 0.14 deg: no interference with the tolerances.
 
 | Failure | Detection | Behavior |
 |---|---|---|
-| Pose jump (vision correction) | `abs(p_k - p_{k-1}) > max(0.15, 2·vMax·dt)` [0.16 m at vMax 4]; `poseJumpCount++` | No mode change. Along track: the window catches up by `ahead` per loop, or the floor holds s*. Across track: an e_n step of x m gives a `k_n·x` command step (clamped at c_max) that the limiter spreads. Logged |
-| Robot bumped off path | e_n large, or e_t < -eps_back | Correction clamp, slowdown g (8.3.8) |
-| Starts far from the path | d0 at initialize (8.2.5) | > 0.5 m: alert and run; > 3.0 m: end FAILED_START_TOO_FAR. Behind P0: the law speeds up along T(0), s* = 0 until P0 is passed |
-| Self-crossing path / arc > 180 deg | none needed | Window capped at the next segment and 90 deg of arc (8.2.3); monotonic s* (8.2.4); initial tie-break to the smallest s (8.2.5) |
+| Pose jump (vision correction) | none needed | No mode change. Along track: the window catches up by `ahead` per loop, or the floor holds s*. Across track: an e_n step of x m gives a `k_n·x` command step (clamped at c_max) that the limiter spreads |
+| Robot bumped off path | e_n large, or e_t < -eps_back | Correction clamp (8.3.8) |
+| Starts away from P0 | `d0 = abs(p - P0)` at initialize (8.2.5) | > 0.5 m: end FAILED_START_TOO_FAR with alert A1. Within 0.5 m behind P0: the law speeds up along T(0), s* = 0 until P0 is passed |
+| Self-crossing path / arc > 180 deg | none needed | Window capped at the next segment and 90 deg of arc (8.2.3); monotonic s* (8.2.4); s* starts at 0 (8.2.5) |
 | Very short path (L < L_short = 0.10 m) | L at initialize | Skip TRACK: start in CAPTURE_END on P_end with heading theta_end, then the finish test. A zero-length path cannot be built (V6) |
-| Disabled mid-path | the scheduler cancels the command (**Inference**, WPILib default without `runsWhenDisabled`) | `end(true)`: zero speeds once, result INTERRUPTED, no more events. Re-scheduling starts a fresh initialize with a global search, skipping passed events |
+| Disabled mid-path | the scheduler cancels the command (**Inference**, WPILib default without `runsWhenDisabled`) | `end(true)`: zero speeds once, result INTERRUPTED, no more events. Re-scheduling runs the start check again: more than 0.5 m from P0 gives FAILED_START_TOO_FAR (no mid-path start) |
 | Pose supplier NaN / infinite | any of x, y, theta not finite | Skip projection and events. Repeat the last command for up to t_stale = 0.1 s, then send zero (the limiter brakes). Resume when valid. Invalid for > 1 s: end FAILED_POSE. The timeout keeps running |
 | Pose supplier stale | bit-identical x, y, theta for >= 0.1 s while abs(V_meas) > 0.3 m/s | Same as NaN |
-| Speed supplier NaN | any component not finite | Use `abs(V_meas) = v_t_prev` for the window; arrival test uses 0.1 s of `abs(d_go) <= 0.03` instead of the speed; v0 = 0 at initialize. Alert C8 |
-| Start overspeed | v0 at initialize; C4 if the jerk-aware check fails (section 7.13.9) | the law brakes at once, jerk-limited; the limiter bounds the acceleration; e_n may grow on an arc; logged |
-| Loop overrun | dt > 0.03 s; `overrunCount++` | Window and speed law use the measured dt; settle and timeout use measured time; events never skipped |
-| Wrong omega sign in the drivetrain | telemetry: e_theta grows while omegaCmd has the same sign | None automatic. Test FOL-I1 checks it |
-| Alliance unknown at initialize | Optional empty | Use blue, alert C7 |
+| Speed supplier NaN | any component not finite | Use `abs(V_meas) = v_t_prev` for the window; arrival test uses 0.1 s of `abs(d_go) <= 0.03` instead of the speed; v0 = 0 at initialize. Alert A3 |
+| Loop overrun | measured dt > dt_nom | Window and speed law use the measured dt; settle and timeout use measured time; events never skipped |
+| Wrong omega sign in the drivetrain | telemetry: eThetaDeg grows instead of shrinking | None automatic. Test FOL-I1 checks it |
+| Alliance unknown at initialize | Optional empty | Use blue, alert A2 |
 | Pose supplier in a different frame (red origin) | not detectable | Documented: the supplier must be blue origin (decision 12) |
 
 ### 8.13 Telemetry
 
-Published under `Path/<name>/` as a `Sendable` through `PathLogger.putData` (same shape as `PoseLogger`, PoseLogger.java:41, :51, but no RobotPose
-dependency; section 9.11). Values each loop:
+`FollowPathCommand` publishes **one** `Sendable` under `Path/<name>` with `PathLogger.get().putData(...)`, once, the first time the
+command is initialized (section 9.11; the same shape as RobotPose's `PoseLogger`, PoseLogger.java:41, :51). Its `initSendable` adds
+these read-only properties, read by the dashboard or logger (**Decision**, user, simplification pass: only what tuning needs):
 
 | Key | Unit | Why |
 |---|---|---|
-| `state` | enum | TRACK / CAPTURE_STOP / ROTATE / DWELL / CAPTURE_END / DONE / FAILED_* |
-| `dwellRemaining`, `stopIndex` | s, int | user stop dwell countdown, which stop is active |
-| `s`, `L`, `sHi`, `sGoal`, `dGo` | m | progress, goal |
-| `segment`, `segmentType`, `radius` | int, enum, m | where on the path |
-| `eN`, `eT` | m | cross-track (tune k_n, tau_lag), along-track residual |
-| `vBack` (vBack(s_v)), `cap` (law cap), `vCmd`, `vT` (after limits), `c`, `vCmdNorm` | m/s | speed chain |
-| `aCmd`, `lawCase` | m/s^2, enum | speed-law acceleration and decision (UP / TOWARD_ZERO / KEEP / BRAKE) |
-| `vProf` | m/s | the profile the time estimate assumes |
-| `vMeas` | m/s | abs(V_meas); compare with vT for lag |
-| `sDotMeas` | m/s | filtered ds*/dt |
-| `thetaRef`, `theta`, `eThetaDeg` | rad, rad, deg | heading |
-| `omegaFF`, `omegaFB`, `omegaCmd` | rad/s | heading chain |
-| `tIn`, `tElapsed`, `tTimeout` | s | finish and timeout |
-| `dt`, `overrunCount`, `poseJumpCount` | s, count | loop health |
-| `eventsFired` | count | events |
-| `flipped`, `flipMode` | bool, enum | alliance |
-| `result` | enum | after end |
-| `field` (Field2d `Path/<name>/field`) | | path polyline, reference pose x(s*), lookahead x(s_L) |
+| `state` | enum name | TRACK / CAPTURE_STOP / ROTATE / DWELL / CAPTURE_END / DONE / FAILED_* |
+| `segment` | int | segment index at s* (section 5.9.3) |
+| `s` | m | progress s* |
+| `eN` | m | cross-track error (tune k_n and tau_lag) |
+| `vRef` | m/s | the speed law's v_cmd |
+| `vMeas` | m/s | abs(V_meas); compare with vRef for lag |
+| `eThetaDeg` | deg | heading error (tune k_theta) |
 
-Tuning procedures: tau_d from a line step, fitting eN(t) to `exp(-k_n·(t - tau_d))`, or comparing vCmdNorm with vMeas; tau_lag from the mean eN on a
-long arc (section 8.4); k_n: raise until eN overshoots on the step, then back off 25%.
+Failures and warnings are not telemetry keys: they go through `PathLogger.alert` (section 9.12). The result is also readable with
+`getResult()`.
+
+Tuning procedures: tau_d from a line step, fitting eN(t) to `exp(-k_n·(t - tau_d))`, or comparing vRef with vMeas; tau_lag from the mean
+eN on a long arc (section 8.4); k_n: raise until eN overshoots on the step, then back off 25%.
 
 ### 8.14 Lifecycle pseudocode
 
 ```
 initialize():
-    alliance = DriverStation.getAlliance()
-    active   = (alliance == Red && flip.mode != NONE) ? path.flipped(flip) : path     // once, memoized in Path
+    if first initialize: PathLogger.get().putData("Path/" + path.name(), telemetry)  // one Sendable (8.13)
+    alliance = DriverStation.getAlliance()                                         // empty: blue, alert A2
+    active   = (alliance == Red && config.flipMode() != NONE) ? path.flipped(config) : path   // once, memoized in Path
     p = pose.get(); Vm = speeds.get()                                              // invalid pose: result = FAILED_POSE
-    s0 = globalSearch(p) (8.2.5); d0 = abs(p - x(s0))
-    if d0 > d_far_abort: result = FAILED_START_TOO_FAR; return                     // isFinished ends it
-    if d0 > d_far_warn: alert C6
-    v0 = max(0, Vm·T(s0))
-    heading = buildHeading(active, p.getRotation(), s0, faceTarget)                 // section 6.13
-    profile = buildProfile(active, constraints, kinematicsConfig, R_mod, v0, heading, s0, profileConfig)   // section 7.18
-    t_start = t_prev = now(); s_hi = s_prev = s0; (v_cmd, a_cmd) = (v0, 0); v_t_prev = v0; omega_prev = Vm.omega; t_in = 0; t_fin = NaN
-    reset event latches; skip passed events (8.8); result = RUNNING
-    s_goal = first stop point > s0, or L                                            // selects the sub-profile
+    d0 = abs(p - active.startPoint())
+    if d0 > config.startTol(): result = FAILED_START_TOO_FAR; alert A1; return     // isFinished ends it (8.2.5)
+    v0 = max(0, Vm·T(0))
+    heading = buildHeading(active, p.getRotation(), faceTarget)                    // section 6.13
+    profile = buildProfile(active, constraints, kinematicsConfig, R_mod, v0, heading)   // section 7.17
+    t_start = t_prev = now(); s_hi = s_prev = 0; (v_cmd, a_cmd) = (v0, 0); v_t_prev = v0; omega_prev = Vm.omega; t_in = 0; t_fin = NaN
+    reset event latches; result = RUNNING
+    s_goal = first stop point > 0, or L                                             // selects the sub-profile
     state  = (active.L < L_short) ? CAPTURE_END : TRACK
 
 execute():
@@ -3470,8 +3463,8 @@ execute():
     s_hi = max(s_hi, s*); s_prev = s*; e_t = (p - x(s*))·T(s*); d_go = (s_goal - s*) - e_t
     fireEvents(s*)                                                                 // 8.8
     switch state:
-      TRACK:        if d_go <= d_h: state = (s_goal == L) ? CAPTURE_END : CAPTURE_STOP
-      CAPTURE_STOP: if abs(d_go) <= stop_pos_tol && abs(Vm) <= STOP_SPEED:          // arrival (8.6); d_go along T_in
+      TRACK:        if d_go <= d_h || (v_cmd == 0 && d_go <= d_h + 2*STOP_DIST_MARGIN): state = (s_goal == L) ? CAPTURE_END : CAPTURE_STOP
+      CAPTURE_STOP: if abs(d_go) <= pos_tol && abs(Vm) <= STOP_SPEED:               // arrival (8.6); d_go along T_in
                         s_c = s_goal; fireStopEvents(s_c)
                         s* = s_hi = s_prev = s_c; s_goal = nextStopOrL
                         state = (abs(wrap(theta(s_c) - theta)) > stop_ang_tol) ? ROTATE : DWELL; if DWELL: t_dwell_start = now()
@@ -3481,12 +3474,11 @@ execute():
     V     = (state == TRACK) ? trackLaw() (8.3.1, steps the speed law) : captureLaw(P_goal or P_c) (8.3.7e)
     omega = headingLaw(state) (8.5)
     output.accept(new ChassisSpeeds(V.x, V.y, omega))
-    v_t_prev = (state == TRACK) ? v_t : abs(V); omega_prev = omega
-    publishTelemetry()
+    v_t_prev = (state == TRACK) ? v_t : abs(V); omega_prev = omega                  // the Sendable reads the new values
 
 isFinished():
     if result is FAILED_*: return true
-    if now() - t_start >= 1.5*profileTime + 1.0: result = FAILED_TIMEOUT; return true
+    if now() - t_start >= 1.5*profileTime + 1.0: result = FAILED_TIMEOUT; return true   // factor and margin from PathFollowerConfig
     if state == CAPTURE_END && !isNaN(t_fin) && now() - t_fin >= dwell(L):         // dwell(L) = 0 unless .stop(d) on the last point
         fireRemainingEvents(); result = OK; return true
     return false
@@ -3494,7 +3486,7 @@ isFinished():
 end(interrupted):
     output.accept(new ChassisSpeeds())          // zero once (8.7.4)
     if interrupted && result == RUNNING: result = INTERRUPTED
-    publish result; if result != OK: alert C10
+    if result is FAILED_*: alert A1 (text per result)
 ```
 
 ### 8.15 What was executed
@@ -3506,7 +3498,7 @@ Python simulations (not part of the repository), run with `python3 -I`:
   position part of 8.7.2. Results: the arc offsets of 8.3.4, all k_n 2 to 6 by tau_lag 0, 0.05, 0.085 finished, final error 0.0005 to 0.024 m, done
   3.56 to 4.64 s against profileTime 3.62 s. With the vBack-plus-ramp law: k_n = 3, tau_lag 0: max abs(e_n) 0.100, arc mean -0.0766, done 3.96 s;
   tau_lag 0.05: 0.041, -0.0313, 3.94 s. Start 0.5 m behind P0: done 4.10 s. These runs used the jerk-free speed law; the jerk-aware law
-  was simulated in the same plant model (section 7.13.8): no overshoot of any stop or end, arrival error 0.8 to 2.2 cm.
+  was simulated in the same plant model (section 7.13.8): no overshoot of any stop or end, arrival error 0.7 to 1.8 cm.
 - The line-step table (8.3.5), the steady-state arc offsets (predicted -0.113 / -0.047 / 0; simulated -0.106 / -0.043 / +0.0015 m), the heading step
   table (8.5.2; omegaMax 6, no alpha limit).
 - Every worked number in this chapter, including the face-target omega checked by finite difference (script).
@@ -3525,58 +3517,58 @@ compiled; the signatures were not checked against a Java compiler.
 
 - **Frame and units:** WPILib field frame, blue-alliance origin; meters, radians, seconds. Every `Point`, `Translation2d` and
   `Rotation2d` the user passes is in the **blue** frame on both alliances; red is made by a flip (section 9.9).
-- **Immutable value objects.** `Point`, `Path`, `PathConstraints`, `PathEvent`, `FaceTarget`, `FlipConfig`, `FieldDimensions`,
-  `PathGeometryConfig`, `ProfileConfig`, `FollowerConfig` never change. Each `withX(...)` returns a **new** object. **Fact**
+- **Immutable value objects.** `Point`, `Path`, `PathConstraints`, `PathsConfig`, `PathFollowerConfig` and `PathEvent` never
+  change. Each `withX(...)` returns a **new** object. **Fact**
   (KinematicsConfig.java:61-114): `KinematicsConfig.withX` does the opposite (changes `this` and returns it). Rule to teach:
   "write `p = p.withX(...)` or chain the calls". `FollowPathCommand` is a command, not a value: its `withX` methods configure
   `this` before it is scheduled.
 - **Exceptions at construction, warnings at build time, alerts at run time.** Bad values throw (`IllegalArgumentException` unless
   stated) when the object is created, so the stack trace points at the student's line. Problems the library repairs (a shrunk
-  radius, a created stop, merged points) are reported once with `DriverStation.reportWarning(text, false)` and collected in
-  `Path.warnings()`. Nothing throws at run time.
+  radius, a created stop, merged points) are reported once with `PathLogger.get().alert(text, AlertType.kWarning, true)` and
+  collected in `Path.warnings()`. Nothing throws at run time.
 - **The geometry is built in the `Path` constructor** (blue frame). The heading and speed profiles are built in
-  `FollowPathCommand.initialize()`, because they need the measured start speed, heading and progress. Geometry warnings appear
+  `FollowPathCommand.initialize()`, because they need the measured start speed and heading. Geometry warnings appear
   when `Path` objects are created (robot start-up if they are `static final`); profile warnings when the command starts.
 - **No dependency on RobotPose** (decision 12). The only inputs are suppliers.
 
 ### 9.2 Package layout
 
 Directory `Infrastructures/src/main/java/frc/robot/Path`, flat (like `frc/robot/Kinematics`, so installing is "copy one
-directory"). Public classes are the API; internal classes are package-private.
+directory"). Public classes are the API; internal classes are package-private. There are exactly three public config types,
+`PathConstraints`, `PathsConfig` and `PathFollowerConfig` (**Decision**, user, simplification pass).
 
 | Public class | Kind | Responsibility |
 |---|---|---|
-| `Point` | final class | one waypoint: position plus optional angle, max speed, radius, stop with dwell, reserved `cutCorner()` |
+| `Point` | final class | one waypoint: position plus optional angle, max speed, radius, stop with dwell |
 | `Path` | final class | points, constraints, face target, events; builds and holds the geometry; memoizes the flipped copy |
 | `PathConstraints` | record | vMax, aAcc, aDec, aLat, omegaMax, alphaMax, jerkMax; `fromConfig(KinematicsConfig, PathsConfig)` |
 | `PathsConfig` | record | robot settings the Kinematics module does not have: max omega, max alpha, max jerk, module radius |
-| `PathGeometryConfig` | record | geometry settings (section 5) |
-| `ProfileConfig` | record | speed-profile settings (section 7) |
-| `FollowerConfig` | record | follower gains, windows, tolerances (section 8) |
+| `PathFollowerConfig` | record | follower gains, tolerances, timeout, flip mode and field size (sections 8, 9.6) |
 | `FollowPathCommand` | class extends `Command` | the follower |
 | `FollowResult` | enum | why the command ended |
-| `PathEvent`, `ResolvedEvent` | final class, record | an action at a distance, a fraction or a point index |
-| `FaceTarget` | record | target `Translation2d` and offset |
-| `FlipMode`, `FieldDimensions`, `FlipConfig` | enum, record, record | alliance flip |
+| `PathEvent`, `ResolvedEvent` | final class, record | an action at a fraction of the path or at a point index |
+| `FlipMode` | enum | NONE / MIRROR / ROTATE |
 | `PathSample` | record | read-only geometry sample at s |
-| `PathLogger` | interface | where telemetry and alerts go (same shape as `PoseLogger`) |
+| `PathLogger` | interface | where the telemetry `Sendable` and the alerts go (same shape as `PoseLogger`) |
 
 | Internal class | Responsibility | Section |
 |---|---|---|
-| `GeometryBuilder` | merging, corner circles, radius rule and shrink loop, kink corners, tangents, sweeps | 5.3 to 5.8, 5.15 |
-| `SegmentTable` / `Segment` | LINE, ARC, STOP, PASS entries; `segmentIndexAt`, `evaluate`, `evaluateLeft`; waypoint s | 5.9 |
-| `Projector` | windowed projection and the initial global search | 5.10, 8.2 |
+| `GeometryBuilder` | merging, PASS markers, corner circles, radius rule and shrink loop, tangents, sweeps; the geometry constants | 5.3 to 5.8, 5.15 |
+| `SegmentTable` / `Segment` | LINE, ARC, STOP entries; `segmentIndexAt`, `evaluate`, `evaluateLeft`; waypoint s | 5.9 |
+| `Projector` | windowed projection | 5.10, 8.2 |
 | `PathFlipper` | NONE / MIRROR / ROTATE of a built table, angles, face target | 5.13 |
 | `HeadingProfile` | theta(s), theta'(s); face-target heading | 6 |
-| `SpeedProfile` | spans, caps, passes, arc modes, sub-profiles, vBack / vProf, time | 7 |
-| `Tracker` | state machine and the translation and heading laws; finish test | 8.2 to 8.7 |
+| `SpeedProfile` | spans, caps, passes, constant-speed arcs, sub-profiles, vBack / vProf, time | 7 |
+| `SpeedLaw` | the jerk-aware online law | 7.13 |
+| `Tracker` | state machine and the translation and heading laws; finish test; the follower constants | 8.2 to 8.7 |
 | `EventSchedule` | latches and firing rules | 8.8 |
-| `PathTelemetry` | `Sendable` and `Field2d` publisher | 8.13 |
-| `PathWarnings` | collects and reports warnings | 9.12 |
+| `PathTelemetry` | the one `Sendable` | 8.13 |
+| `PathWarnings` | collects warnings and sends them through `PathLogger.alert` | 9.12 |
 | `PathMath` | `wrap`, `mod2pi`, `rot90`, `cross`, `vsqrt`, `shortTurn` | 3 |
 
 **Inference:** the class `Path` in package `frc.robot.Path` has the same shape as `frc.robot.RobotPose.RobotPose`. A file that also
-imports `java.nio.file.Path` must use the full name for one of them. No global registry or singleton; everything is passed in.
+imports `java.nio.file.Path` must use the full name for one of them. No global registry; the only static state is the
+`PathLogger` holder (section 9.11).
 
 ### 9.3 Point
 
@@ -3588,11 +3580,10 @@ public final class Point {
 
     // each returns a NEW Point; the last call of a kind wins
     public Point withAngle(Rotation2d angle);         // heading anchor (section 6)
-    public Point withVelocity(double metersPerSecond);// max speed at this point; 0 means stop()
+    public Point withVelocity(double metersPerSecond);// max speed here (on a corner: the whole arc); 0 means stop()
     public Point withRadius(double meters);           // corner radius override; 0 = stop corner
     public Point stop();                              // v = 0 here, no wait
     public Point stop(double dwellSeconds);           // v = 0 here, then wait
-    public Point cutCorner();                         // RESERVED (v2): throws UnsupportedOperationException in v1
 
     public Translation2d position();
     public double x();
@@ -3602,7 +3593,6 @@ public final class Point {
     public OptionalDouble radius();
     public boolean isStop();                          // stop() / stop(d) / withVelocity(0)
     public double dwellSeconds();                     // 0 unless stop(d) with d > 0
-    public boolean isCutCorner();                     // always false in v1
     @Override public boolean equals(Object o);
     @Override public int hashCode();
     @Override public String toString();               // "Point(3.0, 4.0, angle=90.0deg, stop 1.5 s)"
@@ -3613,24 +3603,26 @@ Rules:
 - `withAngle`: any point, including P_0 and P_{n-1}. The heading is linear in s between anchors, the short way (section 6.3); a point
   without an angle has no anchor; after the last anchor the heading holds; with no angle on P_0 the path starts from the robot's
   measured heading.
-- `withVelocity(v > 0)`: a cap at this waypoint's s only, not a speed zone (section 7.4.2). Ignored with a warning on P_0 (W4) and, in
-  v1, on P_{n-1} (W5). `withVelocity(0)` is exactly `stop()`. `v < 0` throws (V11).
+- `withVelocity(v > 0)`: a cap at this waypoint's s, not a speed zone (section 7.4.2). On a corner the point is on an arc, and the
+  whole arc is driven at no more than v (arcs have constant speed, section 7.8). Ignored with warning W4 on P_0 and, in v1, on
+  P_{n-1}. `withVelocity(0)` is exactly `stop()`. `v < 0` throws (V11).
 - `stop()` / `stop(d)`: any middle point; on the last point the stop is the default and `stop(d)` holds d seconds after the finish test
   passes; on P_0 no effect on the path (W4), `stop(d)` delays the start by d. A stop splits the profile (section 7.10) and runs arrive,
   residual-heading correction, dwell, leave (section 8.6).
 - **A stop point is a sharp corner** (section 5.8.7): the arc of that corner is removed; the path arrives on a straight line, stops exactly
   on the point, and leaves on a straight line. Neighboring corners are recomputed with P_i as an endpoint, so their lines and radii can
-  change slightly. The same holds for a collinear point (PASS) and a kink corner: `stop()` makes it a plain STOP.
+  change slightly. The same holds for a collinear point: `stop()` makes it a STOP.
+- **A point exactly on a straight line is a pass marker** (section 5.8.3): the path is built without it and may miss it by a few cm
+  next to a round corner (warning W5 above 0.01 m). Use `stop()` on it if the robot must pass exactly through it.
 - **`stop()` and `withRadius(r > 0)` do not combine**: `IllegalArgumentException` from the `Path` constructor (V30). `withRadius(0)` with
   `stop()` is allowed (same meaning). The check is in the `Path` constructor, so the order of the calls does not matter. Reason: the two ask
   for opposite things, and a silent choice would change the path.
-- `withRadius(r)` on P_0, P_{n-1} or a point exactly on a straight line: ignored, warning W6 (resolution R8).
+- `withRadius(r)` on P_0, P_{n-1} or a point exactly on a straight line: ignored, warning W4 (resolution R8).
 - Javadoc summary for `stop()`: "Stops the robot exactly on this point. A stop point is a sharp corner: the robot arrives on a straight line,
   stops on the point, then continues on a straight line. It has no arc, so it cannot be combined with withRadius(r) for r greater than 0."
 - Merging (section 5.8.2): if two points are merged, the later attribute wins, with warning W3 if both set one.
 - Last call wins within one `Point`: `p.stop(2).withVelocity(1.0)` has max speed 1.0 and no stop; `p.withVelocity(1.0).stop()` is a stop;
   `p.stop(2).withVelocity(0)` is `stop()` with dwell 0.
-- `cutCorner()` is declared so the name is reserved and fails with a clear message (V15) instead of a compile error that suggests a typo.
 
 ### 9.4 Path
 
@@ -3639,31 +3631,25 @@ public final class Path {
     // the geometry is built here (section 5.15). Throws on bad input (9.12), warns for repairs.
     public Path(Point... points);
     public Path(PathConstraints constraints, Point... points);
-    public Path(PathGeometryConfig geometry, Point... points);
-    public Path(PathConstraints constraints, PathGeometryConfig geometry, Point... points);
     public static Path of(List<Point> points);
-    public static Path of(PathConstraints constraints, PathGeometryConfig geometry, List<Point> points);
+    public static Path of(PathConstraints constraints, List<Point> points);
 
-    // value changes (each returns a NEW Path; geometry is shared unless noted)
-    public Path withName(String name);                          // key Path/<name>/ in NetworkTables
+    // value changes (each returns a NEW Path; the geometry is shared)
+    public Path withName(String name);                          // telemetry key Path/<name>
     public Path withConstraints(PathConstraints constraints);   // per-path override
-    public Path withGeometryConfig(PathGeometryConfig geometry);// rebuilds the geometry
-    public Path withFaceTarget(Translation2d target);           // offset 0
-    public Path withFaceTarget(Translation2d target, Rotation2d offset);
+    public Path withFaceTarget(Translation2d target);           // the robot's front faces the target
     public Path withoutFaceTarget();
 
     // events, resolved to s when added (section 5.9.5)
     public Path withEvent(PathEvent event);
-    public Path withEventAtDistance(double s, Command action);
-    public Path withEventAtDistance(double s, Runnable action);
     public Path withEventAtFraction(double fraction, Command action);
     public Path withEventAtFraction(double fraction, Runnable action);
     public Path withEventAtPoint(int pointIndex, Command action);
     public Path withEventAtPoint(int pointIndex, Runnable action);
 
-    // alliance (section 5.13). Memoized: a second call with an equal FlipConfig returns the same object.
-    public Path flipped(FlipConfig flip);                       // NONE returns this
-    public Path forCurrentAlliance(FlipConfig flip);            // this on blue or unknown, flipped(flip) on red
+    // alliance (section 5.13). Memoized per flip mode and field size.
+    public Path flipped(PathFollowerConfig config);             // flip mode NONE returns this
+    public Path forCurrentAlliance(PathFollowerConfig config);  // this on blue or unknown, flipped(config) on red
     public boolean isFlipped();
 
     // read-only
@@ -3673,22 +3659,21 @@ public final class Path {
     public List<Point> points();
     public double sAtPoint(int pointIndex);                     // s of waypoint i (5.9.4); merged points map to the kept one
     public Optional<PathConstraints> constraints();             // empty = resolved when the command starts (9.10)
-    public PathGeometryConfig geometryConfig();
-    public Optional<FaceTarget> faceTarget();
+    public Optional<Translation2d> faceTarget();
     public List<ResolvedEvent> events();
     public List<String> warnings();                             // everything reported at build time
     public Translation2d startPoint();                          // P_0
     public Translation2d endPoint();                            // P_{n-1}
     public Optional<Rotation2d> startHeading();                 // P_0's angle if set
     public PathSample sampleAt(double s);                       // s clamped to [0, L]; T is the right limit at a STOP
-    public List<Pose2d> polyline(double spacingMeters);         // for Field2d and tests; rotation = direction of travel
+    public List<Pose2d> polyline(double spacingMeters);         // for tests and the user's own Field2d; rotation = direction of travel
 }
 ```
 
-Rules: `new Path(constraints, p0, p1)` and `new Path(p0, p1)` do not clash; `new Path()` fails V1. `withConstraints` and `withName` do not
-rebuild geometry; `withGeometryConfig` rebuilds it and re-reports warnings. Event point indices always mean the index the user wrote.
-**Inference:** events and constraints survive `flipped`, because a flip preserves arc length. `forCurrentAlliance` reads
-`DriverStation.getAlliance()`; empty gives blue.
+Rules: `new Path(constraints, p0, p1)` and `new Path(p0, p1)` do not clash; `new Path()` fails V1. `withConstraints`, `withName`, the
+face target and the events do not rebuild the geometry. Event point indices always mean the index the user wrote. The name is used as
+given in the key `Path/<name>`. **Inference:** events and constraints survive `flipped`, because a flip preserves arc length.
+`forCurrentAlliance` reads `DriverStation.getAlliance()`; empty gives blue.
 
 ### 9.5 PathConstraints
 
@@ -3728,9 +3713,15 @@ record (section 7.2.2).
 
 ### 9.6 Config records
 
+**Decision** (user, simplification pass): there are exactly three public config types: `PathConstraints` (section 9.5),
+`PathsConfig` and `PathFollowerConfig`. The geometry and profile settings of the earlier design (R_MIN, R_MAX, D_BULGE, EPS_DEV,
+TAU_STOP, SHRINK, MAX_ITER, HEADING_LAG_ALLOWED, FT_SPAN, ...) and the follower internals (window, correction clamp, freeze radius,
+stop speed and angle) are documented `static final` constants inside the library. Section 10 lists them, marked "internal constant",
+and is the only place their values are written.
+
 `PathsConfig` holds the robot settings the path needs that `KinematicsConfig` does not have. **Decision** (user): the Kinematics
-module is not changed; these live in the Path module. It is an immutable record like the other Path configs (`withX` returns a
-copy), unlike `KinematicsConfig`, whose `withX` changes the object (KinematicsConfig.java:61-64).
+module is not changed; these live in the Path module. It is an immutable record (`withX` returns a copy), unlike `KinematicsConfig`,
+whose `withX` changes the object (KinematicsConfig.java:61-64).
 
 ```java
 public record PathsConfig(
@@ -3738,7 +3729,7 @@ public record PathsConfig(
         double maxAngularAccel,      // [rad/s^2] robot alpha limit -> PathConstraints.alphaMax (the limiter passes omega through)
         double maxJerk,              // [m/s^3]   tangential jerk of the speed command -> PathConstraints.jerkMax
         double moduleRadius) {       // [m]       R_mod, robot center to the farthest module; 0 = unknown, wheel-speed cap skipped
-    public PathsConfig { /* first three finite and > 0, moduleRadius finite and >= 0, else IllegalArgumentException (V26) */ }
+    public PathsConfig { /* first three finite and > 0, moduleRadius finite and >= 0, else IllegalArgumentException (V16) */ }
     public static PathsConfig defaults();   // (2·pi, 4·pi, 50, 0); all placeholders, measure on the robot (section 12)
     public PathsConfig withMaxAngularVelocity(double radPerSec);
     public PathsConfig withMaxAngularAccel(double radPerSec2);
@@ -3748,81 +3739,56 @@ public record PathsConfig(
 }
 ```
 
+`PathFollowerConfig` holds the follower's gains, tolerances and timeout, and the alliance flip:
+
 ```java
-public record PathGeometryConfig(
-        double rMin,          // R_MIN
-        double rMax,          // R_MAX
-        double dBulge,        // D_BULGE
-        double epsDevRad,     // EPS_DEV
-        double tauStopRad,    // TAU_STOP (set to pi to disable stops by angle)
-        double shrink,        // SHRINK
-        int maxIter,          // MAX_ITER
-        int kinkIters,        // KINK_ITERS
-        double kinkTol) {     // KINK_TOL
-    public static PathGeometryConfig defaults();
-    public PathGeometryConfig withRMin(double meters);
-    public PathGeometryConfig withRMax(double meters);
-    public PathGeometryConfig withDBulge(double meters);
-    public PathGeometryConfig withEpsDevDegrees(double degrees);
-    public PathGeometryConfig withTauStopDegrees(double degrees);
-    // the other components follow the same pattern: withShrink, withMaxIter, withKinkIters, withKinkTol
-}
-
-public record ProfileConfig(
-        double sidewaysWarn,           // SIDEWAYS_WARN
-        double headingLagAllowedRad,   // HEADING_LAG_ALLOWED (e_allow)
-        double arcRho,                 // ARC_RHO
-        double ftSpan) {               // FT_SPAN
-    public static ProfileConfig defaults();
-    // withSidewaysWarn, withHeadingLagAllowedDegrees, withArcRho, withFtSpan
-}
-
-public record FollowerConfig(
-        double dtNom, double kN, double kP, double cMax, double tauLag, double kTheta,
-        double aheadMin, double kAhead, double aheadMax, double epsBack, double dTie,
-        double dFarWarn, double dFarAbort, double eSlow0, double eSlow1, double gMin,
-        double rFaceMin, double stopPosTol, double stopSpeed, double stopAngTolRad,
-        double posTol, double angTolRad, double tSettle, double lShort, double tStale) {
-    public static FollowerConfig defaults();
-    public FollowerConfig withKN(double kN);
-    public FollowerConfig withKP(double kP);
-    public FollowerConfig withCMax(double cMax);
-    public FollowerConfig withTauLag(double seconds);
-    public FollowerConfig withKTheta(double kTheta);
-    public FollowerConfig withPosTol(double meters);
-    public FollowerConfig withAngTolDegrees(double degrees);
-    public FollowerConfig withSettleTime(double seconds);
-    // every other component follows the same pattern
+public record PathFollowerConfig(
+        double kN,               // [1/s]  cross-track gain k_n (8.3.5)
+        double kTheta,           // [1/s]  heading gain k_theta (8.5.2)
+        double kP,               // [1/s]  goal-capture gain k_p; keep it equal to kN (8.3.7)
+        double tauLag,           // [s]    lookahead time tau_lag (8.4)
+        double posTol,           // [m]    finish and stop-arrival position tolerance (8.6, 8.7.2)
+        double angTolRad,        // [rad]  finish heading tolerance (8.7.2)
+        double tSettle,          // [s]    finish settle time (8.7.2)
+        double startTol,         // [m]    largest start distance from P0 (8.2.5)
+        double timeoutFactor,    // [-]    t_timeout = timeoutFactor·profileTime + timeoutMargin (8.7.3)
+        double timeoutMargin,    // [s]
+        FlipMode flipMode,       //        NONE / MIRROR / ROTATE (5.13, 9.9)
+        double fieldLength,      // [m]    FL
+        double fieldWidth) {     // [m]    FW
+    public PathFollowerConfig { /* every number finite and > 0 (V16), flipMode not null (V3) */ }
+    public static PathFollowerConfig defaults();   // values in section 10; field size from the default AprilTag layout
+    public PathFollowerConfig withKN(double kN);
+    public PathFollowerConfig withKTheta(double kTheta);
+    public PathFollowerConfig withKP(double kP);
+    public PathFollowerConfig withTauLag(double seconds);
+    public PathFollowerConfig withPosTol(double meters);
+    public PathFollowerConfig withAngTolDegrees(double degrees);
+    public PathFollowerConfig withSettleTime(double seconds);
+    public PathFollowerConfig withStartTol(double meters);
+    public PathFollowerConfig withTimeout(double factor, double marginSeconds);
+    public PathFollowerConfig withFlip(FlipMode mode);
+    public PathFollowerConfig withField(double lengthMeters, double widthMeters);
 }
 ```
 
-- The defaults of every field, and the internal constants that are not configurable (the epsilons, S_EPS, ...), are in section 10, the only
-  place their values are written.
-- The student-facing subset is small: `rMax`, `dBulge`, `tauStopRad`; `kN`, `kP`, `tauLag`, `kTheta`, `posTol`, `angTolRad`, `tSettle`. The guide
-  names only these.
-- A `FollowerConfig` with `kP != kN` is valid but gives warning C9 (the hand-off of section 8.3.7e has a small step).
+- The student-facing settings are kN, kP, tauLag, kTheta, posTol, angTol, tSettle and the flip mode; the guide names only these.
+- `kP != kN` is valid; the hand-off of section 8.3.7e then has a small step. There is no warning for it.
 
 ### 9.7 Events
 
 ```java
 public final class PathEvent {
-    public enum Kind { DISTANCE, FRACTION, POINT_INDEX }
+    public enum Kind { FRACTION, POINT_INDEX }
 
-    public static PathEvent atDistance(double s, Command action);
-    public static PathEvent atDistance(double s, Runnable action);
     public static PathEvent atFraction(double fraction, Command action);
     public static PathEvent atFraction(double fraction, Runnable action);
     public static PathEvent atPoint(int pointIndex, Command action);
     public static PathEvent atPoint(int pointIndex, Runnable action);
 
-    public PathEvent fireIfStartedPast();      // fire on the first loop if the robot starts past it (8.8)
-    public PathEvent withName(String name);    // shown in telemetry and warnings
-
     public Kind kind();
-    public double value();                     // s, fraction or index as given
+    public double value();                     // fraction or index as given
     public Command action();                   // a Runnable is wrapped with Commands.runOnce(...)
-    public boolean firesIfStartedPast();
-    public String name();
 }
 
 public record ResolvedEvent(double s, PathEvent event) {}
@@ -3831,38 +3797,26 @@ public record ResolvedEvent(double s, PathEvent event) {}
 Behavior (section 8.8): converted to s when added (section 5.9.5); scheduled with `CommandScheduler.getInstance().schedule(...)`; a `Runnable` is
 wrapped in `Commands.runOnce(runnable)` with no requirements and should be short; fires once when s* reaches it, never skipped; events at a stop
 point fire on arrival, before the dwell; events at L fire on a successful finish; timeout or interrupt: unfired events do not fire; same s: in the
-order added; event commands must not require the drivetrain (V20).
+order added; event commands must not require the drivetrain (V20). Events are placed by fraction or by point index only, with no
+per-event options (**Decision**, user, simplification pass).
 
 ### 9.8 Face target
 
-```java
-public record FaceTarget(Translation2d target, Rotation2d offset) {}   // offset 0 = nose to target; pi = back to target
-```
-
-Set with `Path.withFaceTarget(target)` or `withFaceTarget(target, offset)`. Blue frame; flipped with the path (offset negated under MIRROR,
-section 5.13). Inside r_face_min of the target the reference heading freezes (section 6.9). The finish heading is
-`atan2(target - P_end) + offset`. While a face target is set, `withAngle` anchors are not used: warning W10.
+Set with `Path.withFaceTarget(target)` (a `Translation2d`, blue frame) and removed with `withoutFaceTarget()`. The robot's front faces the
+target, always (**Decision**, user, simplification pass). The target is flipped with the path (section 5.13). Inside
+r_face_min of the target the reference heading freezes (section 6.9). The finish heading is `atan2(target - P_end)`. While a face target is
+set, `withAngle` anchors are not used: warning W4.
 
 ### 9.9 Alliance flip
 
 ```java
 public enum FlipMode { NONE, MIRROR, ROTATE }   // MIRROR about x = FL/2; ROTATE 180 deg about the field center (5.13)
-
-public record FieldDimensions(double length, double width) {
-    public static FieldDimensions fromDefaultField();     // AprilTagFieldLayout.loadField(kDefaultField), as RobotPose.java:94-95
-}
-
-public record FlipConfig(FlipMode mode, FieldDimensions field) {
-    public static FlipConfig none();
-    public static FlipConfig mirror();                    // field = fromDefaultField()
-    public static FlipConfig rotate();                    // the default of FollowPathCommand
-    public FlipConfig withMode(FlipMode mode);
-    public FlipConfig withField(FieldDimensions field);
-}
 ```
 
-The 2027 field is unknown, so the default mode ROTATE is **Uncertain** (section 12). Examples use the placeholder pair 16.54 x 8.07 m; verify the
-field size against the official layout of the season. The flip is applied to the built table once, in `initialize()`. MIRROR flips the sign of
+The mode and the field size are fields of `PathFollowerConfig` (`flipMode`, `fieldLength`, `fieldWidth`, section 9.6).
+`PathFollowerConfig.defaults()` uses ROTATE and reads the field size from `AprilTagFieldLayout.loadField(kDefaultField)`, as RobotPose.java:94-95
+does. The 2027 field is unknown, so the default mode ROTATE is **Uncertain** (section 12). Examples use the placeholder pair 16.54 x 8.07 m; verify
+the field size against the official layout of the season. The flip is applied to the built table once, in `initialize()`. MIRROR flips the sign of
 sigma, kappa, dphi, theta' and omega; ROTATE keeps them; s values, L and events do not change. `NONE` is for a team that writes separate red paths.
 
 ### 9.10 FollowPathCommand
@@ -3875,13 +3829,10 @@ public class FollowPathCommand extends Command {
                              Consumer<ChassisSpeeds> output,              // field-relative command, omega CCW
                              Subsystem... requirements);                  // the drivetrain
 
-    // configure BEFORE scheduling; each returns this; after initialize() they throw IllegalStateException (V25)
-    public FollowPathCommand withKinematics(KinematicsConfig config);      // motor curve, wheel cap, steer rate, overspeed check
+    // configure before scheduling; each returns this; a change takes effect at the next initialize()
+    public FollowPathCommand withKinematics(KinematicsConfig config);      // motor curve, wheel cap, limit warning C2
     public FollowPathCommand withPathsConfig(PathsConfig config);          // R_mod for the wheel-speed cap (moduleRadius 0 = unknown)
-    public FollowPathCommand withFollowerConfig(FollowerConfig config);
-    public FollowPathCommand withProfileConfig(ProfileConfig config);
-    public FollowPathCommand withFlip(FlipConfig flip);                    // default FlipConfig.rotate()
-    public FollowPathCommand withLogger(PathLogger logger);
+    public FollowPathCommand withConfig(PathFollowerConfig config);        // gains, tolerances, timeout, flip; default PathFollowerConfig.defaults()
     public FollowPathCommand withOnFinish(Consumer<FollowResult> callback);
 
     @Override public void initialize();
@@ -3897,7 +3848,7 @@ public enum FollowResult {
     RUNNING,
     OK,                      // position and angle in tolerance for t_settle
     FAILED_TIMEOUT,          // t_timeout passed; zero speed sent once
-    FAILED_START_TOO_FAR,    // more than d_far_abort from the path at start
+    FAILED_START_TOO_FAR,    // more than startTol (0.5 m) from P0 at start
     FAILED_POSE,             // pose NaN or stale for more than 1 s
     INTERRUPTED;             // cancelled by the scheduler or the driver
     public boolean isSuccess();          // this == OK
@@ -3908,115 +3859,130 @@ public enum FollowResult {
 Rules:
 - **Constraints:** `path.constraints()` if set; else `PathConstraints.fromConfig(kinematicsConfig, pathsConfig)` if `withKinematics` was called (`PathsConfig.defaults()` if `withPathsConfig` was not); else
   `PathConstraints.fromConfig(new KinematicsConfig())` with warning C1.
-- **Flip:** `path.forCurrentAlliance(flip)` in `initialize()`, once.
+- **Flip:** `path.forCurrentAlliance(config)` in `initialize()`, once, with the flip mode and field size of the `PathFollowerConfig`.
 - **Requirements:** at least one (V24). Event commands must not require any of them (V20), checked here because only the command knows its
   requirements.
 - **Failure:** `end` sends zero speeds once; `holdEndCommand()` holds actively if the user composes it.
 - **Output:** never negates omega, never discretizes.
+- **Logging:** through `PathLogger.get()` (section 9.11); there is no per-command logger.
 - **Scheduling twice:** allowed (a fresh `initialize`); the flipped path is memoized in `Path`.
-- Not in v1: a re-plan hook (`withReplanHook`, result `FAILED_REPLAN`, section 8.9) and starting at the current pose (resolution R5).
+- Not in v1: a re-plan hook (`withReplanHook`, result `FAILED_REPLAN`, section 8.9), starting at the current pose (resolution R5) and a
+  mid-path start (section 8.2.5).
 
 ### 9.11 PathLogger and PathSample
 
+`PathLogger` copies RobotPose's `PoseLogger` (PoseLogger.java) exactly in shape (**Decision**, user, simplification pass):
+
 ```java
 public interface PathLogger {
-    void putData(String key, Sendable sendable);                     // once per key (like PoseLogger.putData, PoseLogger.java:41)
-    void alert(String text, Alert.AlertType type, boolean active);   // called every loop with the same text (PoseLogger.java:51)
-    PathLogger WPILIB = /* SmartDashboard + WPILib Alert */;
-    static void set(PathLogger logger);
-    static PathLogger get();
+    void putData(String key, Sendable sendable);                     // once per key, like PoseLogger.putData (PoseLogger.java:41)
+    void alert(String text, Alert.AlertType type, boolean active);   // show or clear an alert, like PoseLogger.alert (PoseLogger.java:51)
+
+    /** The default: SmartDashboard for entries, one WPILib Alert per text and type. */
+    PathLogger WPILIB = new PathLogger() {
+        private final Map<String, Alert> alerts = new HashMap<>();
+        @Override public void putData(String key, Sendable sendable) { SmartDashboard.putData(key, sendable); }
+        @Override public synchronized void alert(String text, Alert.AlertType type, boolean active) {
+            alerts.computeIfAbsent(type + ":" + text, k -> new Alert(text, type)).set(active);
+        }
+    };
+
+    static void set(PathLogger logger) { Holder.logger = Objects.requireNonNull(logger); }
+    static PathLogger get() { return Holder.logger; }
+
+    final class Holder {                                             // interfaces cannot have mutable static fields
+        private static volatile PathLogger logger = WPILIB;
+        private Holder() {}
+    }
 }
 
 public record PathSample(double s, Translation2d position, Rotation2d tangent, double curvature) {}
 ```
 
-A separate `PathLogger`, not `PoseLogger`: reusing it would make Path depend on RobotPose (resolution R8). It copies `PoseLogger`'s shape on purpose.
-Telemetry keys are in section 8.13; RobotPose uses lower-case keys with spaces, the Path keys are camelCase under `Path/<name>/`.
+- A separate `PathLogger`, not `PoseLogger`: reusing it would make Path depend on RobotPose (resolution R8).
+- `FollowPathCommand` calls `PathLogger.get().putData("Path/" + path.name(), telemetry)` once, the first time it is initialized. The
+  telemetry object is one `Sendable`; its `initSendable(SendableBuilder b)` adds the keys of section 8.13, for example
+  `b.addDoubleProperty("eN", () -> eN, null)` and `b.addStringProperty("state", () -> state.name(), null)`. There is no per-command
+  logger.
+- Build warnings (W1 to W5) call `alert(text, kWarning, true)` once when the `Path` is built; start warnings (C1, C2) once in
+  `initialize()`; run-time alerts (A1 to A3) are set when they happen and cleared (`active = false`) at the next `initialize()`.
+- Set the logger once in `Robot`'s constructor, before any `Path` is created; warnings sent earlier go to `WPILIB`.
+
+Example adapter for a team logger (DataLog or DogLog style). No logging library is added as a dependency; the adapter lives in the
+team's code:
+
+```java
+PathLogger.set(new PathLogger() {
+    public void putData(String key, Sendable sendable) {
+        SmartDashboard.putData(key, sendable);                        // or your logger's Sendable support
+    }
+    public void alert(String text, Alert.AlertType type, boolean active) {
+        if (active) DataLogManager.log("Path " + type + ": " + text);  // for example DogLog.logFault(text) instead
+        PathLogger.WPILIB.alert(text, type, active);                   // keep the dashboard alert too
+    }
+});
+```
+
+Telemetry keys are in section 8.13; RobotPose uses lower-case keys with spaces, the Path keys are camelCase under `Path/<name>`.
 
 ### 9.12 Validation
 
 Principles: constructors throw for values that can never be right; the text says what is wrong, shows the value and says how to fix it (`{x}` is
-filled at run time). `IllegalArgumentException` (IAE) for bad values, `NullPointerException` (NPE) for null, `UnsupportedOperationException` (UOE)
-for reserved features, `IllegalStateException` (ISE) for calls in the wrong state. Everything the library can repair is a warning. The types and
-wording are proposals.
+filled at run time). `IllegalArgumentException` (IAE) for bad values, `NullPointerException` (NPE) for null. Everything the library can repair is
+a warning. **Decision** (user, simplification pass): about ten exceptions for real user mistakes and about five build and start warnings; the
+rest were merged or dropped. The types and wording are proposals.
 
 #### 9.12.1 Exceptions
 
 | ID | Condition | Thrown by | Type | Message |
 |---|---|---|---|---|
 | V1 | fewer than 2 points (also `new Path()`) | `Path` constructor | IAE | `Path needs at least 2 points (a start and an end), but you gave {n}. Example: new Path(new Point(1, 2), new Point(3, 4)).` |
-| V2 | the point array or list is null | `Path` constructor | NPE | `The points of the path are null. Pass Points, for example new Path(new Point(1, 2), new Point(3, 4)).` |
-| V3 | a Point in the list is null | `Path` constructor, `Path.of` | NPE | `Point {i} of the path is null. Every argument of new Path(...) must be a Point, for example new Point(1, 2).` |
-| V4 | x or y NaN or infinite | `Point` constructors | IAE | `Point({x}, {y}): x and y must be finite numbers (meters), but one of them is NaN or infinite. A NaN usually comes from a division by zero or from a value that was never set.` |
-| V5 | `Translation2d` or `Pose2d` argument null | `Point` constructors | NPE | `Point position is null. Pass numbers, new Point(1, 2), or a Translation2d.` |
+| V3 | a null argument: the points array or a point, a `Translation2d` or `Pose2d`, an angle, a face target, a config, an event action, a supplier, the output or the path | the method that receives it | NPE | `{method}: {argument} is null. Every argument must be set; see the example in Path.md "Quick start".` ({argument} is for example `point 2` or `the angle`) |
+| V4 | a number NaN or infinite: point x or y, an angle, a radius, a speed, a wait time, a face target | `Point` constructors and `with...` / `stop(d)`, `Path.withFaceTarget` | IAE | `{method}({value}): {name} must be a finite number ({unit}), but it is NaN or infinite. A NaN usually comes from a division by zero or from a value that was never set.` |
 | V6 | all points merge into one (every point within 1 mm of the first), so L = 0 | `Path` constructor | IAE | `All {n} points of the path are at the same place (within 1 mm), so the path has no length. Check the coordinates: two different points are needed, for example new Path(new Point(1, 2), new Point(3, 4)).` |
-| V7 | `withAngle(null)` | `Point.withAngle` | NPE | `withAngle: the angle is null. Use Rotation2d.fromDegrees(90) or new Rotation2d(radians).` |
-| V8 | angle cos or sin not finite | `Point.withAngle` | IAE | `withAngle: the angle is NaN or infinite. Pass a finite angle, for example Rotation2d.fromDegrees(90).` |
 | V9 | `withRadius(r)` with r < 0 | `Point.withRadius` | IAE | `withRadius({r}): the radius must be 0 or more (meters). Use withRadius(0) to make the robot stop at this point, or leave withRadius out so the library chooses the radius.` |
-| V10 | `withRadius(r)` NaN or infinite | `Point.withRadius` | IAE | `withRadius({r}): the radius must be a finite number of meters, for example withRadius(0.5).` |
 | V11 | `withVelocity(v)` with v < 0 | `Point.withVelocity` | IAE | `withVelocity({v}): the speed must be 0 or more (m/s). withVelocity(0) is the same as stop(). To limit the speed at a point use a positive number, for example withVelocity(1.0).` |
-| V12 | `withVelocity(v)` NaN or infinite | `Point.withVelocity` | IAE | `withVelocity({v}): the speed must be a finite number of m/s, for example withVelocity(1.0).` |
 | V13 | `stop(d)` with d < 0 | `Point.stop` | IAE | `stop({d}): the wait time must be 0 or more (seconds). Use stop() to stop without waiting, or stop(1.5) to wait 1.5 seconds.` |
-| V14 | `stop(d)` NaN or infinite | `Point.stop` | IAE | `stop({d}): the wait time must be a finite number of seconds, for example stop(1.5).` |
-| V15 | `cutCorner()` | `Point.cutCorner` | UOE | `cutCorner() is not available in this version (planned for v2). Remove it, or use withRadius(r) to choose how round the corner is. The path still passes exactly through the point.` |
-| V16 | a PathConstraints field NaN, infinite or not > 0 | `PathConstraints` constructor | IAE | `PathConstraints.{field} must be a finite number more than 0 ({unit}), but it is {v}. Use PathConstraints.fromConfig(yourKinematicsConfig) to get all values at once.` |
-| V17 | `fromConfig(null)` | `PathConstraints.fromConfig` | NPE | `PathConstraints.fromConfig: the KinematicsConfig is null. Pass the same KinematicsConfig you give to DemaciaKinematics.` |
-| V18 | `PathGeometryConfig` value out of range (rMin <= 0, rMax <= rMin, dBulge <= 0, epsDev or tauStop outside (0, pi], shrink outside (0, 1), counts < 1) | `PathGeometryConfig` constructor | IAE | `PathGeometryConfig.{field} {v} is not allowed: {rule}. Use PathGeometryConfig.defaults() and change only what you need.` |
-| V19 | event s outside [0, L], NaN or infinite | `Path.withEventAtDistance`, `PathEvent` resolution | IAE | `Event distance {s} m is outside the path (0 to {L} m). Use withEventAtFraction(1.0) for the end of the path.` |
-| V19b | event fraction outside [0, 1] or NaN | `Path.withEventAtFraction` | IAE | `Event fraction {f} must be between 0 and 1 (0 = start of the path, 1 = end).` |
-| V19c | event point index outside 0..n-1 | `Path.withEventAtPoint` | IAE | `Event point index {i} does not exist: the path has {n} points, numbered 0 to {n-1}. Index 0 is the first point you passed to new Path(...).` |
-| V19d | event action null | `PathEvent` factories | NPE | `Event action is null. Pass a Command or a Runnable, for example Commands.print("hello").` |
-| V20 | an event command requires a subsystem the follower also requires | `FollowPathCommand` constructor | IAE | `The event at s = {s} m ("{name}") needs the subsystem {subsystem}, which FollowPathCommand also needs. Scheduling the event would cancel the path. Make the event command not require the drivetrain (for example, use only the mechanism).` |
-| V21 | `withFaceTarget` target or offset null / not finite | `Path.withFaceTarget` | NPE / IAE | NPE: `withFaceTarget: the target is null. Pass the field point to look at, for example new Translation2d(4.6, 4.0).` IAE: `withFaceTarget: the target ({x}, {y}) must be finite numbers (meters).` |
-| V22 | `Path.withName` empty, null, or contains `/` | `Path.withName` | IAE | `Path name "{name}" is not allowed: it must not be empty and must not contain "/". It becomes the NetworkTables key Path/{name}/.` |
-| V23 | `FieldDimensions` length or width not finite and > 0 | `FieldDimensions` constructor | IAE | `FieldDimensions: length and width must be finite numbers more than 0 (meters), but you gave {l} x {w}.` |
-| V24 | no requirement, or a null supplier / output / path | `FollowPathCommand` constructor | IAE / NPE | IAE: `FollowPathCommand needs the drivetrain as a requirement, for example new FollowPathCommand(path, swerve::getPose, swerve::getFieldSpeeds, swerve::driveFieldRelative, swerve). Without it, two commands could drive the robot at the same time.` NPE: `FollowPathCommand: {argument} is null. See the example in Path.md "Quick start".` |
-| V25 | `withX` called after the command started | `FollowPathCommand.withX` | ISE | `FollowPathCommand.{method} was called after the command started. Set all options before you schedule the command.` |
-| V26 | `PathsConfig` angular limit or jerk not finite and > 0, or `moduleRadius` < 0 or NaN | `PathsConfig` constructor | IAE | for the radius `PathsConfig.moduleRadius ({r}): the distance from the robot center to the farthest module must be 0 or more (meters). A 0.55 m square robot has 0.39 m. Use 0 or leave it out to skip the wheel-speed limit.` |
-| V27 | `FollowerConfig` gain, tolerance or time not finite and > 0 | `FollowerConfig` constructor | IAE | `FollowerConfig.{field} must be a finite number more than 0 ({unit}), but it is {v}. Start from FollowerConfig.defaults().` |
-| V28 | `ProfileConfig` value not finite and > 0 (arcRho also < 1) | `ProfileConfig` constructor | IAE | `ProfileConfig.{field} must be a finite number more than 0 ({unit}){, and less than 1 for arcRho}, but it is {v}.` |
+| V16 | a config value out of range: a `PathConstraints` field, a `PathsConfig` angular limit or jerk, or a `PathFollowerConfig` number not finite or not > 0; `PathsConfig.moduleRadius` < 0 or NaN | the record constructors | IAE | `{record}.{field} must be a finite number {more than 0 / of 0 or more} ({unit}), but it is {v}. Start from {PathConstraints.fromConfig(yourKinematicsConfig) / PathsConfig.defaults() / PathFollowerConfig.defaults()} and change only what you need.` |
+| V19 | event fraction outside [0, 1] or NaN; event point index outside 0..n-1 | `Path.withEventAtFraction`, `Path.withEventAtPoint`, `PathEvent` resolution | IAE | fraction: `Event fraction {f} must be between 0 and 1 (0 = start of the path, 1 = end).` Index: `Event point index {i} does not exist: the path has {n} points, numbered 0 to {n-1}. Index 0 is the first point you passed to new Path(...).` |
+| V20 | an event command requires a subsystem the follower also requires | `FollowPathCommand` constructor | IAE | `The event at {where} needs the subsystem {subsystem}, which FollowPathCommand also needs. Scheduling the event would cancel the path. Make the event command not require the drivetrain (for example, use only the mechanism).` ({where} is `fraction {f}` or `point {i}`) |
+| V24 | no requirement | `FollowPathCommand` constructor | IAE | `FollowPathCommand needs the drivetrain as a requirement, for example new FollowPathCommand(path, swerve::getPose, swerve::getFieldSpeeds, swerve::driveFieldRelative, swerve). Without it, two commands could drive the robot at the same time.` |
 | V30 | a point has `stop()`, `stop(d)` or `withVelocity(0)` **and** `withRadius(r)` with r > 0 | `Path` constructor | IAE | `Point {i} has both stop() and withRadius({r}). A stop point is a sharp corner (the robot stops exactly on the point), so it has no arc. Remove withRadius({r}) to stop on the point, or remove stop() to drive through the corner on a round arc.` |
 
 Notes: neighbors closer than 1 mm are merged with warning W3, not rejected; two equal points far apart in the list (a loop back to P_0) are legal.
-Not errors, deliberately: a radius larger than fits (shrunk, W2), `withVelocity` above vMax (C3), a point outside the field (W12). (ID V29 is not used.)
+Not errors, deliberately: a radius larger than fits (shrunk, W2), `withVelocity` above vMax (C2). The IDs V2, V5, V7, V8, V10, V12, V14, V15,
+V17, V18, V19b to V19d, V21 to V23 and V25 to V29 of the earlier design are not used: they were merged into V3, V4, V16 and V19, or dropped.
 
-#### 9.12.2 Build-time warnings (reported once from the `Path` constructor)
+#### 9.12.2 Build warnings (reported once from the `Path` constructor)
 
-Format: `Path "{name}", point {i}: {text}`; each is `DriverStation.reportWarning(text, false)` and is in `Path.warnings()`.
+Format: `Path "{name}", point {i}: {text}`; each goes to `PathLogger.get().alert(text, AlertType.kWarning, true)` and is in `Path.warnings()`.
 
 | ID | When | Text | Source |
 |---|---|---|---|
-| W1 | an automatic corner became a stop (turn above TAU_STOP, radius shrank below R_MIN, short leg `d/4 < R_MIN`, kink corner failed) | `the corner is too sharp or too tight for an arc ({reason}). The robot will stop here. To drive through it with an arc, give a radius: withRadius(0.3). To stop on purpose, use stop().` | 5.6.4, 5.7.3, 5.8.3 |
+| W1 | an automatic corner became a stop: turn above TAU_STOP, radius shrank below R_MIN, short leg `d/4 < R_MIN`, or `withRadius(r)` with 0 < r < R_MIN | `the corner is too sharp or too tight for an arc ({reason}). The robot will stop here. To drive through it with an arc, give a radius of at least {R_MIN} m, for example withRadius(0.3). To stop on purpose, use stop() or withRadius(0).` | 5.6.4, 5.7.3 |
 | W2 | a radius was shrunk (automatic or override) | `radius {r0} m does not fit and was shrunk to {r1} m ({why}). Why: F1 = the neighbor point is too close to the circle, F2 = the line would run more than 30 degrees off the straight leg, F3 = the arc would turn much more than the corner angle. Move the points apart, or give a smaller radius.` | 5.7.3 |
 | W3 | neighbor points closer than 1 mm | `points {i} and {j} are only {d} mm apart. Point {j} was merged into point {i}. Remove one of them.` Extra when both set an attribute: `both set {attribute} ({a} and {b}); using the later one ({b}).` | 5.8.2 |
-| W4 | `withVelocity(v > 0)` or `stop()` on P_0 | `{what} on the first point is ignored: the robot starts with its measured speed.` For `stop(d)`, d > 0: `stop({d}) on the first point does not change the path; the robot waits {d} s before it starts.` | 7.4.2, 8.6 |
-| W5 | `withVelocity(v > 0)` on P_{n-1} | `withVelocity on the last point is ignored in this version: the robot always ends at speed 0.` | 7.4.2 |
-| W6 | `withRadius(r)` on P_0, P_{n-1}, or a point exactly on a straight line | `withRadius is ignored here: only a point where the path turns has a corner radius.` | 5.7.3 (resolution R8) |
-| W7 | `withRadius(r)` with 0 < r < R_MIN | `radius {r} m is below the minimum {R_MIN} m; the corner is treated as a stop. Use withRadius(0) to say so, or a radius of at least {R_MIN}.` | 5.7.3 |
-| W8 | a straight waypoint became a kink corner | `this point is almost on the line between its neighbors but the path bends by {k} degrees here; a small arc (radius {r} m) was added so the path still passes through the point. The robot slows to {v} m/s on it. Prefer an event at a distance or fraction to extra points on a straight leg.` | 5.8.3 |
-| W9 | two far-apart parts of the path come within 0.3 m (optional check) | `the path comes within {d} m of itself between s = {s1} m and s = {s2} m. Check the start position near there, or split the path in two.` | 5.10.4 |
-| W10 | face target set and some point has `withAngle` | `withAngle is not used while a face target is set; the robot always looks at ({x}, {y}). Remove withAngle or use withoutFaceTarget().` | 6.1 |
-| W11 | face target within r_face_min of any path point | `the path passes {d} m from the face target; inside {rFaceMin} m the heading stops following the target. Move the target or the path.` | 6.9 |
-| W12 | a point outside the field (checked when the command starts, with the FieldDimensions) | `point {i} ({x}, {y}) is outside the field ({l} x {w} m). Are the numbers in meters?` | new |
-| W13 | L < L_short (0.10 m) | `the path is only {L} m long; the robot drives straight to the end point and turns there.` | 8.12 |
+| W4 | a setting that has no effect: `withVelocity(v > 0)` or `stop()` on P_0; `withVelocity` on the last point; `withRadius` on P_0, P_{n-1} or a straight point; `withAngle` while a face target is set | `{setting} is ignored here: {reason}.` Reasons: `the robot starts with its measured speed`; `the robot always ends at speed 0 in this version`; `only a point where the path turns has a corner radius`; `the robot looks at the face target ({x}, {y}); remove withAngle or use withoutFaceTarget()`. For `stop(d)` on P_0, d > 0: `stop({d}) on the first point does not change the path; the robot waits {d} s before it starts.` | 5.7.3, 6.1, 7.4.2, 8.6 |
+| W5 | a straight middle point is missed by more than PASS_TOL = 0.01 m | `this point is on a straight line between its neighbors, so it is only a pass marker, and the path misses it by {d} m (the line next to a round corner is turned outward). Add .stop() to drive exactly through it, or remove the point and use an event at a fraction instead.` | 5.8.3 |
 
 `stop()` on a corner that would have had an arc is not a warning: removing the arc is the documented meaning of `stop()`.
 
-#### 9.12.3 Warnings when the command starts (`initialize()`)
+#### 9.12.3 Start warnings and run-time alerts
+
+Start warnings, once in `initialize()` (`AlertType.kWarning`):
 
 | ID | When | Text | Source |
 |---|---|---|---|
 | C1 | no constraints on the path and no `withKinematics` | `no PathConstraints and no KinematicsConfig: using the defaults of a new KinematicsConfig() (placeholders). Pass PathConstraints.fromConfig(yourConfig).` | 9.10 |
-| C2 | a constraint above the config-derived value | `{field} {v} is above what the drivetrain limiter allows ({lim}). The limiter will clip it and the robot will fall behind the profile.` | 7.2.3 |
-| C3 | vMax above maxAllowedModuleVelocity, or a `withVelocity` above vMax | `{what} is above the top speed {vmax} m/s; it has no effect.` | 7.2.3, 7.4.2 |
-| C4 | initial overspeed that braking cannot fix | `initial overspeed: start infeasible ({v0} m/s, limit {vHard}).` | 7.6.6 |
-| C5 | sideways start speed above SIDEWAYS_WARN | `the robot is moving sideways at {v} m/s at the start; was the path started from the wrong place?` | 7.6.7 |
-| C6 | start distance above d_far_warn | alert: `the robot starts {d} m from the path` (above d_far_abort: FAILED_START_TOO_FAR) | 8.2.5 |
-| C7 | alliance unknown | alert: `alliance unknown; using the blue path` | 8.10 |
-| C8 | speed supplier gives NaN | alert | 8.12 |
-| C9 | kP != kN | `kP ({a}) differs from kN ({b}); the hand-over to the end-point law will have a small step.` | 8.3.7 |
-| C10 | a FAILED_* result | alert with the result name | 8.14 |
-| C11 | `jerkMax > max(aAcc, aDec)/(5·dt_nom)` | `jerkMax {j} m/s^3 is too high to have an effect at 50 Hz (above {lim}); the speed command is then limited by the loop rate only.` | 7.13.7 |
+| C2 | a limit above what has an effect: a constraint above the config-derived value, vMax above maxAllowedModuleVelocity, a `withVelocity` above vMax, or `jerkMax > max(aAcc, aDec)/(5·dt_nom)` | `{what} {v} is above {limit} ({lim}); {effect}.` Effects: `the limiter will clip it and the robot will fall behind the profile`; `it has no effect`; `the jerk limit has no effect at 50 Hz, and the robot can enter an arc still braking`. | 7.2.3, 7.4.2, 7.13.7 |
+
+Run-time alerts, through `PathLogger.alert`:
+
+| ID | When | Type | Text | Source |
+|---|---|---|---|---|
+| A1 | the command ended with a FAILED_* result | kError | `Path "{name}": {result}: {reason}.` Reasons: FAILED_TIMEOUT `did not finish within {t} s (1.5 x the planned time + 1 s); the robot was blocked, or the limits are above what the drivetrain can do`; FAILED_START_TOO_FAR `the robot is {d} m from the start point ({x}, {y}) and must start within {startTol} m; check the start pose and the alliance flip`; FAILED_POSE `the pose was invalid or frozen for more than 1 s` | 8.2.5, 8.7.3, 8.12 |
+| A2 | alliance unknown at initialize | kWarning | `Path "{name}": alliance unknown; driving the blue path.` | 8.10 |
+| A3 | the measured-speed supplier gives NaN or infinity | kWarning | `Path "{name}": the measured speed is not a number; check the speed supplier.` | 8.12 |
 
 ### 9.13 Examples
 
@@ -4056,9 +4022,11 @@ Path path = new Path(
     new Point(5, 2));
 ```
 
-A limit at a point, not a zone: the robot brakes before the point and speeds up after it. With EX the trapezoid profile time (no jerk limit)
-goes from 3.2723 s to 3.7751 s, and braking for the point starts at s = 2.0092 m on the arc (section 7.4.2). Between two capped points spaced d apart, with
-a = aAcc = aDec, the peak is `sqrt(v_w^2 + a·d)` (**Inference**, constant acceleration on both halves). Zones with a length are v2.
+(3, 4) is a corner, so the whole arc through it is driven at no more than 1.0 m/s (arcs have constant speed, section 7.8). With EX the
+trapezoid profile time (no jerk limit) goes from 3.2723 s to 5.2576 s (v1 with the jerk law: 5.52 s), and braking for the arc starts at
+s = 0.8487 m on line 0 (section 7.4.2). On a straight part the limit acts at the point only: the robot brakes before it and speeds up after it;
+between two capped points on a line spaced d apart, with a = aAcc = aDec, the peak is `sqrt(v_w^2 + a·d)` (**Inference**, constant
+acceleration on both halves). Zones with a length are v2.
 
 **(c2) Stop points**
 
@@ -4075,9 +4043,9 @@ Path path = new Path(
 - Order at a stop: arrive (within 0.03 m and below 0.1 m/s), fire the point's events, correct a residual heading error of more than 3 deg,
   wait, leave under the speed law (section 8.6). The heading here goes linearly from the measured start heading to 180 deg at (7, 4) (an exact
   half turn from 0 deg turns CCW, section 6.3); it does not jump at the stop.
-- With EX and a start heading of 0 (script): legs 3.0 m and 3.6056 m, trapezoid motion without a jerk limit 2.0000 + 2.1926 s, steer at
-  the stop `33.69 deg/12 rad/s = 0.0490 s`, dwell 1.5 s: 5.7416 s. This is the lower bound; the v1 profileTime (jerk law) is longer by
-  roughly 6% plus the hand-over tails (not computed for this path).
+- With EX and a start heading of 0 (script): legs 3.0 m and 3.6056 m, trapezoid motion without a jerk limit 2.0000 + 2.1926 s, dwell
+  1.5 s: 5.6926 s (the dwell is the only stop term, section 7.10.4). This is the lower bound; the v1 profileTime (jerk law) is longer by roughly 6%
+  plus the hand-over tails (not computed for this path).
 - At the last point the stop is automatic; `.stop(1.0)` there holds 1 s after the finish test passes.
 
 **(d) Face target**
@@ -4085,25 +4053,24 @@ Path path = new Path(
 ```java
 Translation2d hub = new Translation2d(4.6, 4.0);              // blue frame, meters
 Path path = new Path(new Point(1, 1), new Point(3, 2), new Point(6, 2))
-    .withFaceTarget(hub);                                     // nose toward the hub
-Path back = path.withFaceTarget(hub, Rotation2d.kPi);         // shooter on the back of the robot
+    .withFaceTarget(hub);                                     // the robot's front toward the hub
 ```
 
-The heading follows the bearing to the target (section 6.9); inside 0.5 m of it the heading freezes. On red the target is flipped with the path.
-Waypoint angles are not used while a face target is set (W10).
+The heading follows the bearing to the target (section 6.9); inside 0.5 m of it the heading freezes. The robot's
+front faces the target. On red the target is flipped with the path. Waypoint angles are not used while a face target is set (W4).
 
 **(e) Events**
 
 ```java
 Path path = new Path(new Point(1, 1), new Point(4, 1), new Point(7, 3))
-    .withEventAtDistance(1.0, intake.deployCommand())         // after 1 m of path
+    .withEventAtFraction(0.2, intake.deployCommand())         // after 20% of the length L
     .withEventAtFraction(0.5, Commands.print("halfway"))      // half of the length L
     .withEventAtPoint(1, () -> shooter.spinUp())              // when the robot reaches point 1 (a Runnable)
-    .withEvent(PathEvent.atFraction(1.0, shooter.shootCommand()).fireIfStartedPast());
+    .withEvent(PathEvent.atPoint(2, shooter.shootCommand())); // at the end point
 ```
 
-Each fires once, in order of s, in the first loop in which s* has reached it. The last one fires when the path finishes successfully. After a
-mid-path start, events already passed are skipped, except those marked `fireIfStartedPast()`.
+Each fires once, in order of s, in the first loop in which s* has reached it. The last one fires when the path finishes successfully. Events are
+placed by fraction or by point index only.
 
 **(f) Wiring into a drivetrain with the Kinematics module**
 
@@ -4135,7 +4102,7 @@ private static final KinematicsConfig KINEMATICS_CONFIG = new KinematicsConfig()
     .withMaxAllowedModuleVelocity(4.2);
 private static final Translation2d[] MODULES = { /* same array given to the drivetrain, same order */ };
 private static final PathsConfig PATHS_CONFIG = PathsConfig.fromModules(MODULES);   // placeholders for omega, alpha, jerk
-private static final FlipConfig FLIP = FlipConfig.rotate();
+private static final PathFollowerConfig FOLLOWER = PathFollowerConfig.defaults();   // ROTATE flip, default field size
 
 private final Path scorePath = new Path(
     PathConstraints.fromConfig(KINEMATICS_CONFIG, PATHS_CONFIG).withVMax(3.0),
@@ -4147,12 +4114,12 @@ private Command follow(Path path) {
                                  swerve::driveFieldRelative, swerve)
         .withKinematics(KINEMATICS_CONFIG)
         .withPathsConfig(PATHS_CONFIG)
-        .withFlip(FLIP);
+        .withConfig(FOLLOWER);
 }
 
 public Command getAutonomousCommand() {
     return Commands.defer(() -> {
-        Path active = scorePath.forCurrentAlliance(FLIP);      // red gets the flipped path (memoized)
+        Path active = scorePath.forCurrentAlliance(FOLLOWER);  // red gets the flipped path (memoized)
         Pose2d start = new Pose2d(active.startPoint(),
             active.startHeading().orElse(swerve.getPose().getRotation()));
         return Commands.sequence(
@@ -4172,8 +4139,9 @@ Tests: section 13.5.
 ## 10. Defaults
 
 Every constant of the design, with its single home. "Home" is the record field (configurable) or the internal class that owns the
-constant (not configurable). All values are **Recommendation** starting values, reasoned and simulated in Python only, not tuned on a
-robot, unless marked **Fact** or **Decision**.
+constant: an **internal constant** is a documented `static final`, not configurable (**Decision**, user, simplification pass: only
+`PathConstraints`, `PathsConfig` and `PathFollowerConfig` are public config types). All values are **Recommendation** starting values,
+reasoned and simulated in Python only, not tuned on a robot, unless marked **Fact** or **Decision**.
 
 | Name | Value | Unit | Home | Used in | Notes |
 |---|---|---|---|---|---|
@@ -4185,73 +4153,62 @@ robot, unless marked **Fact** or **Decision**.
 | maxAngularAccel | 4·pi | rad/s^2 | `PathsConfig.maxAngularAccel` | 7.2.1, 9.6 | placeholder |
 | maxJerk | 50 | m/s^3 | `PathsConfig.maxJerk` | 7.13.7, 9.6 | placeholder |
 | moduleRadius | 0 (unknown; `fromModules` computes it) | m | `PathsConfig.moduleRadius` | 7.2.2, 7.11 | 0 skips the wheel-speed cap |
-| STOP_DIST_MARGIN | 0.005 | m | `SpeedLaw` (internal) | 7.13.4 | |
-| D_H_MAX | 0.05; `d_h = min(D_H_MAX, jerkMax·dt_nom/k_p^2)` | m | `Tracker` (internal) | 8.3.7 | hand-over distance |
-| jerk warning threshold | `max(aAcc, aDec)/(5·dt_nom)` | m/s^3 | `PathWarnings` (internal) | 7.13.7 (C11) | |
 | PROFILE_MARGIN | 0.9 | - | `PathConstraints` constant | 7.2.1, 7.9, 7.11 | also the 0.9 of the motor curve and the wheel cap |
-| R_MIN | 0.05 | m | `PathGeometryConfig.rMin` | 5.7.3 | **Decision** (brief decision 2) |
-| R_MAX | 2.0 | m | `PathGeometryConfig.rMax` | 5.7.2 | |
-| D_BULGE | 0.5 | m | `PathGeometryConfig.dBulge` | 5.7.2 | accepted by the user |
-| EPS_DEV | 30 deg | rad | `PathGeometryConfig.epsDevRad` | 5.7.1 (F2, F3) | accepted by the user |
-| TAU_STOP | 150 deg | rad | `PathGeometryConfig.tauStopRad` | 5.6.4 | accepted by the user; pi disables |
-| SHRINK | 0.8 | - | `PathGeometryConfig.shrink` | 5.7.3 | |
-| MAX_ITER | 1000 | passes | `PathGeometryConfig.maxIter` | 5.7.3 | |
-| KINK_ITERS | 20 | - | `PathGeometryConfig.kinkIters` | 5.8.3 | |
-| KINK_TOL | 1e-9 | rad | `PathGeometryConfig.kinkTol` | 5.8.3 | |
-| EPS_DUP | 1e-3 | m | `GeometryBuilder` (internal) | 5.8.2 | merge distance |
-| EPS_ANG | 1e-4 | rad | `GeometryBuilder` (internal) | 5.3, 5.8.3 | straight / kink threshold |
-| EPS_LEN | 1e-6 | m | `GeometryBuilder` (internal) | 5.4 | tangent existence, zero-length segments |
-| EPS_WRAP | 1e-9 | rad | `GeometryBuilder` (internal) | 5.5 | sweep wrap guard |
-| EPS_CENTER | 1e-9 | m | `SegmentTable` (internal) | 5.10.2 | robot at an arc center |
-| radius divisors k | 2 (end leg or user-stop leg), 4 (shared leg) | - | `GeometryBuilder` (internal) | 5.7.2 | |
-| projection tie | 1e-12 | m | `SegmentTable` (internal) | 5.10.4 | |
-| proximity check | spacing 0.05, distance 0.3, s gap 1.0 | m | `PathWarnings` (internal) | 5.10.4 (W9) | optional |
-| half-turn tie | 1e-9 (a change within this of pi turns CCW) | rad | `PathMath.shortTurn` (internal) | 6.3 | |
-| SIDEWAYS_WARN | 0.5 | m/s | `ProfileConfig.sidewaysWarn` | 7.6.7 | |
-| HEADING_LAG_ALLOWED (e_allow) | 5 deg = 0.0873 | rad | `ProfileConfig.headingLagAllowedRad` | 6.6, 7.4.6 | |
-| ARC_RHO (rho) | 0.8 | - | `ProfileConfig.arcRho` | 7.8 | |
-| FT_SPAN | 0.10 | m | `ProfileConfig.ftSpan` | 6.9, 7.3.1 | face-target sub-spans |
-| S_EPS | 1e-6 | m | `SpeedProfile` (internal) | 7.3.1 | span merge |
-| mode-rule tolerance | 1e-9 | m/s | `SpeedProfile` (internal) | 7.8 | |
-| face-target alpha split | 0.5 of alphaMax per term | - | `SpeedProfile` (internal) | 6.9 | |
-| motor-curve inversion | 50 bisection iterations | - | `SpeedProfile` (internal) | 7.9 | |
-| steer rate without a config | `new KinematicsConfig().maxSteerRate` = 12 | rad/s | read from `KinematicsConfig` (**Fact** :41) | 7.10.4 | not a new constant |
-| DEFAULT_DS | 0.02 | m | grid test oracle only (test code) | 7.16 | not in production code |
-| dt_nom | 0.02 | s | `FollowerConfig.dtNom` | 8.2.2 | the only home of the nominal loop period; equals `KinematicsConfig.cycleDt` (**Fact** :25). Run time uses the measured dt |
-| k_n | 3.0 | 1/s | `FollowerConfig.kN` | 8.3.5 | |
-| k_p | 3.0 (= k_n) | 1/s | `FollowerConfig.kP` | 8.3.7 | C9 if different from k_n |
-| c_max | 1.0 | m/s | `FollowerConfig.cMax` | 8.3.8 | |
-| tau_lag | 0.05 | s | `FollowerConfig.tauLag` | 8.4 | |
-| k_theta | 4.0 | 1/s | `FollowerConfig.kTheta` | 8.5.2 | |
-| ahead_min | 0.15 | m | `FollowerConfig.aheadMin` | 8.2.3 | |
-| k_ahead | 3 | loops | `FollowerConfig.kAhead` | 8.2.3 | |
-| ahead_max | 0.50 | m | `FollowerConfig.aheadMax` | 8.2.3 | |
-| eps_back | 0.03 | m | `FollowerConfig.epsBack` | 8.2.4 | |
-| d_tie | 0.30 | m | `FollowerConfig.dTie` | 8.2.5 | |
-| d_far_warn | 0.50 | m | `FollowerConfig.dFarWarn` | 8.2.5 | |
-| d_far_abort | 3.0 | m | `FollowerConfig.dFarAbort` | 8.2.5 | |
-| e_slow0, e_slow1, g_min | 0.15, 0.75, 0.3 | m, m, - | `FollowerConfig.eSlow0/eSlow1/gMin` | 8.3.8 | |
-| r_face_min | 0.50 | m | `FollowerConfig.rFaceMin` | 6.9, 8.5.3 | |
-| stop_pos_tol | 0.03 (along T_in) | m | `FollowerConfig.stopPosTol` | 8.6 | automatic and user stops |
-| STOP_SPEED | 0.1 | m/s | `FollowerConfig.stopSpeed` | 7.10.3, 8.6 | the only home of the stop speed |
-| stop_ang_tol | 3 deg | rad | `FollowerConfig.stopAngTolRad` | 6.7, 8.6 | ROTATE entry and exit (resolution R1) |
-| pos_tol | 0.03 | m | `FollowerConfig.posTol` | 8.7.2 | **Decision** (brief decision 10) |
-| ang_tol | 2 deg | rad | `FollowerConfig.angTolRad` | 8.7.2 | **Decision** |
-| t_settle | 0.1 | s | `FollowerConfig.tSettle` | 8.7.2 | **Decision** |
-| L_short | 0.10 | m | `FollowerConfig.lShort` | 8.12 | |
-| t_stale | 0.10 | s | `FollowerConfig.tStale` | 8.12 | |
-| timeout | `1.5·profileTime + 1.0` | s | `Tracker` (internal formula) | 7.10.5, 8.7.3 | **Decision** (brief decision 10) |
-| dt clamp | [0.005, 0.10] | s | `Tracker` (internal) | 8.2.2 | |
-| overrun factor | 1.5·dt_nom = 0.03 s | - | `Tracker` (internal) | 8.2.2 | |
-| arc window cap | `max(0.05, (pi/2)·r_j)` beyond the arc start | m | `Tracker` (internal) | 8.2.3 | |
-| pose-jump detection | `max(0.15, 2·vMax·dt)` | m | `Tracker` (internal) | 8.12 | |
-| event start slack | 0.05 | m | `EventSchedule` (internal) | 8.8 | |
-| pose invalid limit | 1.0 (then FAILED_POSE) | s | `Tracker` (internal) | 8.12 | |
-| stale-pose speed gate | 0.3 | m/s | `Tracker` (internal) | 8.12 | |
+| STOP_DIST_MARGIN | 0.005 | m | `SpeedLaw` (internal constant) | 7.13.4 | |
+| D_H_MAX | 0.05; `d_h = min(D_H_MAX, jerkMax·dt_nom/k_p^2)` | m | `Tracker` (internal constant) | 8.3.7 | hand-over distance; at rest the hand-over band is d_h + 2·STOP_DIST_MARGIN |
+| jerk warning threshold | `max(aAcc, aDec)/(5·dt_nom)` | m/s^3 | `PathWarnings` (internal constant) | 7.13.7 (C2) | |
+| R_MIN | 0.05 | m | `GeometryBuilder` (internal constant) | 5.7.3 | **Decision** (brief decision 2) |
+| R_MAX | 2.0 | m | `GeometryBuilder` (internal constant) | 5.7.2 | |
+| D_BULGE | 0.5 | m | `GeometryBuilder` (internal constant) | 5.7.2 | accepted by the user |
+| EPS_DEV | 30 deg | rad | `GeometryBuilder` (internal constant) | 5.7.1 (F2, F3) | accepted by the user |
+| TAU_STOP | 150 deg | rad | `GeometryBuilder` (internal constant) | 5.6.4 | accepted by the user; `withRadius` bypasses it |
+| SHRINK | 0.8 | - | `GeometryBuilder` (internal constant) | 5.7.3 | |
+| MAX_ITER | 1000 | passes | `GeometryBuilder` (internal constant) | 5.7.3 | |
+| PASS_TOL | 0.01 | m | `GeometryBuilder` (internal constant) | 5.8.3 (W5) | largest miss of a straight point without a warning |
+| EPS_DUP | 1e-3 | m | `GeometryBuilder` (internal constant) | 5.8.2 | merge distance |
+| EPS_ANG | 1e-4 | rad | `GeometryBuilder` (internal constant) | 5.3, 5.8.3 | straight-point threshold |
+| EPS_LEN | 1e-6 | m | `GeometryBuilder` (internal constant) | 5.4 | tangent existence, zero-length segments |
+| EPS_WRAP | 1e-9 | rad | `GeometryBuilder` (internal constant) | 5.5 | sweep wrap guard |
+| EPS_CENTER | 1e-9 | m | `SegmentTable` (internal constant) | 5.10.2 | robot at an arc center |
+| radius divisors k | 2 (end leg or user-stop leg), 4 (shared leg) | - | `GeometryBuilder` (internal constant) | 5.7.2 | |
+| projection tie | 1e-12 | m | `SegmentTable` (internal constant) | 5.10.4 | |
+| half-turn tie | 1e-9 (a change within this of pi turns CCW) | rad | `PathMath.shortTurn` (internal constant) | 6.3 | |
+| HEADING_LAG_ALLOWED (e_allow) | 5 deg = 0.0873 | rad | `SpeedProfile` (internal constant) | 6.6, 7.4.6 | |
+| FT_SPAN | 0.10 | m | `SpeedProfile` (internal constant) | 6.9, 7.3.1 | face-target sub-spans |
+| S_EPS | 1e-6 | m | `SpeedProfile` (internal constant) | 7.3.1 | span merge |
+| face-target alpha split | 0.5 of alphaMax per term | - | `SpeedProfile` (internal constant) | 6.9 | |
+| motor-curve inversion | 50 bisection iterations | - | `SpeedProfile` (internal constant) | 7.9 | |
+| room-to-brake bisection | 60 iterations | - | `SpeedProfile` (internal constant) | 7.8 | vJerk on lines after arcs |
+| offline profileTime guard | `10·spanTime + 10` | s | `SpeedProfile` (internal constant) | 7.13.6 | |
+| DEFAULT_DS | 0.02 | m | grid test oracle only (test code) | Appendix B | not in production code |
+| dt_nom | 0.02 | s | `Tracker` (internal constant) | 8.2.2 | the only home of the nominal loop period; equals `KinematicsConfig.cycleDt` (**Fact** :25). Run time uses the measured dt |
+| k_n | 3.0 | 1/s | `PathFollowerConfig.kN` | 8.3.5 | |
+| k_p | 3.0 (= k_n) | 1/s | `PathFollowerConfig.kP` | 8.3.7 | keep equal to k_n |
+| tau_lag | 0.05 | s | `PathFollowerConfig.tauLag` | 8.4 | |
+| k_theta | 4.0 | 1/s | `PathFollowerConfig.kTheta` | 8.5.2 | |
+| pos_tol | 0.03 | m | `PathFollowerConfig.posTol` | 8.6, 8.7.2 | **Decision** (brief decision 10); also the stop-arrival tolerance (along T_in) |
+| ang_tol | 2 deg | rad | `PathFollowerConfig.angTolRad` | 8.7.2 | **Decision** |
+| t_settle | 0.1 | s | `PathFollowerConfig.tSettle` | 8.7.2 | **Decision** |
+| startTol | 0.5 | m | `PathFollowerConfig.startTol` | 8.2.5 | **Decision** (simplification pass); FAILED_START_TOO_FAR above it |
+| timeout | `1.5·profileTime + 1.0` | s | `PathFollowerConfig.timeoutFactor` = 1.5, `timeoutMargin` = 1.0 | 7.10.5, 8.7.3 | **Decision** (brief decision 10) |
+| flip mode | ROTATE | - | `PathFollowerConfig.flipMode` | 5.13, 9.9 | **Uncertain** for 2027 |
+| field size | from `AprilTagFieldLayout.loadField(kDefaultField)`; examples use 16.54 x 8.07 | m | `PathFollowerConfig.fieldLength`, `fieldWidth` | 5.13 | placeholder pair; verify against the season's official layout |
+| c_max | 1.0 | m/s | `Tracker` (internal constant) | 8.3.8 | |
+| ahead_min | 0.15 | m | `Tracker` (internal constant) | 8.2.3 | |
+| k_ahead | 3 | loops | `Tracker` (internal constant) | 8.2.3 | |
+| ahead_max | 0.50 | m | `Tracker` (internal constant) | 8.2.3 | |
+| eps_back | 0.03 | m | `Tracker` (internal constant) | 8.2.4 | |
+| r_face_min | 0.50 | m | `Tracker` (internal constant) | 6.9, 8.5.3 | |
+| STOP_SPEED | 0.1 | m/s | `Tracker` (internal constant) | 7.10.3, 8.6 | the only home of the stop speed |
+| stop_ang_tol | 3 deg | rad | `Tracker` (internal constant) | 6.7, 8.6 | ROTATE entry and exit (resolution R1) |
+| L_short | 0.10 | m | `Tracker` (internal constant) | 8.12 | |
+| t_stale | 0.10 | s | `Tracker` (internal constant) | 8.12 | |
+| dt clamp | [0.005, 0.10] | s | `Tracker` (internal constant) | 8.2.2 | |
+| arc window cap | `max(0.05, (pi/2)·r_j)` beyond the arc start | m | `Tracker` (internal constant) | 8.2.3 | |
+| pose invalid limit | 1.0 (then FAILED_POSE) | s | `Tracker` (internal constant) | 8.12 | |
+| stale-pose speed gate | 0.3 | m/s | `Tracker` (internal constant) | 8.12 | |
 | user stop dwell | 0 | s | `Point.stop(d)` | 8.6 | |
-| flip mode | ROTATE | - | `FollowPathCommand` default `FlipConfig.rotate()` | 9.9 | **Uncertain** for 2027 |
-| field size | `FieldDimensions.fromDefaultField()`; examples use 16.54 x 8.07 | m | `FlipConfig.field` | 5.13 | placeholder pair; verify against the season's official layout |
-| e_replan, t_replan | 0.50, 0.5 (1.0 for STUCK) | m, s | v2 (future `FollowerConfig` fields) | 8.9 | not in v1 |
+| e_replan, t_replan | 0.50, 0.5 (1.0 for STUCK) | m, s | v2 (future `PathFollowerConfig` fields) | 8.9 | not in v1 |
 | re-plan e_t trigger, stuck test, re-arm | 0.15 m; v_t > 0.5 and ds*/dt < 0.1 m/s; abs(e_n) < e_replan/2 for 0.5 s | - | v2 | 8.9 | not in v1 |
 
 ## 11. v1 and v2 scope
@@ -4259,29 +4216,31 @@ robot, unless marked **Fact** or **Decision**.
 | Feature | v1 | v2 or later | Source |
 |---|---|---|---|
 | Waypoints exactly on the path, line + arc (G1) | yes | - | decisions 1, 3 |
-| Automatic radius with bulge cap, TAU_STOP stops, kink corners, shrink loop | yes | per-corner arc-or-stop choice by profile time | decision 14, 5.6.4 |
+| Automatic radius with bulge cap, TAU_STOP stops, shrink loop | yes | per-corner arc-or-stop choice by profile time | decision 14, 5.6.4 |
+| Straight middle points | PASS markers, warning W5 above 0.01 m (no kink corners) | - | simplification pass, 5.8.3 |
 | Per-point `withRadius` | yes | - | decision 2 |
-| `cutCorner()` | name reserved, throws | classic fillet that misses the point | decision 1 |
+| `cutCorner()` | no | classic fillet that misses the point | decision 1 |
 | Clothoid transitions (G2) | no | if the logged criterion fails (median dE > 0.03 m over >= 20 entries) | decisions 3, 14, 5.12.3 |
-| Per-point speed cap `withVelocity(v > 0)` | yes (at the point only) | - | decision 5 |
+| Per-point speed cap `withVelocity(v > 0)` | yes (at the point on a line; the whole arc on a corner) | - | decision 5, 7.8 |
 | Speed zones over an s range | no | yes | decision 5 |
 | Stops at any middle point: `stop()`, `stop(d)`, `withVelocity(0)` | yes | - | decisions 15, 17 |
 | Turn in place at a stop (a heading step) | no: heading continuous, ROTATE corrects residuals only | candidate | resolution R1 |
 | Non-zero end speed, chaining paths | no (end speed 0; `withVelocity` on the last point ignored) | yes | decision 5, 7.4.7 |
-| Heading anchors (linear in s) and face target | yes | face target for an s range | decision 4, resolution R1 |
-| Speed profile | per-span closed form, motor curve, arc modes, junction passes | speed zones, clothoid sub-spans | decision 16, resolution R10 |
+| Heading anchors (linear in s) and face target (front toward the target) | yes | face target for an s range | decision 4, resolution R1, simplification pass |
+| Speed profile | per-span closed form, motor curve, constant speed on arcs, junction passes | speed zones, clothoid sub-spans, speed changes on arcs | decision 16, resolution R10, simplification pass |
 | Runtime speed command | jerk-aware online trapezoid law (tangential jerk) | lateral jerk at arc joints via clothoids | decision 18 |
-| Events at a distance, a fraction, a waypoint index | yes | - | decision 7 |
+| Events at a fraction of the path or a waypoint index | yes | - | decision 7, simplification pass |
 | Alliance flip NONE / MIRROR / ROTATE | yes | - | decision 9, resolution R6 |
 | Finish 0.03 m, 2 deg, 0.1 s; timeout; `FollowResult` | yes | - | decision 10 |
 | `holdEndCommand()` on the command | yes | - | resolution R4 |
-| Mid-path start (robot nearer to s0 > 0) | yes | - | resolution R5 |
+| Mid-path start | no: the robot starts within 0.5 m of P0 | candidate | simplification pass (replaces resolution R5) |
+| Settings | three public config records; the rest internal constants | more knobs only if testing shows a need | simplification pass |
 | Re-plan hook | no (design in 8.9) | callback, `FAILED_REPLAN` | decision 8, resolution R5 |
 | Start at the current pose (rebuild geometry) | no | not planned (no on-the-fly paths) | decision 8, resolution R5 |
 | On-the-fly paths | no | not planned | decision 8 |
 | Obstacle avoidance | no | yes | decision 8 |
 | Java API | yes | - | decision 11 |
-| JSON schema | defined only (Appendix A) | `Path.fromJson` / `toJson`, path editor | decision 11 |
+| JSON | a sketch only (Appendix A), not v1 | schema, reader and writer for a path editor | decision 11, simplification pass |
 | Changes to the Kinematics module | none | none; the missing settings are in `PathsConfig` (section 9.6) | user decision |
 
 ## 12. Open items for the user
@@ -4301,16 +4260,21 @@ Only the decisions that remain, and the values that must be measured. Everything
    - Whether omega_ff from the commanded speed or from a filtered ds*/dt tracks better (test FOL-H4).
    - The clothoid criterion (section 5.12.3) from match logs, which decides G2 for v2.
 3. **Default flip mode and field size for 2027.** The default is ROTATE (**Uncertain**: the 2027 field is unknown). Set the mode once per robot
-   (`FlipConfig`) when the field is announced, and check `FieldDimensions.fromDefaultField()` against the official layout; the examples' 16.54 x
-   8.07 m is a placeholder.
+   (`PathFollowerConfig.withFlip`) when the field is announced, and check the field size of `PathFollowerConfig.defaults()` against the official
+   layout; the examples' 16.54 x 8.07 m is a placeholder.
+4. **Big-loop checks (simplification item S2, not applied).** The check run before removing the 30 deg line check (F2) and the sweep check (F3)
+   found that they still change 5.76% of random field-sized paths after the bulge cap and TAU_STOP (section 5.7.3); both are kept until the user
+   decides.
 
-**Uncertain** items that need no decision but should be watched in testing: kink-corner convergence (section 5.8.3, fallback STOP), the G1 toy model
-(section 5.12.1), the duration of ROTATE (section 8.6), and WPILib `angleModulus` at exactly +-pi (implemented explicitly, section 6.3).
+**Uncertain** items that need no decision but should be watched in testing: the time cost of constant-speed arcs when a point cap binds on an
+arc (section 7.8), the G1 toy model (section 5.12.1), the duration of ROTATE (section 8.6), and WPILib `angleModulus` at exactly +-pi
+(implemented explicitly, section 6.3).
 
 ## 13. Test cases
 
 Inputs, then expected outputs. Not committed as code. Tolerance 1e-4 unless stated; "auto" means default config; "shared example" is
-P0 = (1,2), P1 = (3,4), P2 = (5,2); EX and DEF as in section 3.
+P0 = (1,2), P1 = (3,4), P2 = (5,2); EX and DEF as in section 3. IDs of tests removed in the simplification pass are not reused, so the
+gaps are intentional.
 
 ### 13.1 Geometry
 
@@ -4325,13 +4289,14 @@ P0 = (1,2), P1 = (3,4), P2 = (5,2); EX and DEF as in section 3.
 | GEO-7 | (0,0),(4,0),(4,4),(0,4), radius 1 at both; radii 1.0 / 0.5 | equal radii: middle line x = 4.2929 from y = 0.7071 to 3.2929, L = 12.3394; radii 1.0 / 0.5: middle line (4.2916, 0.7571) to (4.1458, 3.6714), L = 12.2546 |
 | GEO-8 | (0,0),(3,4) | one LINE, L = 5, T = (0.6, 0.8) |
 | GEO-9 | (0,0),(2,0),(2.0005,0),(2,2) | same output as (0,0),(2,0),(2,2), L = 4.2263, warning W3 |
-| GEO-10 | (0,0),(2,0),(4,0) | two LINEs and one PASS entry, L = 4, no stop |
-| GEO-11 | (0,0),(1,0),(2,0),(2,2) | (1,0) is a kink corner, r = 0.25, dphi = -5.186 deg; the waypoint is on the path at s = 1.0000; L = 4.0439; warning W8 |
-| GEO-12 | (0,0),(3,0),(3,3),(3,6),(6,6) | r_1 = r_3 = 0.75 (k = 4 on the legs touching (3,3), section 5.7.2); the inner tangent passes exactly through (3,3), so it is a PASS point (kink 0); lines 2.4121 m, arcs 1.3130 m (sweep 100.31 deg); s(P2) = 6.1371; L = 12.2742 |
+| GEO-10 | (0,0),(2,0),(4,0) | one LINE, L = 4; PASS marker at s = 2.0, miss 0, no warning, no stop |
+| GEO-11 | (0,0),(1,0),(2,0),(2,2) | (1,0) is a PASS marker; the path equals that of (0,0),(2,0),(2,2) (r = 1.0, L = 4.2263); miss 0.2429 m at s = 0.9700: warning W5 naming point 1 |
+| GEO-12 | (0,0),(3,0),(3,3),(3,6),(6,6) | (3,3) set aside; r_1 = r_3 = 1.5; lines 1.6236 / 3.2472 / 1.6236 m, arcs 3.0923 m (sweep 118.12 deg); the inner tangent passes exactly through (3,3): PASS marker at s(P2) = 6.3395, miss 0, no warning; L = 12.6790 |
+| GEO-12b | (0,0),(3,0),(3,3),(3,6),(0,6); then with `(3,3).stop()` | middle line x = 3.4393, (3,3) missed by 0.4393 m: warning W5, geometry unchanged; with `.stop()` (3,3) is a STOP on the path |
 | GEO-13 | (0,0),(4,0),(0,0), auto; with `.withRadius(0.5)` | STOP at (4,0), L = 8.0; arc C = (3.5, 0), dphi = +196.43 deg, L = 8.6423 |
 | GEO-14 | (0,0),(4,0),(2,0) with `.withRadius(0.5)`; robot (2, 0.05), window [1.97, 2.15] | dphi = +207.68 deg, arc length 1.8124, L = 6.6907; s* = 1.9723, e_n = +0.3352 (the global search would give 6.6740) |
 | GEO-15 | (0,0),(4,0),(1,0),(1,2) with `.withRadius(0.5)` on P1 | sigma_1 = -1 (copied from the right turn at P2) |
-| GEO-16 | corner of 170 deg, legs 4, auto; with TAU_STOP = 180 deg | STOP, warning W1; r = 0.5477, sweep 186.7 deg, bulge 0.5000 |
+| GEO-16 | corner of 170 deg, legs 4, auto; with `.withRadius(0.5477)` | STOP, warning W1; an arc (withRadius bypasses TAU_STOP), sweep 186.7 deg, bulge 0.5000 |
 | GEO-17 | corner of 120 deg, legs 4, auto | r = 1.0000, sweep 138.6 deg, line deviation 9.3 deg |
 | GEO-18 | (0,0),(2,0),(2,2) with `.withRadius(5)` | shrunk to 1.3107 after 7 passes, warning W2 |
 | GEO-19 | shared example with `.withRadius(0)` on P1 | polyline, STOP at (3,4), L = 5.6569 |
@@ -4339,14 +4304,14 @@ P0 = (1,2), P1 = (3,4), P2 = (5,2); EX and DEF as in section 3.
 | GEO-21 | (0,0),(4,0),(4,1),(8,1), radius 1.0 at both; auto | shrunk to 0.3277 after 6 passes; auto r = 0.25, L = 9.0971 |
 | GEO-22 | (0,0),(4,0),(4,4),(0,4), radius 2.0 at both | accepted, middle line x = 4.5858, length 1.1716 |
 | GEO-23 | GEO-1 under MIRROR, FL = 16.54 (placeholder); under ROTATE, FW = 8.07 | C = (13.54, 2.5858), dphi = +118.12 deg, kappa = +0.7071, same s table; C = (13.54, 5.4842), dphi = -118.12 deg |
-| GEO-24 | property: random paths of 3 to 7 points on a 16 x 8 field | every build terminates, F1 to F3 hold, each waypoint within 1e-9 m of the path at its s, position and T continuous across every non-STOP joint within 1e-9 |
+| GEO-24 | property: random paths of 3 to 7 points on a 16 x 8 field | every build terminates, F1 to F3 hold, each turning waypoint and stop within 1e-9 m of the path at its s, position and T continuous across every non-STOP joint within 1e-9 |
 | GEO-25 | property: random triangles and radii | `d > 2r·sin(tau_turn/2)` agrees with `abs(P0 - C) > r` |
 | GEO-26 | property: every arc | `x(s_wp) = P_i` and `abs(dphi) = l/r` |
 | GEO-27 | shared example with `P1.stop()` (and with `withVelocity(0)`); (0,0),(4,0),(4,4).stop(),(0,4) | LINE 2.8284, STOP at 2.8284, LINE 2.8284, L = 5.6569, s(P1) = 2.8284, same table for both; r_1 = 1.7071, STOP at s = 8.3596, L = 12.3596 |
 | GEO-28 | (0,0),(2,0).stop(),(4,0); (0,0),(1,0).stop(),(2,0),(2,2) | two LINEs and a STOP (not a PASS) at s = 2, L = 4; (1,0) is a STOP, the line to circle 2 heads -14.06 deg, r_2 = 0.5000 (both legs k = 2), L = 4.1023 |
 | GEO-29 | shared example, `P1.stop().withRadius(0.5)`; `P1.withRadius(0.5).stop()`; `P1.stop().withRadius(0)` | IAE V30 (both orders); the last is accepted, same as GEO-27 |
-| GEO-30 | `withRadius(0.5)` on P0, on P2, and on the straight point of GEO-10 | ignored, warning W6; geometry unchanged |
-| GEO-31 | property: random paths with default TAU_STOP | no crossing of an arc's in-line and out-line (0 in 5,000 paths in the script); with TAU_STOP disabled crossings exist and the build still succeeds |
+| GEO-30 | `withRadius(0.5)` on P0, on P2, and on the straight point of GEO-10 | ignored, warning W4; geometry unchanged |
+| GEO-31 | property: random paths with default TAU_STOP | no crossing of an arc's in-line and out-line (0 in 5,000 paths in the script); in a test build with TAU_STOP = pi crossings exist and the build still succeeds |
 | GEO-32 | shared example: event at fraction 0.5, at point 1, at point 2 | s = 2.98845, 2.9885, 5.9769 |
 | GEO-33 | GEO-27, evaluate and evaluateLeft at s = 2.8284 | T = (0.7071, -0.7071) (right limit) and (0.7071, 0.7071) (left limit) |
 | GEO-34 | all points equal, or (0,0),(0.0004,0) | IAE V6 |
@@ -4358,20 +4323,18 @@ P0 = (1,2), P1 = (3,4), P2 = (5,2); EX and DEF as in section 3.
 | HEAD-1 | shared example, theta0 = 0, P1 90 deg | theta' = 0.5256 on [0, 2.9885], 0 after; theta(1.0) = 30.12 deg, theta(1.5307) = 46.10 deg, theta(2.9885) = 90 deg, theta(5.9769) = 90 deg |
 | HEAD-2 | HEAD-1 spans | span theta' = [0.5256, 0.5256, 0, 0] |
 | HEAD-3 | HEAD-1 omega_ff with vProf | 1.2875 rad/s at s = 1.0; 1.4318 at the peak (s = 1.2368); 1.2501 on span 1; 0 after P1 |
-| HEAD-4 | HEAD-1 caps | rotation cap 11.95 m/s; alpha-acceleration cap 23.9 m/s^2; heading-kink cap at P1 2.818 m/s; trapezoid time 3.2723 s and v1 time 3.52 s, both unchanged by the heading |
+| HEAD-4 | HEAD-1 caps | rotation cap 11.95 m/s; alpha-acceleration cap 23.9 m/s^2; heading-kink cap at P1 2.818 m/s; trapezoid time 3.2723 s and v1 time 3.54 s, both unchanged by the heading |
 | HEAD-5 | anchors 170 deg at s = 1 and -170 deg at s = 3 | +20 deg (CCW), theta' = 0.1745 rad/m, stored end value 190 deg |
-| HEAD-6 | theta0 = 0, P1 at 180 deg | exactly half a turn: CCW (+pi); theta' = 1.0512; kink cap 1.4088 binds; arcs ARC_SHARED; profile time 3.5780 s |
+| HEAD-6 | theta0 = 0, P1 at 180 deg | exactly half a turn: CCW (+pi); theta' = 1.0512; kink cap 1.4088 binds; the whole arc at 1.4088; trapezoid time 4.2812 s, v1 time 4.54 s |
 | HEAD-7 | no anchors, theta0 = 0.3 rad | theta(s) = 0.3 for all s, theta' = 0 |
 | HEAD-8 | P0.withAngle(0.5 rad), theta0 = 0 | theta(0) = 0.5 (no step inside theta(s)); the robot's error is removed by feedback |
-| HEAD-9 | mid-path start s0 = 1.0, theta0 = 10 deg, shared example | linear 10 deg -> 90 deg over [1.0, 2.9885], theta' = 0.7022 rad/m |
-| HEAD-10 | mid-path start past the last anchor (s0 = 4.0) | theta holds 90 deg |
+| HEAD-9 | theta0 = 10 deg, shared example | linear 10 deg -> 90 deg over [0, 2.9885], theta' = 0.4672 rad/m |
 | HEAD-11 | shared example with P1.stop() | theta' = 0.5554 before the stop, 0 after; ROTATE skipped when the residual is at most 3 deg |
-| HEAD-12 | face target (8, 4), robot (1.7028, 3.3099), V = (1.3031, 1.6086) | theta_ref = 0.1091 rad, omega_ff = -0.2300 rad/s, equal to the finite difference within 1e-6 |
+| HEAD-12 | face target (8, 4), robot (1.7028, 3.3099), V = (1.4972, 1.8509) | theta_ref = 0.1091 rad, omega_ff = -0.2647 rad/s, equal to the finite difference within 1e-6 |
 | HEAD-13 | face target, straight path passing 1.0 m from it | theta'_max = 1.0, theta''_max = 0.6495, vCap near the target 3.110 m/s, aA cap 6.28 m/s^2 |
-| HEAD-14 | face target, path passing 0.5 m from it | freeze inside 0.5 m (omega_ff = 0, theta_ref frozen); kink cap 0.740 m/s at the freeze boundary; warning W11 |
-| HEAD-15 | anchors and face target both set | anchors ignored, warning W10 |
+| HEAD-14 | face target, path passing 0.5 m from it | freeze inside 0.5 m (omega_ff = 0, theta_ref frozen); kink cap 0.740 m/s at the freeze boundary; no warning |
+| HEAD-15 | anchors and face target both set | anchors ignored, warning W4 |
 | HEAD-16 | HEAD-1 under MIRROR; HEAD-6 under MIRROR | anchor 90 deg stays 90 deg, theta' sign follows the flipped path; the 180 deg change still turns CCW (documented, not a mirror image) |
-| HEAD-17 | face target with offset pi under MIRROR | offset becomes -pi (same heading); offset 0.3 becomes -0.3 |
 
 ### 13.3 Speed profile
 
@@ -4380,54 +4343,53 @@ P0 = (1,2), P1 = (3,4), P2 = (5,2); EX and DEF as in section 3.
 | PROF-1 | straight (0,0)->(4,0), vMax 4, aAcc = aDec = 3, v0 = 0 | one span; peak `sqrt(3·4) = 3.464` at s = 2; time 2.309 s |
 | PROF-2 | straight (0,0)->(10,0), vMax 3, aAcc = aDec = 3 | cruise 3 on [1.5, 8.5]; time `1 + 7/3 + 1 = 4.333 s` |
 | PROF-3 | shared example, EX, span profile | spans [1.5307, 1.4578, 1.4577, 1.5307]; vB = [3.8524, 2.3784, 2.3784, 2.3784, 0]; trapezoid peaks 2.7241 at s = 1.2368 and 4.7401; trapezoid time 3.2723 s (no jerk limit) |
-| PROF-4 | span method vs grid oracle (ds 0.005), paths with no ARC_SHARED span | times equal within 1e-3 s |
+| PROF-4 | span method vs grid oracle (ds 0.005, Appendix B), paths where every arc is driven at its curvature cap | times equal within 1e-3 s |
 | PROF-5 | span method vs grid, any path | span time >= grid time - 1e-3 s |
-| PROF-6 | any path, any s | vProf <= vCap; `vProf^2·abs(kappa) <= aLat + 1e-9`; on ARC_SHARED spans `(a_t/aT)^2 + (a_n/aLat)^2 <= 1 + 1e-9` |
+| PROF-6 | any path, any s | vProf <= vCap; `vProf^2·abs(kappa) <= aLat + 1e-9`; vProf constant on every arc (a_t = 0 there) |
 | PROF-7 | span boundaries | every segment start, waypoint s and stop s is a boundary (abs(diff) < 1e-9) |
 | PROF-8 | naive-trapezoid trap: a 0.3 m span entered at 3 m/s must end at 0, aDec 3 | vB at its entry = 1.3416; the previous span brakes 3 -> 1.3416 over 1.2 m |
 | PROF-9 | start stall: v0 = 0, ideal robot (s += v_cmd·dt), jerkMax = 50 | leaves s = 0; v_cmd = 0.01, 0.04, 0.09 m/s after 1, 2, 3 loops (aAcc 3); jerk-free limit 0.06, 0.12, 0.18 |
-| PROF-10 | initial overspeed: v0 = 3.0, arc cap 1.5 starting 0.5 m ahead, aDec 3, maxSkid 8 | vProf(0) = 2.291; jerk-free check passes (vHard(0) = 3.20); v1 jerk-aware check warns C4 (needs 0.782 m at jerkMax 50, 1.006 m at 30) |
-| PROF-11 | same with v0 = 3.5 | warning C4 "initial overspeed: start infeasible" |
-| PROF-12 | sideways start V_meas = (0.5, 1.0), T(0) = (1, 0) | v0 = 0.5; warning C5 |
+| PROF-12 | sideways start V_meas = (0.5, 1.0), T(0) = (1, 0) | v0 = 0.5; no warning |
 | PROF-13 | V_meas = (-1, 0), T(0) = (1, 0) | v0 = 0 |
-| PROF-14 | shared example + P1.withVelocity(1.0), span method | arcs ARC_SHARED; cap 2.1273, aA = aD = 1.8; junctions [0, 2.1273, 1.0, 2.1273, 0]; braking from s = 2.0092; total 3.7751 s |
+| PROF-14 | shared example + P1.withVelocity(1.0), span method | the whole arc at 1.0 m/s; junctions vF = [0, 1.0, 1.0, 1.0, 0]; braking for the arc from s = 0.8487 (peak 2.2566); total 5.2576 s; v1 time 5.52 s |
 | PROF-15 | same, grid oracle | 3.5770 s |
 | PROF-16 | `withVelocity(0)` on P1 | identical to P1.stop() |
 | PROF-17 | `withVelocity(-1)` | IAE V11 |
-| PROF-18 | P1.stop() on the shared example | two sub-profiles; trapezoid peaks 2.9130 at s = 1.4142 and 4.2426; trapezoid motion 3.8839 s, + steer = 4.0148 s; v1 profileTime 4.45 s, timeout 7.68 s |
-| PROF-19 | P1.stop(0.5); P1.stop(1.5) | v1 profileTime 4.95 s (timeout 8.43 s); 5.95 s (timeout 9.93 s) |
+| PROF-18 | P1.stop() on the shared example | two sub-profiles; trapezoid peaks 2.9130 at s = 1.4142 and 4.2426; trapezoid motion 3.8839 s; v1 profileTime 4.32 s, timeout 7.48 s |
+| PROF-19 | P1.stop(0.5); P1.stop(1.5) | v1 profileTime 4.82 s (timeout 8.23 s); 5.82 s (timeout 9.73 s) |
 | PROF-20 | stop restart: sub-profile 2 of P1.stop() | vBack(2.8284) = 4.0 (> 0); law restarts from (0, 0): 0.01, 0.04, 0.09 m/s after release |
 | PROF-21 | wheel cap: theta' = 1 rad/m, R_mod = 0.3889, vWheelMax 4.5, margin 0.9 | cap = 4.05/1.3889 = 2.916 |
 | PROF-22 | heading 170 deg -> -170 deg over 2 m | see HEAD-5 |
-| PROF-23 | heading 0 -> 180 deg at P1, alphaMax 4·pi, e_allow 5 deg | J at P1 = 1.4088 (kink cap); arc spans ARC_SHARED; 3.5780 s (grid oracle 3.4372 s) |
+| PROF-23 | heading 0 -> 180 deg at P1, alphaMax 4·pi, e_allow 5 deg | J at P1 = 1.4088 (kink cap); the whole arc at 1.4088, junctions [0, 1.4088, 1.4088, 1.4088, 0]; 4.2812 s (grid oracle 3.4372 s) |
 | PROF-24 | motor curve a_0 = 9, v_free = 5.3, 0 -> 2 m/s | ds = 0.3010 m, dt = 0.2790 s; inverting ds = 0.3010 gives 2.000 |
 | PROF-25 | `min(7.2, 9·(1 - v/5.3))`, 0 -> 2 m/s | knee 1.06; ds = 0.3068 m, dt = 0.2948 s |
 | PROF-26 | shared example geometry, DEF + motor curve, **no heading anchors** (theta0 = 0, no `withAngle`) | span = grid = 2.3101 s; peak 3.7069; arc 3.1910 |
-| PROF-26b | shared example as in section 3 (P1 `withAngle(90 deg)`), DEF + motor curve | kink cap 2.8176 at P1; both arcs ARC_SHARED (cap 2.8541); junctions [0, 2.8541, 2.8176, 2.8541, 0]; span time 2.439 s |
+| PROF-26b | shared example as in section 3 (P1 `withAngle(90 deg)`), DEF + motor curve | kink cap 2.8176 at P1; the whole arc at 2.8176; junctions [0, 2.8176, 2.8176, 2.8176, 0]; span time 2.4549 s; v1 time 2.88 s |
 | PROF-27 | tight arc (0,0), (4,0).withRadius(0.3), (4,4), EX | spans [3.7819, 0.2426, 0.2426, 3.7819]; arc 1.0954; 4.3210 s (span = grid) |
-| PROF-28 | module steer at a 90 deg stop corner, maxSteerRate 12; without a KinematicsConfig | 0.1309 s; the same (fallback 12 rad/s) |
 | PROF-29 | PathConstraints with aLat = 0 or NaN | IAE V16 |
 | PROF-30 | limiter pass-through: run the profile through `SwerveAccelerationLimiter` with the default config (simulation) | output equals input every loop (difference < 1e-9) on the shared example |
 | PROF-31 | measured start v0 = 1.5, shared example | 2.9051 s |
-| PROF-32 | mid-path start s0 = 1.0 | spans start at 1.0; profileTime counts only [1.0, L]; timeout from it |
 | PROF-33 | hand-over tail, k_p 3, jerkMax 50 | d_h = 0.05 m, tail `ln(0.05/0.03)/3 = 0.170 s` per goal |
+| PROF-34 | law, ideal tracking: shared example and tight arc, EX and DEF + motor, jerkMax 30 to 150 | a = 0 at every arc entry (within one loop), no "up" on an arc, speed constant on the arc; traction-ellipse use at the arc entry <= 1 (largest 0.9982 in the script, at jerkMax 10) |
+| PROF-35 | two arcs joined by a 0.7729 m line: (0,0), (4,0), (5,1.2).withRadius(1.0), (9,1.2), EX, jerkMax 50 | arc speeds 1.2498 and 2.0; the speed changes only on the line; ellipse use at the second arc entry 0.9639; time to 0.03 m 5.22 s |
+| PROF-36 | 6 m straight line cut into 0.1 m spans (face-target style), EX, jerkMax 50 | 3.08 s (the uncut line 3.06 s): line-to-line junctions do not force a = 0 |
 | PROF-J1 | stopDist(3, 0, 0, jerkMax = 30, D = 3) | 1.6500 m, 1.1000 s |
 | PROF-J2 | stopDist(3, 3, 0, 30, 3) | 2.1212 m, 1.2500 s |
 | PROF-J3 | stopDist(1, 0, 0.8, 30, 3) (triangular) | 0.14697 m, 0.1633 s |
 | PROF-J4 | stopDist(2, -2, 0.5, 30, 3) | 0.6622 m |
 | PROF-J5 | stopDist(1, -2.5, 0.9, 30, 3) (over-braking) | 0.0626 m, 0.0667 s |
 | PROF-J6 | stopDist vs numerical integration, random cases | difference < 1e-3 m |
-| PROF-J7 | law, ideal tracking, shared example, jerkMax = 50, EX | no junction speed above vB; never past the end; max abs(da)/dt = 50; time to 0.03 m 3.52 s |
+| PROF-J7 | law, ideal tracking, shared example, jerkMax = 50, EX | no junction speed above vB; never past the end; max abs(da)/dt = 50; time to 0.03 m 3.54 s |
 | PROF-J8 | law, P1.stop(), jerkMax = 50 | v_cmd = 0 within 0.03 m of P1, no pass; restart from (0, 0); 4.32 s |
-| PROF-J9 | law with tau_lag = 0 in the plant model | overshoot > 0 (2.4 to 7.2 cm): the lead is needed |
+| PROF-J9 | law with tau_lag = 0 in the plant model | overshoot > 0 (2.7 to 6.2 cm): the lead is needed |
 | PROF-J10 | command hits v = 0 while braking at -6 m/s^2, landing rule off / on | spike / no spike |
 | PROF-J11 | d_h for jerkMax = 10, k_p = 3 | 0.0222 m; hand-over step 10 m/s^3 |
-| PROF-J12 | initial overspeed v0 = 3.0, cap 1.5 at 0.5 m, jerkMax = 30, maxSkid 8 | warning C4 (needs 1.006 m) |
 | PROF-J13 | jerkMax = 0 or NaN | IAE V16 |
-| PROF-J14 | off-path factor g drops from 1 to 0.4 in one loop | v_cmd falls with abs(da) <= jerkMax·dt per loop (no instant cut) |
-| PROF-J15 | jerkMax = 400 with DEF | warning C11 |
-| PROF-J16 | spans: line 0-3 m (aD 3) to vB = 1.0, ARC_SHARED 3-4 m (aD 1.8) to vB = 0.5, line 4-6 m; jerkMax 50, aAcc = aDec = 3, from rest | D_j = 3 for the first junction, 1.8 for the second and the goal; D_brake = 3 while the first junction binds; speed at each junction at or below vB, within the 4 mm/s junction tolerance (not 0.939 m/s above, as with the minimum over all constraints). The exact margin depends on the arc cap, which this test leaves open: two implementations gave 0.020/0.018 and 0.020/0.008 m/s below |
-| PROF-J17 | random span chains (LINE and ARC_SHARED), jerkMax 10 to 150 | speed at any junction at most 4 mm/s above vB (interpolated), no stall |
+| PROF-J15 | jerkMax = 400 with DEF | warning C2 |
+| PROF-J16 | spans: line 0-3 m (aD 3) to vB = 1.0, line 3-4 m with aD 1.8 (heading-limited) to vB = 0.5, line 4-6 m; jerkMax 50, aAcc = aDec = 3, from rest | D_j = 3 for the first junction, 1.8 for the second and the goal; D_brake = 3 while the first junction binds; both junctions reached at or below vB, within the 4 mm/s junction tolerance (0.020 m/s below in the script; not 0.939 m/s above, as with the minimum over all constraints) |
+| PROF-J17 | random span chains (lines with random aD, constant-speed arcs, point caps, short lines after arcs into slower arcs, stops, the end), jerkMax <= the C2 threshold `max(aAcc, aDec)/(5·dt_nom)` | speed at any junction at most 4 mm/s above vB (interpolated; never above in the script), no stall, traction-ellipse use on arcs <= 1 (<= 0.99995 in the script). Above the threshold the speed reached 6.7 mm/s above vB and the use 1.97 (documented, section 7.8) |
+| PROF-J18 | DEF, line 3 m, arc r = 2 (2 m), 0.75 m line, arc r = 0.5 (0.8 m), line 2 m; jerkMax 50 | vJerk caps the first arc at 3.035 m/s (jerk-free pass: 3.795); no braking on either arc; ellipse use <= 1 (0.869 in the script) |
+| PROF-J19 | law comes to rest within d_h + 2·STOP_DIST_MARGIN of a goal (jerkMax 150, rest 5.2 mm before the hand-over point) | hands over to CAPTURE at rest; the offline profileTime run ends; without the rule it never ends (guard reached) |
 
 The old physics test "turn in place pi/2 in 0.7071 s" is removed: v1 has no turn-in-place step (resolution R1).
 
@@ -4444,11 +4406,11 @@ Simulation scenarios (WPILib simulation or a Python model like section 8.15).
 | FOL-T5 | robot at rest at P0, vProf(0) = 0, EX, jerkMax = 50 | moves at once: 0.01, 0.04, 0.09, 0.15 m/s in the first loops; same e_n as T1 |
 | FOL-T6 | robot 0.1 m past the end | CAPTURE_END pushes back: V = k_p·(P_end - p) points backward; finishes OK |
 | FOL-T7 | automatic stop corner (tau_turn > 150 deg), heading continuous | arrives with abs(d_go) <= 0.03 m and abs(V_meas) <= 0.1 m/s; switches sub-profile; ROTATE only if the residual is > 3 deg; leaves on the ramp; s* = s_c exactly at release, never past it before |
-| FOL-T7b | `.stop(1.5)` at a PASS point, event at that index, one injected 0.06 s loop during the dwell | event fires once, in the arrival loop; robot holds P_c, leaves 1.50 to 1.52 s (measured) after the dwell starts; timeout = 1.5·(profileTime incl. 1.5 s) + 1 |
+| FOL-T7b | `.stop(1.5)` on a straight point (a STOP, not a PASS marker), event at that index, one injected 0.06 s loop during the dwell | event fires once, in the arrival loop; robot holds P_c, leaves 1.50 to 1.52 s (measured) after the dwell starts; timeout = 1.5·(profileTime incl. 1.5 s) + 1 |
 | FOL-T7c | same, robot arrives 0.6 m/s too fast (lag overshoot 0.04 m) | d_go < 0, the 2D law pulls back along -T_in; arrival only after abs(d_go) <= 0.03 and speed <= 0.1; event not fired before |
-| FOL-T7d | line, PASS point, line (no stop) | s* passes the PASS without stalling |
+| FOL-T7d | straight line with a PASS marker that has an angle (no stop) | s* passes the marker without stalling; the marker is only a span boundary |
 | FOL-T7e | `.stop(1.0)` on the last point | finish test passes, the robot holds 1.0 s more, then OK |
-| FOL-T8 | path that returns to P0 (loop), robot at P0 | initial s0 = 0 (tie-break), not L; does not finish at once |
+| FOL-T8 | path that returns to P0 (loop), robot at P0 | s* starts at 0, not L; does not finish at once |
 | FOL-T9 | arc sweeping 220 deg (self-crossing lines) | s* never jumps from the in-line to the out-line; monotonic within 0.03 m |
 | FOL-T10 | vision jump of 0.3 m along track at 3 m/s | s* catches up within 2 loops; no event double-fire; no mode change |
 | FOL-T11 | vision jump of 0.1 m across track | one 0.3 m/s command step along N, spread by the limiter; e_n recovers with time constant about 0.33 s |
@@ -4463,16 +4425,18 @@ Simulation scenarios (WPILib simulation or a Python model like section 8.15).
 | FOL-T19b | red alliance, FlipMode.NONE | drives the path as written |
 | FOL-T20 | MIRROR, path with a left corner | the corner becomes a right turn; e_n still "left of the flipped path"; converges |
 | FOL-T21 | face target 3 m to the side, robot passing at 2 m/s | omega_ff matches the finite-difference d/dt atan2 within 1%; e_theta < 3 deg at the closest pass |
-| FOL-T22 | face target, path passing within 0.3 m | theta_ref frozen inside 0.5 m; no omega above omegaMax; W11 |
+| FOL-T22 | face target, path passing within 0.3 m | theta_ref frozen inside 0.5 m; no omega above omegaMax |
 | FOL-T23 | theta_ref = 179 deg, theta = -179 deg | omega_fb is clockwise (negative) for the 2 deg error |
 | FOL-T24 | finish heading error -1.9 deg, then -2.1 deg | -1.9: in tolerance; -2.1: not (the 2025 code would accept -2.1) |
-| FOL-T25 | events at s = 0, 1.0 and L | s = 0 fires on loop 1; 1.0 fires once when crossed; L fires at the finish even if s* = L - 0.02 |
-| FOL-T26 | re-schedule mid-path after a disable | starts from the closest s (heading and profile from s0); passed events skipped unless `fireIfStartedPast` |
+| FOL-T25 | events at fraction 0, fraction 0.2 and the last point | fraction 0 fires on loop 1; 0.2 fires once when crossed; the last point fires at the finish even if s* = L - 0.02 |
+| FOL-T26 | re-schedule mid-path after a disable, robot 2 m from P0 | ends at once with FAILED_START_TOO_FAR and alert A1 naming the distance; zero speed once |
 | FOL-T27 | event command that requires the drivetrain | IAE V20 at construction |
-| FOL-T28 | worked example of section 8.3.1 | s* = 1.4849, e_n = +0.0707, v_t = 2.0512, a_cmd = 2.121, V = (1.3031, 1.6086) |
+| FOL-T28 | worked example of section 8.3.1 | s* = 1.4849, e_n = +0.0707, v_t = 2.3604, a_cmd = 0 (no "up" on the arc), V = (1.4972, 1.8509) |
 | FOL-T30 | CAPTURE entry | at d_go = d_h = 0.05 m: abs(V) = 0.15 m/s = the law's v_h (continuous); deceleration step 22.5 m/s^3 <= jerkMax |
 | FOL-T31 | vision jump makes c jump to 1.0 m/s at v_t = 3.95, vMax 4 | v_t cut at once to 3.873, law state reset (a_cmd <= 0) |
 | FOL-T29 | holdEndCommand after FAILED_TIMEOUT | holds P_end with the CAPTURE_END law until interrupted |
+| FOL-T32 | robot 0.6 m from P0 at start; robot 0.4 m behind P0 | FAILED_START_TOO_FAR with alert A1; drives normally (s* = 0 until P0 is passed) |
+| FOL-T33 | telemetry, command scheduled twice | `PathLogger.putData` called once, with one `Sendable` under `Path/<name>` that has the keys state, segment, s, eN, vRef, vMeas, eThetaDeg |
 | FOL-H4 | accelerating at 4 m/s with the forward limit active, heading ramp | compare omega_ff from v_t and from filtered ds*/dt: heading error RMS; decide section 6.5 |
 | FOL-I1 | real robot: follower commands omega = +1 rad/s | robot turns CCW seen from above (only the drivetrain negates) |
 
@@ -4482,99 +4446,82 @@ Simulation scenarios (WPILib simulation or a Python model like section 8.15).
 |---|---|---|
 | API-1 | `new Path()`; `new Path(new Point(1, 2))` | IAE V1 with `you gave 0` / `you gave 1` |
 | API-2 | `new Point(Double.NaN, 1)`; `new Point(0, Double.POSITIVE_INFINITY)` | IAE V4 |
-| API-3 | `new Path(new Point(1, 2), null)` | NPE V3 with `Point 1` |
+| API-3 | `new Path(new Point(1, 2), null)` | NPE V3 with `point 1` |
 | API-4 | `new Point(1, 2).withRadius(-0.3)`; `withRadius(0)` on a middle corner | IAE V9; accepted, the corner is a stop |
 | API-5 | `withVelocity(-1)`; `withVelocity(0)` | IAE V11; `isStop()` true, `dwellSeconds()` 0, `maxVelocity()` empty |
-| API-6 | `stop(-1)`; `stop(Double.NaN)`; `stop(1.5)` | IAE V13; IAE V14; `dwellSeconds()` = 1.5 |
+| API-6 | `stop(-1)`; `stop(Double.NaN)`; `stop(1.5)` | IAE V13; IAE V4; `dwellSeconds()` = 1.5 |
 | API-7 | `p.stop(2).withVelocity(1.0)`; `p.withVelocity(1.0).stop()` | not a stop, `maxVelocity()` = 1.0; a stop, `maxVelocity()` empty |
-| API-8 | `cutCorner()` | UOE V15 |
 | API-9 | `new Path(p(0,0), p(2,0), p(2.0005,0), p(2,2))` | W3; L = 4.2263 |
 | API-10 | `new Path(p(0,0), p(0.0004,0))` | IAE V6 |
 | API-11 | shared example | L = 5.9769, no warnings, `sAtPoint(1)` = 2.9885 |
-| API-12 | event distance 99; fraction 1.5; index 3 on the shared example | IAE V19 with `0 to 5.9769`; V19b; V19c with `numbered 0 to 2` |
+| API-12 | event fraction 1.5; index 3 on the shared example | IAE V19 (fraction text); IAE V19 with `numbered 0 to 2` |
 | API-13 | event at point 1; at fraction 0.5 | `events().get(0).s()` = 2.9885; 2.98845 |
-| API-14 | `withVelocity(2)` on P_0; on the last point | W4; W5 |
-| API-15 | `withRadius(0.01)` on a middle corner; `withRadius(5)` on (0,0),(2,0),(2,2) | W7 and a stop; W2, shrunk to 1.3107 |
+| API-14 | `withVelocity(2)` on P_0; on the last point | W4 (both, with their reasons) |
+| API-15 | `withRadius(0.01)` on a middle corner; `withRadius(5)` on (0,0),(2,0),(2,2) | W1 and a stop; W2, shrunk to 1.3107 |
 | API-16 | 170 deg corner, legs 4 m | W1 and a stop |
 | API-17 | `new PathConstraints(4, 7.2, 7.2, 0, 2*Math.PI, 4*Math.PI, j)` | IAE V16 naming `aLat` |
 | API-18 | `PathConstraints.fromConfig(new KinematicsConfig())` | (4.05, 7.2, 7.2, 7.2, 2·pi, 4·pi, 50) |
 | API-19 | `new FollowPathCommand(path, pose, speeds, out)` with no subsystem | IAE V24 |
 | API-20 | event command requiring the follower's subsystem | IAE V20 |
-| API-21 | `follow.withFlip(...)` after `initialize()` | ISE V25 |
-| API-22 | `path.flipped(cfg) == path.flipped(cfg)`; `path.flipped(FlipConfig.none()) == path` | true (memo); true; lengths and event s equal to the blue path |
+| API-21 | `PathFollowerConfig.defaults().withKN(0)`; `.withField(16.54, -1)` | IAE V16 naming `kN`; naming `fieldWidth` |
+| API-22 | `path.flipped(cfg) == path.flipped(cfg)`; `path.flipped(cfg.withFlip(FlipMode.NONE)) == path` | true (memo); true; lengths and event s equal to the blue path |
 | API-23 | `.stop(1.5)` with an event at that point | event once on arrival; leaves 1.50 to 1.52 s after the wait starts; timeout includes 1.5·1.5 s |
 | API-24 | `.stop(1.0)` on the last point | finish passes, 1.0 s more, then `OK` |
-| API-25 | JSON example (Appendix A), when a reader exists | `toJson(fromJson(doc))` equals `doc`; `schemaVersion` 2 gives the version error |
 | API-26 | `FollowResult.values()` in v1 | RUNNING, OK, FAILED_TIMEOUT, FAILED_START_TOO_FAR, FAILED_POSE, INTERRUPTED |
+| API-27 | `PathLogger.set(custom)`, then build (0,0),(2,0),(2,2) with `.withRadius(5)` | `custom.alert` called once with the W2 text, kWarning, true; `PathLogger.get() == custom`; `PathLogger.set(null)` throws NPE |
+| API-28 | GEO-11 | W5 naming point 1 and 0.2429 m; geometry identical to (0,0),(2,0),(2,2) |
 
-## Appendix A. JSON schema
+## Appendix A. JSON sketch (future editor, not v1)
 
-**v1 defines the schema only.** There is no reader or writer in v1; `Path.fromJson` and `Path.toJson` are reserved names.
-
-Rules (**Recommendation**):
-- File extension `.path.json`, UTF-8, one path per file.
-- Integer `schemaVersion`, now `1`. Adding an optional field keeps the version; removing a field or changing a meaning raises it. A reader throws IAE
-  for a larger version: `Path file "{name}" has schemaVersion {v}, but this library reads versions up to {max}. Update the library or re-export the file.`
-- Unknown fields are ignored with a warning.
-- Units are fixed and stated in the file: meters, **degrees** for angles (resolution R8; easier to edit by hand, the library converts), m/s, m/s^2,
-  m/s^3, deg/s, deg/s^2. A reader rejects any other `units` value.
-- Blue-origin frame only (`"frame": "blue"`). Flip settings are robot configuration, not part of the path file.
-- A reader applies the same validation as the Java constructors (section 9.12); error texts get a prefix such as `points[2].radius: `.
-
-| Field | Type | Required | Unit | Meaning | Java |
-|---|---|---|---|---|---|
-| `schemaVersion` | int | yes | - | `1` | - |
-| `name` | string | yes | - | `Path.name()` | `withName` |
-| `frame` | string | yes | - | `"blue"` | - |
-| `units` | object | yes | - | `{"length":"m","angle":"deg","speed":"m/s","accel":"m/s^2","jerk":"m/s^3","angularRate":"deg/s","angularAccel":"deg/s^2"}` | - |
-| `points` | array, at least 2 | yes | - | waypoints in order | `Point` |
-| `points[].x`, `.y` | number | yes | m | position | `new Point(x, y)` |
-| `points[].angle` | number or null | no | deg | heading anchor | `withAngle` |
-| `points[].maxVelocity` | number or null | no | m/s | speed cap; `0` means stop | `withVelocity` |
-| `points[].stop` | bool | no | - | stop here (default false) | `stop()` |
-| `points[].dwell` | number | no | s | wait at the stop (default 0; implies `stop`) | `stop(d)` |
-| `points[].radius` | number or null | no | m | corner radius; null = automatic; 0 = stop corner. A positive value with `stop`, `dwell` or `maxVelocity` 0 is invalid (V30) | `withRadius` |
-| `points[].cutCorner` | bool | no | - | reserved, must be false in v1 | `cutCorner` |
-| `constraints` | object or null | no | see units | any of `vMax, aAcc, aDec, aLat, omegaMax, alphaMax, jerkMax`; a missing field takes the value of `PathConstraints.fromConfig` of the command's config; null = all from the command | `withConstraints` |
-| `faceTarget` | object or null | no | m, deg | `{x, y, offset}` | `withFaceTarget` |
-| `events` | array | no | - | actions | `PathEvent` |
-| `events[].type` | `"distance"`, `"fraction"` or `"point"` | yes | - | which kind | `atDistance`, `atFraction`, `atPoint` |
-| `events[].value` | number | yes | m, -, index | s, fraction or point index | |
-| `events[].action` | string | yes | - | a name looked up in a registry the robot code supplies | |
-| `events[].fireIfStartedPast` | bool | no | - | default false | `fireIfStartedPast` |
-
-Reserved Java names (declared so the schema and Java agree; **not implemented in v1**):
-
-```java
-public static Path fromJson(String json, Map<String, Supplier<Command>> actions);   // actions: name -> Command factory
-public String toJson();
-```
-
-Example document (a speed cap, a stop with a wait and three events):
+**For a future path editor, not part of v1** (**Decision**, user, simplification pass): v1 has no reader, no writer and no reserved
+method. A file could look like this (blue frame; meters, degrees, seconds, m/s):
 
 ```json
 {
-  "schemaVersion": 1,
-  "name": "score",
-  "frame": "blue",
-  "units": { "length": "m", "angle": "deg", "speed": "m/s", "accel": "m/s^2", "jerk": "m/s^3",
-             "angularRate": "deg/s", "angularAccel": "deg/s^2" },
+  "schemaVersion": 1, "name": "score",
   "points": [
     { "x": 1.0, "y": 2.0, "angle": 0.0 },
-    { "x": 3.0, "y": 4.0, "angle": 90.0, "maxVelocity": 1.0 },
+    { "x": 3.0, "y": 4.0, "maxVelocity": 1.0 },
     { "x": 4.0, "y": 2.0, "stop": true, "dwell": 1.5 },
     { "x": 7.0, "y": 4.0, "radius": null }
   ],
-  "constraints": { "vMax": 3.0, "aAcc": 7.2, "aDec": 7.2, "aLat": 7.2,
-                   "omegaMax": 360.0, "alphaMax": 720.0 },
+  "constraints": { "vMax": 3.0 },
   "faceTarget": null,
-  "events": [
-    { "type": "distance", "value": 1.0, "action": "intakeDown" },
-    { "type": "point", "value": 2, "action": "shoot" },
-    { "type": "fraction", "value": 1.0, "action": "intakeUp", "fireIfStartedPast": true }
-  ]
+  "events": [ { "type": "fraction", "value": 0.2, "action": "intakeDown" }, { "type": "point", "value": 2, "action": "shoot" } ]
 }
 ```
 
-(`omegaMax` 360 deg/s = 2·pi rad/s and `alphaMax` 720 deg/s^2 = 4·pi rad/s^2, the defaults; `jerkMax` is omitted, so it comes from the command.)
-With a face target the `angle` fields are not used (W10).
+Each field maps to the Java call of the same meaning (section 9); a reader would apply the same validation (section 9.12).
+
+## Appendix B. Test oracle: grid passes
+
+Test code only, not production code (resolution R10). The grid is the time-optimal profile of a point mass under the same bounds, with
+the exact traction ellipse and motor curve at every sample, so the span method of section 7 must never beat it.
+
+**Equations.**
+1. **Samples**: the boundaries of section 7.3.1; each interval of length l gets `N = max(1, ceil(l/ds - 1e-9))` uniform steps
+   with DEFAULT_DS = 0.02 m. The passes are exact for constant acceleration, so ds sets only the cap resolution. ds 0.02 vs
+   0.005 gives the same 3.2723 s on the shared example; the sampled peak is 2.7194 vs 2.7238 m/s; the exact 2.7241 lies between samples (script).
+2. **Curvature at a sample**: the segment's kappa; at a boundary, the larger abs(kappa) of the two sides.
+3. **Caps**: as section 7.4, per sample; point caps at their sample; stops and L are 0.
+4. **Passes with the ellipse** (explicit, acceleration at the known neighbor):
+   ```
+   backward: v_i = min(cap_i, sqrt(v_{i+1}^2 + 2*ds_i*aDec*sqrt(max(0, 1 - (v_{i+1}^2*abs(kappa_i)/aLat)^2))))
+   forward:  v_i = min(cap_i, sqrt(v_{i-1}^2 + 2*ds_{i-1}*a_fwd(v_{i-1}, i)))      (Heun step for the motor curve)
+   a_fwd(v, i) = min(aAcc*sqrt(max(0, 1 - (v^2*abs(kappa_i)/aLat)^2)), alphaMax/abs(theta'_i), 0.9*maxForwardAccel*max(0, 1 - v/freeSpeed))
+   ```
+   The explicit scheme is off by O(ds) where kappa changes; cap_i is still applied exactly. Unlike the span method, the grid may change
+   speed on an arc.
+5. **Lookup**: interpolate v^2 linearly (exact for constant a). Example: (0, 0) and (0.02, 0.3464) at s = 0.005 gives 0.1732;
+   interpolating v linearly would give 0.0866.
+6. **Time**: `dt_i = 2·ds_i/(v_i + v_{i+1})`, exact for constant acceleration; e.g. from rest over 0.02 m at 3 m/s^2:
+   `0.04/0.3464 = 0.1155 s = sqrt(2·0.02/3)`.
+
+**How to use it in tests.**
+- PROF-4: on paths where every arc is driven at its curvature cap, span time = grid time within 1e-3 s (shared example 3.2723 s both;
+  DEF + motor 2.3101 s both; the zero-penalty rows of section 7.8).
+- PROF-5: on any path, span time >= grid time - 1e-3 s. With a point cap on an arc the span method is slower (shared example +
+  P1.withVelocity(1.0): 5.2576 against 3.5770 s), because v1 drives the whole arc at the cap.
+- PROF-15 and the grid columns of sections 6.11 and 7.8 (3.5770 s, 3.4372 s, 4.4469 s) are regression numbers for the oracle code itself.
+- Two grid scripts with different arc sampling gave 3.5770 and 3.5761 s for the `withVelocity(1.0)` case; the 0.0009 s difference is the
+  O(ds) error of the explicit step, so compare with a tolerance of 1e-3 s.

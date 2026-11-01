@@ -8,9 +8,11 @@ date | task type | model used | signal | better model
 2026-10-31 | design chapter: follower control | opus (high) | tuning formula had a sign error (Critical at review) | opus (no higher tier; add sign checks to prompt)
 2026-10-31 | API chapter + user guide from finished math | sonnet | found 26 cross-chapter conflicts; quick-start snippet broke on red alliance (Major) | sonnet (right; reviewer catches snippet bugs)
 2026-10-31 | integrating 5 chapters + applying review fixes | opus (high) | one review fix introduced a Critical (braking rule) | opus (right; always re-review fixes)
+2026-11-01 | doc simplification pass with math re-verification | opus (high) | correctly halted one item on script evidence; constant-speed-arc change had a Major found at review | opus (right)
+2026-11-01 | design review / re-review (math, sim) | opus (high) | found Critical/Major issues each round with independent scripts | opus (right)
 
 ## Rules
-(none yet: need at least two observations of the same task type pointing the same way)
+- design-math editing and fix application (geometry/physics/control docs): opus; always re-review fixes, they introduced issues twice.
 
 ## Notes
 - Parallel design chapters drift apart; define notation and decisions in one shared brief first, and plan an integration pass.
