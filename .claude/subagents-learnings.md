@@ -12,6 +12,7 @@ date | task type | model used | signal | better model
 2026-11-01 | design review / re-review (math, sim) | opus (high) | found Critical/Major issues each round with independent scripts | opus (right)
 
 ## Rules
+- User preference: run subagents at effort "medium", not "high" (token cost). Escalate to high only with the user's OK.
 - design-math editing and fix application (geometry/physics/control docs): opus; always re-review fixes, they introduced issues twice.
 
 ## Notes
