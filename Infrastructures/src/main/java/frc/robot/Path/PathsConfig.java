@@ -18,7 +18,20 @@ public record PathsConfig(
         double moduleRadius) {
 
     public PathsConfig {
-        // TODO phase 2: first three finite and > 0, moduleRadius finite and >= 0, else IAE (V16)
+        requirePositive("maxAngularVelocity", maxAngularVelocity);
+        requirePositive("maxAngularAccel", maxAngularAccel);
+        requirePositive("maxJerk", maxJerk);
+        if (!Double.isFinite(moduleRadius) || moduleRadius < 0.0) {
+            throw new IllegalArgumentException(
+                    "PathsConfig.moduleRadius must be finite and >= 0, got " + moduleRadius + " (V16)");
+        }
+    }
+
+    private static void requirePositive(String name, double value) {
+        if (!Double.isFinite(value) || value <= 0.0) {
+            throw new IllegalArgumentException(
+                    "PathsConfig." + name + " must be finite and > 0, got " + value + " (V16)");
+        }
     }
 
     /** @return placeholders (2*pi, 4*pi, 50, 0); measure on the robot (section 10, 12) */

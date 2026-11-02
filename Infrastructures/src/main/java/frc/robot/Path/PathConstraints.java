@@ -21,7 +21,20 @@ public record PathConstraints(double vMax, double aAcc, double aDec, double aLat
     public static final double PROFILE_MARGIN = 0.9;
 
     public PathConstraints {
-        // TODO phase 2: every field finite and > 0, else IllegalArgumentException (V16)
+        requirePositive("vMax", vMax);
+        requirePositive("aAcc", aAcc);
+        requirePositive("aDec", aDec);
+        requirePositive("aLat", aLat);
+        requirePositive("omegaMax", omegaMax);
+        requirePositive("alphaMax", alphaMax);
+        requirePositive("jerkMax", jerkMax);
+    }
+
+    private static void requirePositive(String name, double value) {
+        if (!Double.isFinite(value) || value <= 0.0) {
+            throw new IllegalArgumentException(
+                    "PathConstraints." + name + " must be finite and > 0, got " + value + " (V16)");
+        }
     }
 
     /**
@@ -32,7 +45,16 @@ public record PathConstraints(double vMax, double aAcc, double aDec, double aLat
      * @return the constraints
      */
     public static PathConstraints fromConfig(KinematicsConfig config, PathsConfig paths) {
-        throw new UnsupportedOperationException("TODO phase 2");
+        if (config == null || paths == null) {
+            throw new IllegalArgumentException("PathConstraints.fromConfig: config and paths must not be null");
+        }
+        double tilt = Math.min(config.maxTiltAccelFront, config.maxTiltAccelSide);
+        double brake = Math.min(config.maxSkidAccel, tilt);
+        double vMax = PROFILE_MARGIN * Math.min(config.maxAllowedModuleVelocity, config.freeSpeed);
+        double aAcc = PROFILE_MARGIN * Math.min(config.maxForwardAccel, brake);
+        double aDec = PROFILE_MARGIN * brake;
+        return new PathConstraints(vMax, aAcc, aDec, aDec,
+                paths.maxAngularVelocity(), paths.maxAngularAccel(), paths.maxJerk());
     }
 
     /**
