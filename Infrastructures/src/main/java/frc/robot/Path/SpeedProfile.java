@@ -30,16 +30,6 @@ final class SpeedProfile {
     /** Offline profileTime guard is {@code 10 * spanTime + this} [s] (7.13.6). */
     static final double PROFILE_TIME_GUARD = 10.0;
 
-    /**
-     * Alias of {@code PathFollowerConfig.DEFAULT_KP}, kept only because the phase 2 tests reference it;
-     * production code passes {@code PathFollowerConfig.kP()} to {@link #build}.
-     */
-    static final double DEFAULT_KP = PathFollowerConfig.DEFAULT_KP;
-    /**
-     * Alias of {@code PathFollowerConfig.DEFAULT_POS_TOL}, kept only because the phase 2 tests reference
-     * it; production code passes {@code PathFollowerConfig.posTol()} to {@link #build}.
-     */
-    static final double DEFAULT_POS_TOL = PathFollowerConfig.DEFAULT_POS_TOL;
     /** Nominal loop period of the offline profileTime run [s] (7.13.6). */
     static final double OFFLINE_DT = Tracker.DT_NOM;
 
@@ -102,6 +92,7 @@ final class SpeedProfile {
     private final double[] stopS; // ascending, excluding 0 and L
     private final double[] stopDwell;
     private final double endDwell;
+    private double startDwell; // stop(d) on P_0: delays the start (8.6); set by build(Path, ...)
     private final double spanTime;
     private double profileTimeCache = Double.NaN;
     private boolean profileGuardHit;
@@ -138,8 +129,16 @@ final class SpeedProfile {
             vel[i] = mv.isPresent() ? mv.getAsDouble() : Double.NaN;
         }
         double endDwell = points.get(n - 1).dwellSeconds();
-        return build(HeadingProfile.segmentsOf(path.table()), wpS, vel, endDwell, heading, constraints, kinematics,
-                moduleRadius, v0, kP, posTol);
+        double startDwell = 0.0;
+        for (int i = 0; i < n && wpS[i] == 0.0; i++) { // P_0 and the points merged into it: the later one wins
+            if (points.get(i).dwellSeconds() > 0.0) {
+                startDwell = points.get(i).dwellSeconds();
+            }
+        }
+        SpeedProfile profile = build(HeadingProfile.segmentsOf(path.table()), wpS, vel, endDwell, heading, constraints,
+                kinematics, moduleRadius, v0, kP, posTol);
+        profile.startDwell = startDwell;
+        return profile;
     }
 
     /**
@@ -967,10 +966,13 @@ final class SpeedProfile {
         return length;
     }
 
-    /** @return dwell [s] of the stop at sStop; the dwell at L is the last point's (7.10.4) */
+    /** @return dwell [s] of the stop at sStop; at L the last point's, at 0 the first point's stop(d) (7.10.4, 8.6) */
     double dwellAt(double sStop) {
         if (Math.abs(sStop - length) <= MATCH_TOL) {
             return endDwell;
+        }
+        if (Math.abs(sStop) <= MATCH_TOL) {
+            return startDwell;
         }
         for (int i = 0; i < stopS.length; i++) {
             if (Math.abs(stopS[i] - sStop) <= MATCH_TOL) {
@@ -983,7 +985,7 @@ final class SpeedProfile {
     /** @return the planned time including dwells, from the offline jerk law (7.12, 7.13.6, 7.10.5) */
     double profileTime() {
         if (Double.isNaN(profileTimeCache)) {
-            double t = 0.0;
+            double t = startDwell; // stop(d) on P_0 waits before the start (8.6)
             boolean hit = false;
             for (int p = 0; p < subFirst.length; p++) {
                 double s0 = js[subFirst[p]];

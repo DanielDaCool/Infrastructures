@@ -43,10 +43,11 @@ public class FollowPathCommand extends Command {
 
     private KinematicsConfig kinematics;
     private PathsConfig pathsConfig;
-    private PathFollowerConfig config = PathFollowerConfig.defaults();
+    private PathFollowerConfig config; // null: PathFollowerConfig.defaults(), resolved in initialize
     private Consumer<FollowResult> onFinish;
     private DoubleSupplier clock = Timer::getFPGATimestamp;
 
+    private PathFollowerConfig runConfig;
     private boolean published;
     private Tracker tracker;
     private Path active;
@@ -115,6 +116,11 @@ public class FollowPathCommand extends Command {
         return this;
     }
 
+    /**
+     * Starts a run (8.14): reads the alliance once and picks the active path, checks the start,
+     * builds the heading and speed profiles. Unlike a run in progress, which allows an invalid pose for
+     * up to 1 s, a single invalid pose here ends the command at once with FAILED_POSE (8.14).
+     */
     @Override
     public void initialize() {
         for (Map.Entry<String, AlertType> e : activeAlerts.entrySet()) {
@@ -130,12 +136,13 @@ public class FollowPathCommand extends Command {
         failReason = "";
         speedAlertRaised = false;
         double now = clock.getAsDouble();
+        PathFollowerConfig config = runConfig = this.config != null ? this.config : PathFollowerConfig.defaults();
 
-        Optional<Alliance> alliance = DriverStation.getAlliance();
+        Optional<Alliance> alliance = DriverStation.getAlliance(); // read once (8.10)
         if (alliance.isEmpty()) {
             raise(prefix() + "alliance unknown; driving the blue path.", AlertType.kWarning);
         }
-        active = path.forCurrentAlliance(config);
+        active = alliance.isPresent() && alliance.get() == Alliance.Red ? path.flipped(config) : path;
 
         Pose2d p = pose.get();
         ChassisSpeeds vm = measuredFieldSpeeds.get();
@@ -215,7 +222,7 @@ public class FollowPathCommand extends Command {
         if (result == FollowResult.FAILED_TIMEOUT) {
             failReason = String.format(Locale.US, "did not finish within %.2f s (%s x the planned time + %s s); the"
                     + " robot was blocked, or the limits are above what the drivetrain can do", tracker.timeout(),
-                    trim(config.timeoutFactor()), trim(config.timeoutMargin()));
+                    trim(runConfig.timeoutFactor()), trim(runConfig.timeoutMargin()));
         } else if (result == FollowResult.FAILED_POSE && failReason.isEmpty()) {
             failReason = "the pose was invalid or frozen for more than 1 s";
         }

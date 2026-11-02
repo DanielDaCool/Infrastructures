@@ -211,6 +211,11 @@ final class Tracker {
             faceRefPrev = pT.getNorm() >= R_FACE_MIN ? Math.atan2(pT.getY(), pT.getX()) : heading.theta(0.0);
         }
         state = length < L_SHORT ? State.CAPTURE_END : State.TRACK;
+        if (profile.dwellAt(0.0) > 0.0) { // stop(d) on P_0: hold P_0 for d before the start (8.6)
+            sStop = 0.0;
+            tDwellStart = nowSec;
+            state = State.DWELL;
+        }
         eN = 0.0;
         eT = 0.0;
         dGo = sGoal;
@@ -257,11 +262,12 @@ final class Tracker {
             sStar = projector.project(p, sMin, sMax, sPrev).s();
             sHi = Math.max(sHi, sStar);
             sPrev = sStar;
-            schedule.update(sStar); // 8.8
         }
+        schedule.update(sStar); // 8.8
         geometry(p);
 
-        // 8.6, 8.7: state machine
+        // 8.6, 8.7: state machine; ROTATE and DWELL are tested in the same loop they are entered,
+        // so a zero dwell costs no extra loop
         switch (state) {
             case TRACK:
                 if (dGo <= dH || (lawState.v() == 0.0 && dGo <= dH + 2.0 * SpeedLaw.STOP_DIST_MARGIN)) {
@@ -291,6 +297,7 @@ final class Tracker {
                     sPrev = sStop;
                     sSubStart = sStop;
                     sGoal = profile.nextStopS(sStop);
+                    schedule.update(sStop); // events just before the stop fire before the stop's own events
                     schedule.fireStopEvents(sStop);
                     if (Math.abs(PathMath.wrap(heading.theta(sStop) - theta)) > STOP_ANG_TOL) {
                         state = State.ROTATE;
@@ -302,23 +309,6 @@ final class Tracker {
                 }
                 break;
             }
-            case ROTATE:
-                if (Math.abs(PathMath.wrap(heading.theta(sStop) - theta)) <= STOP_ANG_TOL) {
-                    tDwellStart = nowSec;
-                    state = State.DWELL;
-                }
-                break;
-            case DWELL:
-                if (nowSec - tDwellStart >= profile.dwellAt(sStop)) {
-                    PathSample out = table.evaluate(sStop);
-                    double v = sv ? Math.max(0.0, measured.vxMetersPerSecond * out.tangent().getCos()
-                            + measured.vyMetersPerSecond * out.tangent().getSin()) : 0.0;
-                    lawState = new SpeedLaw.State(v, 0.0);
-                    vtPrev = v;
-                    state = State.TRACK;
-                    geometry(p);
-                }
-                break;
             case CAPTURE_END: {
                 boolean inTol = p.getDistance(pEnd) < config.posTol()
                         && Math.abs(PathMath.wrap(thetaEnd - theta)) < config.angTolRad();
@@ -330,6 +320,19 @@ final class Tracker {
             }
             default:
                 break;
+        }
+        if (state == State.ROTATE && Math.abs(PathMath.wrap(heading.theta(sStop) - theta)) <= STOP_ANG_TOL) {
+            tDwellStart = nowSec;
+            state = State.DWELL;
+        }
+        if (state == State.DWELL && nowSec - tDwellStart >= profile.dwellAt(sStop)) {
+            PathSample out = table.evaluate(sStop);
+            double v = sv ? Math.max(0.0, measured.vxMetersPerSecond * out.tangent().getCos()
+                    + measured.vyMetersPerSecond * out.tangent().getSin()) : 0.0;
+            lawState = new SpeedLaw.State(v, 0.0);
+            vtPrev = v;
+            state = length < L_SHORT ? State.CAPTURE_END : State.TRACK;
+            geometry(p);
         }
 
         // 8.3, 8.4: translation
@@ -418,7 +421,8 @@ final class Tracker {
         double y = pose.getY();
         double th = pose.getRotation().getRadians();
         if (x == lastX && y == lastY && th == lastTheta) {
-            if (nowSec - lastChangeT >= T_STALE && sv && vMeasAbs > STALE_POSE_SPEED_GATE) {
+            double speed = sv ? vMeasAbs : vtPrev; // NaN speed supplier: gate on the commanded speed
+            if (nowSec - lastChangeT >= T_STALE && speed > STALE_POSE_SPEED_GATE) {
                 if (Double.isNaN(invalidSince)) {
                     invalidSince = lastChangeT;
                 }
