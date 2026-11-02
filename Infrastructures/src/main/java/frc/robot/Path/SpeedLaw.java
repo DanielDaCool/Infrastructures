@@ -52,7 +52,8 @@ final class SpeedLaw {
      */
     SpeedLaw(SpeedProfile profile) {
         if (profile == null) {
-            throw new IllegalArgumentException("SpeedLaw: profile must not be null");
+            throw new NullPointerException("SpeedLaw: the speed profile is null; pass the SpeedProfile built for this path"
+                    + " (for example new SpeedLaw(SpeedProfile.build(...)))");
         }
         this.profile = profile;
         this.jerkMax = profile.constraints().jerkMax();
@@ -88,7 +89,8 @@ final class SpeedLaw {
                 || !(Math.abs(handOver - profile.handOver()) <= MATCH_TOL)) {
             throw new IllegalArgumentException("SpeedLaw: jerkMax " + jerkMax + ", aAcc " + aAcc + ", aDec " + aDec
                     + ", handOver " + handOver + " differ from the profile's (" + c.jerkMax() + ", " + c.aAcc()
-                    + ", " + c.aDec() + ", " + profile.handOver() + ")");
+                    + ", " + c.aDec() + ", " + profile.handOver() + "). Build the SpeedLaw from the same SpeedProfile"
+                    + " and constraints, for example new SpeedLaw(profile).");
         }
     }
 
@@ -184,7 +186,9 @@ final class SpeedLaw {
      */
     static double stopDist(double v, double a, double vt, double jerkMax, double decel) {
         if (!(jerkMax > 0.0) || !(decel > 0.0)) {
-            throw new IllegalArgumentException("stopDist: jerkMax and D must be > 0 (V16)");
+            throw new IllegalArgumentException("SpeedLaw.stopDist: jerkMax is " + jerkMax + " m/s^3 and the braking limit"
+                    + " is " + decel + " m/s^2; both must be above 0. Use positive limits, for example"
+                    + " PathConstraints.fromConfig(config).withJerkMax(50.0).");
         }
         if (v <= vt && a <= 0.0) {
             return 0.0; // already at or below vt and not speeding up

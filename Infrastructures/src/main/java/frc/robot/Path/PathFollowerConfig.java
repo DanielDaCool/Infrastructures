@@ -64,27 +64,25 @@ public record PathFollowerConfig(
     static final double FALLBACK_FIELD_WIDTH = 8.07;
 
     public PathFollowerConfig {
-        requirePositive("kN", kN, "1/s");
-        requirePositive("kTheta", kTheta, "1/s");
-        requirePositive("kP", kP, "1/s");
-        requirePositive("tauLag", tauLag, "s");
-        requirePositive("posTol", posTol, "m");
-        requirePositive("angTolRad", angTolRad, "rad");
-        requirePositive("tSettle", tSettle, "s");
-        requirePositive("startTol", startTol, "m");
-        requirePositive("timeoutFactor", timeoutFactor, "-");
-        requirePositive("timeoutMargin", timeoutMargin, "s");
-        Objects.requireNonNull(flipMode, Point.nullMessage("PathFollowerConfig", "the flip mode"));
-        requirePositive("fieldLength", fieldLength, "m");
-        requirePositive("fieldWidth", fieldWidth, "m");
+        requirePositive("kN", kN, "1/s", "withKN(3.0)");
+        requirePositive("kTheta", kTheta, "1/s", "withKTheta(4.0)");
+        requirePositive("kP", kP, "1/s", "withKP(3.0)");
+        requirePositive("tauLag", tauLag, "s", "withTauLag(0.05)");
+        requirePositive("posTol", posTol, "m", "withPosTol(0.03)");
+        requirePositive("angTolRad", angTolRad, "rad", "withAngTolDegrees(2.0)");
+        requirePositive("tSettle", tSettle, "s", "withSettleTime(0.1)");
+        requirePositive("startTol", startTol, "m", "withStartTol(0.5)");
+        requirePositive("timeoutFactor", timeoutFactor, "-", "withTimeout(1.5, 1.0)");
+        requirePositive("timeoutMargin", timeoutMargin, "s", "withTimeout(1.5, 1.0)");
+        Objects.requireNonNull(flipMode, Point.nullMessage("PathFollowerConfig", "the flip mode",
+                "a FlipMode (for example FlipMode.ROTATE)"));
+        requirePositive("fieldLength", fieldLength, "m", "withField(16.54, 8.07)");
+        requirePositive("fieldWidth", fieldWidth, "m", "withField(16.54, 8.07)");
     }
 
-    private static void requirePositive(String name, double value, String unit) {
-        if (!Double.isFinite(value) || value <= 0.0) {
-            throw new IllegalArgumentException("PathFollowerConfig." + name + " must be a finite number more than 0 ("
-                    + unit + "), but it is " + value
-                    + ". Start from PathFollowerConfig.defaults() and change only what you need.");
-        }
+    private static void requirePositive(String name, double value, String unit, String change) {
+        ConfigCheck.requirePositive("PathFollowerConfig", name, value, unit, "PathFollowerConfig.defaults()",
+                "PathFollowerConfig.defaults()." + change);
     }
 
     /**

@@ -18,20 +18,16 @@ public record PathsConfig(
         double moduleRadius) {
 
     public PathsConfig {
-        requirePositive("maxAngularVelocity", maxAngularVelocity);
-        requirePositive("maxAngularAccel", maxAngularAccel);
-        requirePositive("maxJerk", maxJerk);
-        if (!Double.isFinite(moduleRadius) || moduleRadius < 0.0) {
-            throw new IllegalArgumentException(
-                    "PathsConfig.moduleRadius must be finite and >= 0, got " + moduleRadius + " (V16)");
-        }
+        requirePositive("maxAngularVelocity", maxAngularVelocity, "rad/s", "withMaxAngularVelocity(6.28)");
+        requirePositive("maxAngularAccel", maxAngularAccel, "rad/s^2", "withMaxAngularAccel(12.5)");
+        requirePositive("maxJerk", maxJerk, "m/s^3", "withMaxJerk(50.0)");
+        ConfigCheck.requireNotNegative("PathsConfig", "moduleRadius", moduleRadius, "meters", "PathsConfig.defaults()",
+                "PathsConfig.defaults().withModuleRadius(0.45)");
     }
 
-    private static void requirePositive(String name, double value) {
-        if (!Double.isFinite(value) || value <= 0.0) {
-            throw new IllegalArgumentException(
-                    "PathsConfig." + name + " must be finite and > 0, got " + value + " (V16)");
-        }
+    private static void requirePositive(String name, double value, String unit, String change) {
+        ConfigCheck.requirePositive("PathsConfig", name, value, unit, "PathsConfig.defaults()",
+                "PathsConfig.defaults()." + change);
     }
 
     /** @return placeholders (2*pi, 4*pi, 50, 0); measure on the robot (section 10, 12) */
@@ -67,12 +63,15 @@ public record PathsConfig(
      */
     public static PathsConfig fromModules(Translation2d... modules) {
         if (modules == null) {
-            throw new IllegalArgumentException("PathsConfig.fromModules: modules must not be null");
+            throw new NullPointerException("PathsConfig.fromModules: the module list is null; pass the module positions"
+                    + " (for example PathsConfig.fromModules(new Translation2d(0.3, 0.3), new Translation2d(0.3, -0.3),"
+                    + " new Translation2d(-0.3, 0.3), new Translation2d(-0.3, -0.3)))");
         }
         double r = 0.0;
         for (Translation2d m : modules) {
             if (m == null) {
-                throw new IllegalArgumentException("PathsConfig.fromModules: a module position is null");
+                throw new NullPointerException("PathsConfig.fromModules: a module position is null; pass a"
+                        + " Translation2d for every module (for example new Translation2d(0.3, 0.3))");
             }
             r = Math.max(r, m.getNorm());
         }

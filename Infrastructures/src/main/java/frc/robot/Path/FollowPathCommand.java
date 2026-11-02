@@ -67,18 +67,18 @@ public class FollowPathCommand extends Command {
                              Supplier<ChassisSpeeds> measuredFieldSpeeds,
                              Consumer<ChassisSpeeds> output,
                              Subsystem... requirements) {
-        this.path = Objects.requireNonNull(path, Point.nullMessage("FollowPathCommand", "the path"));
-        this.pose = Objects.requireNonNull(pose, Point.nullMessage("FollowPathCommand", "the pose supplier"));
+        this.path = Objects.requireNonNull(path, Point.nullMessage("FollowPathCommand", "the path", "a Path (for example new Path(new Point(1, 2), new Point(3, 4)))"));
+        this.pose = Objects.requireNonNull(pose, Point.nullMessage("FollowPathCommand", "the pose supplier", "a supplier of the robot pose (for example swerve::getPose)"));
         this.measuredFieldSpeeds = Objects.requireNonNull(measuredFieldSpeeds,
-                Point.nullMessage("FollowPathCommand", "the measured speed supplier"));
-        this.output = Objects.requireNonNull(output, Point.nullMessage("FollowPathCommand", "the output"));
+                Point.nullMessage("FollowPathCommand", "the measured speed supplier", "a supplier of the measured field speeds (for example swerve::getFieldSpeeds)"));
+        this.output = Objects.requireNonNull(output, Point.nullMessage("FollowPathCommand", "the output", "a consumer for the speed command (for example swerve::driveFieldRelative)"));
         if (requirements == null || requirements.length == 0) {
             throw new IllegalArgumentException("FollowPathCommand needs the drivetrain as a requirement, for example"
                     + " new FollowPathCommand(path, swerve::getPose, swerve::getFieldSpeeds, swerve::driveFieldRelative,"
                     + " swerve). Without it, two commands could drive the robot at the same time.");
         }
         for (int i = 0; i < requirements.length; i++) {
-            Objects.requireNonNull(requirements[i], Point.nullMessage("FollowPathCommand", "requirement " + i));
+            Objects.requireNonNull(requirements[i], Point.nullMessage("FollowPathCommand", "requirement " + i, "the drivetrain subsystem (for example swerve)"));
         }
         this.requirements = requirements.clone();
         addRequirements(this.requirements);
@@ -88,31 +88,32 @@ public class FollowPathCommand extends Command {
 
     /** @return this; motor curve, wheel cap, limit warning C2 */
     public FollowPathCommand withKinematics(KinematicsConfig config) {
-        this.kinematics = Objects.requireNonNull(config, Point.nullMessage("withKinematics", "the config"));
+        this.kinematics = Objects.requireNonNull(config, Point.nullMessage("withKinematics", "the config", "your KinematicsConfig (for example new KinematicsConfig())"));
         return this;
     }
 
     /** @return this; R_mod for the wheel-speed cap (moduleRadius 0 = unknown) */
     public FollowPathCommand withPathsConfig(PathsConfig config) {
-        this.pathsConfig = Objects.requireNonNull(config, Point.nullMessage("withPathsConfig", "the config"));
+        this.pathsConfig = Objects.requireNonNull(config, Point.nullMessage("withPathsConfig", "the config", "a PathsConfig (for example PathsConfig.defaults())"));
         return this;
     }
 
     /** @return this; gains, tolerances, timeout, flip (default {@code PathFollowerConfig.defaults()}) */
     public FollowPathCommand withConfig(PathFollowerConfig config) {
-        this.config = Objects.requireNonNull(config, Point.nullMessage("withConfig", "the config"));
+        this.config = Objects.requireNonNull(config, Point.nullMessage("withConfig", "the config", "a PathFollowerConfig (for example PathFollowerConfig.defaults())"));
         return this;
     }
 
     /** @return this; called once with the result when the command ends */
     public FollowPathCommand withOnFinish(Consumer<FollowResult> callback) {
-        this.onFinish = Objects.requireNonNull(callback, Point.nullMessage("withOnFinish", "the callback"));
+        this.onFinish = Objects.requireNonNull(callback, Point.nullMessage("withOnFinish", "the callback", "a callback that takes the FollowResult (for example result -> System.out.println(result))"));
         return this;
     }
 
     /** Test hook: the time source [s] (default {@code Timer.getFPGATimestamp}). @return this */
     FollowPathCommand withClock(DoubleSupplier clock) {
-        this.clock = Objects.requireNonNull(clock);
+        this.clock = Objects.requireNonNull(clock, Point.nullMessage("withClock", "the clock",
+                "a DoubleSupplier of seconds (for example () -> 0.0)"));
         return this;
     }
 
@@ -140,14 +141,15 @@ public class FollowPathCommand extends Command {
 
         Optional<Alliance> alliance = DriverStation.getAlliance(); // read once (8.10)
         if (alliance.isEmpty()) {
-            raise(prefix() + "alliance unknown; driving the blue path.", AlertType.kWarning);
+            raise(prefix() + "alliance unknown; driving the blue path. For a red run, connect the Driver Station"
+                    + " (or set the alliance in the simulator) before the command starts.", AlertType.kWarning);
         }
         active = alliance.isPresent() && alliance.get() == Alliance.Red ? path.flipped(config) : path;
 
         Pose2d p = pose.get();
         ChassisSpeeds vm = measuredFieldSpeeds.get();
         if (!Tracker.poseValid(p)) {
-            fail(FollowResult.FAILED_POSE, "the pose was invalid or frozen for more than 1 s");
+            fail(FollowResult.FAILED_POSE, POSE_REASON);
             return;
         }
         checkSpeed(vm);
@@ -155,8 +157,9 @@ public class FollowPathCommand extends Command {
         double d0 = p.getTranslation().getDistance(p0);
         if (d0 > config.startTol()) {
             fail(FollowResult.FAILED_START_TOO_FAR, String.format(Locale.US,
-                    "the robot is %.2f m from the start point (%.2f, %.2f) and must start within %.2f m; check the"
-                            + " start pose and the alliance flip", d0, p0.getX(), p0.getY(), config.startTol()));
+                    "the robot is %.2f m from the start point (%.2f, %.2f) and must start within %.2f m (startTol);"
+                            + " put the robot on the start point, check setStartPose and the alliance flip, or raise the"
+                            + " tolerance, for example PathFollowerConfig.defaults().withStartTol(1.0)", d0, p0.getX(), p0.getY(), config.startTol()));
             return;
         }
 
@@ -167,8 +170,8 @@ public class FollowPathCommand extends Command {
         SpeedProfile profile = SpeedProfile.build(active, heading, constraints, kinematics, moduleRadius, v0,
                 config.kP(), config.posTol());
         if (profile.profileGuardHit()) {
-            PathWarnings.startWarning(prefix() + "profile simulation did not reach the goal; the timeout uses the"
-                    + " guard time (a bug, please report it).");
+            PathWarnings.startWarning(prefix() + "the speed plan did not reach the end of the path, so the timeout uses a"
+                    + " safe default time (an internal error, please report it with the path points).");
         }
         SpeedLaw law = new SpeedLaw(profile);
         EventSchedule schedule = new EventSchedule(active.events(), active.table().stopS());
@@ -221,10 +224,11 @@ public class FollowPathCommand extends Command {
         }
         if (result == FollowResult.FAILED_TIMEOUT) {
             failReason = String.format(Locale.US, "did not finish within %.2f s (%s x the planned time + %s s); the"
-                    + " robot was blocked, or the limits are above what the drivetrain can do", tracker.timeout(),
+                    + " robot was blocked, or the limits are above what the drivetrain can do; free the robot, or lower"
+                    + " the limits, for example constraints.withVMax(2.0)", tracker.timeout(),
                     trim(runConfig.timeoutFactor()), trim(runConfig.timeoutMargin()));
         } else if (result == FollowResult.FAILED_POSE && failReason.isEmpty()) {
-            failReason = "the pose was invalid or frozen for more than 1 s";
+            failReason = POSE_REASON;
         }
         if (result.isFailure()) {
             raise(prefix() + result.name() + ": " + failReason + ".", AlertType.kError);
@@ -274,6 +278,9 @@ public class FollowPathCommand extends Command {
 
     // ---------------------------------------------------------------- helpers
 
+    private static final String POSE_REASON = "the robot pose was NaN, infinite or frozen for more than 1 s; check"
+            + " that the pose supplier (for example swerve::getPose) returns a real pose and that odometry keeps updating";
+
     private String prefix() {
         return "Path \"" + path.name() + "\": ";
     }
@@ -293,7 +300,8 @@ public class FollowPathCommand extends Command {
     private void checkSpeed(ChassisSpeeds vm) {
         if (!speedAlertRaised && !Tracker.speedValid(vm)) {
             speedAlertRaised = true;
-            raise(prefix() + "the measured speed is not a number; check the speed supplier.", AlertType.kWarning);
+            raise(prefix() + "the measured speed is NaN or infinite; check the speed supplier you passed to"
+                    + " FollowPathCommand (for example swerve::getFieldSpeeds) and that the gyro and encoders are connected.", AlertType.kWarning);
         }
     }
 
@@ -307,35 +315,42 @@ public class FollowPathCommand extends Command {
             c = PathConstraints.fromConfig(kinematics, paths);
         } else {
             PathWarnings.startWarning(prefix() + "no PathConstraints and no KinematicsConfig: using the defaults of a"
-                    + " new KinematicsConfig() (placeholders). Pass PathConstraints.fromConfig(yourConfig).");
+                    + " new KinematicsConfig() (placeholders), so the limits may not match your robot. Call"
+                    + " path.withConstraints(PathConstraints.fromConfig(yourConfig)) or command.withKinematics(yourConfig).");
             c = PathConstraints.fromConfig(new KinematicsConfig());
         }
         String clip = "the limiter will clip it and the robot will fall behind the profile";
+        String cfg = "the value from the KinematicsConfig";
         if (kinematics != null) {
             PathConstraints derived = PathConstraints.fromConfig(kinematics, paths);
-            warnAbove("vMax", c.vMax(), "the value from the KinematicsConfig", derived.vMax(), clip);
-            warnAbove("aAcc", c.aAcc(), "the value from the KinematicsConfig", derived.aAcc(), clip);
-            warnAbove("aDec", c.aDec(), "the value from the KinematicsConfig", derived.aDec(), clip);
-            warnAbove("aLat", c.aLat(), "the value from the KinematicsConfig", derived.aLat(), clip);
-            warnAbove("vMax", c.vMax(), "maxAllowedModuleVelocity", kinematics.maxAllowedModuleVelocity, clip);
+            warnAbove("vMax", c.vMax(), cfg, derived.vMax(), "m/s", clip, "constraints.withVMax(");
+            warnAbove("aAcc", c.aAcc(), cfg, derived.aAcc(), "m/s^2", clip, "constraints.withAAcc(");
+            warnAbove("aDec", c.aDec(), cfg, derived.aDec(), "m/s^2", clip, "constraints.withADec(");
+            warnAbove("aLat", c.aLat(), cfg, derived.aLat(), "m/s^2", clip, "constraints.withALat(");
+            warnAbove("vMax", c.vMax(), "maxAllowedModuleVelocity", kinematics.maxAllowedModuleVelocity, "m/s", clip,
+                    "constraints.withVMax(");
         }
         List<Point> points = active.points();
         for (int i = 0; i < points.size(); i++) {
             OptionalDouble mv = points.get(i).maxVelocity();
             if (mv.isPresent()) {
-                warnAbove("point " + i + " withVelocity", mv.getAsDouble(), "vMax", c.vMax(), "it has no effect");
+                warnAbove("point " + i + " withVelocity", mv.getAsDouble(), "vMax", c.vMax(), "m/s", "it has no effect",
+                        "withVelocity(");
             }
         }
         warnAbove("jerkMax", c.jerkMax(), "max(aAcc, aDec)/(5 dt)",
-                PathWarnings.jerkWarningThreshold(c.aAcc(), c.aDec(), Tracker.DT_NOM),
-                "the jerk limit has no effect at 50 Hz, and the robot can enter an arc still braking");
+                PathWarnings.jerkWarningThreshold(c.aAcc(), c.aDec(), Tracker.DT_NOM), "m/s^3",
+                "the jerk limit has no effect at 50 Hz, and the robot can enter an arc still braking",
+                "constraints.withJerkMax(");
         return c;
     }
 
-    private void warnAbove(String what, double v, String limit, double lim, String effect) {
+    private void warnAbove(String what, double v, String limit, double lim, String unit, String effect,
+                           String setter) {
         if (v > lim + 1e-9) {
-            PathWarnings.startWarning(prefix() + what + " " + trim(v) + " is above " + limit + " (" + trim(lim)
-                    + "); " + effect + ".");
+            PathWarnings.startWarning(prefix() + what + " " + trim(v) + " " + unit + " is above " + limit + " ("
+                    + trim(lim) + " " + unit + "); " + effect + ". Lower it to " + trim(lim) + " " + unit
+                    + " or less, for example " + setter + trim(lim) + ").");
         }
     }
 

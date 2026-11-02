@@ -117,7 +117,8 @@ final class SpeedProfile {
                               KinematicsConfig kinematics, double moduleRadius, double v0, double kP,
                               double posTol) {
         if (path == null) {
-            throw new IllegalArgumentException("SpeedProfile: path must not be null");
+            throw new NullPointerException("SpeedProfile.build: the path is null; pass a Path (for example"
+                    + " SpeedProfile.build(new Path(new Point(1, 2), new Point(3, 4)), ...))");
         }
         List<Point> points = path.points();
         int n = points.size();
@@ -174,18 +175,30 @@ final class SpeedProfile {
     private SpeedProfile(List<Segment> segments, double[] waypointS, double[] pointVelocity, double endDwell,
                          HeadingProfile heading, PathConstraints constraints, KinematicsConfig kinematics,
                          double moduleRadius, double v0, double kP, double posTol) {
-        if (constraints == null || heading == null || segments == null || segments.isEmpty()) {
-            throw new IllegalArgumentException("SpeedProfile: segments, heading and constraints are required");
+        if (constraints == null || heading == null || segments == null) {
+            throw new NullPointerException("SpeedProfile: the segments, the heading profile or the constraints are null;"
+                    + " build the profile with SpeedProfile.build(path, heading, constraints, ...)");
         }
-        if (waypointS == null || pointVelocity == null || pointVelocity.length != waypointS.length) {
-            throw new IllegalArgumentException(
-                    "SpeedProfile: point data required: one pointVelocity entry (NaN = none) per waypoint");
+        if (segments.isEmpty()) {
+            throw new IllegalArgumentException("SpeedProfile: the path has no segments. Give the path two points that"
+                    + " are not at the same place, for example new Path(new Point(1, 2), new Point(3, 4)).");
+        }
+        if (waypointS == null || pointVelocity == null) {
+            throw new NullPointerException("SpeedProfile: the waypoint data is null; pass waypointS and pointVelocity"
+                    + " with one entry per waypoint (for example new double[] {Double.NaN, Double.NaN})");
+        }
+        if (pointVelocity.length != waypointS.length) {
+            throw new IllegalArgumentException("SpeedProfile: pointVelocity has " + pointVelocity.length
+                    + " entries but there are " + waypointS.length + " waypoints; give one entry (NaN = none) for"
+                    + " every waypoint (an internal error, please report it).");
         }
         requireFinite("v0", v0);
         requireFinite("endDwell", endDwell);
         requireFinite("moduleRadius", moduleRadius);
         if (!(kP > 0.0) || !Double.isFinite(kP) || !(posTol > 0.0) || !Double.isFinite(posTol)) {
-            throw new IllegalArgumentException("SpeedProfile: kP and posTol must be finite and > 0");
+            throw new IllegalArgumentException("SpeedProfile: kP is " + kP + " and posTol is " + posTol + " m; both must be"
+                    + " finite numbers above 0. Fix them in the PathFollowerConfig, for example"
+                    + " PathFollowerConfig.defaults().withKP(3.0).withPosTol(0.03).");
         }
         this.c = constraints;
         this.v0 = Math.max(0.0, v0);
@@ -202,7 +215,9 @@ final class SpeedProfile {
 
         this.length = HeadingProfile.pathLength(segments);
         if (!(length > 0.0)) {
-            throw new IllegalArgumentException("SpeedProfile: path length must be > 0");
+            throw new IllegalArgumentException("SpeedProfile: the path length is " + length + " m, but it must be above"
+                    + " 0 m. Give the path two points that are not at the same place, for example"
+                    + " new Path(new Point(1, 2), new Point(3, 4)).");
         }
 
         // Stops (7.10.1): every STOP entry strictly inside (0, L).
@@ -436,7 +451,8 @@ final class SpeedProfile {
 
     private static void requireFinite(String name, double x) {
         if (!Double.isFinite(x)) {
-            throw new IllegalArgumentException("SpeedProfile: " + name + " must be finite, got " + x);
+            throw new IllegalArgumentException("SpeedProfile: " + name + " must be a finite number, but it is " + x
+                    + ". Check that the pose and speed suppliers never return NaN or infinity.");
         }
     }
 
@@ -452,7 +468,8 @@ final class SpeedProfile {
             }
         }
         if (found < 0) {
-            throw new IllegalArgumentException("SpeedProfile: no positive-length entry");
+            throw new IllegalArgumentException("SpeedProfile: no part of the path has a length above 0 m (an internal"
+                    + " error, please report it).");
         }
         return found;
     }

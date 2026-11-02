@@ -68,7 +68,8 @@ public interface PathLogger {
      * @param logger the team's logger, or {@link #WPILIB}
      */
     static void set(PathLogger logger) {
-        Holder.logger = Objects.requireNonNull(logger);
+        Holder.logger = Objects.requireNonNull(logger, Point.nullMessage("PathLogger.set", "the logger",
+                "a PathLogger (for example PathLogger.WPILIB)"));
     }
 
     /** @return the logger Path uses ({@link #WPILIB} until {@link #set} is called) */

@@ -1,7 +1,9 @@
 package frc.robot.example;
 
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -123,6 +125,8 @@ public class ExampleSwerveWithPose extends SubsystemBase {
     private final KinematicsConfig kinematicsConfig;
     private final PathsConfig pathsConfig;
     private final PathFollowerConfig followerConfig = PathFollowerConfig.defaults(); // gains, tolerances, red flip (ROTATE)
+    /** Each path gets this robot's constraints once, the first time it is followed (not on every call). */
+    private final Map<Path, Path> constrainedPaths = new IdentityHashMap<>();
     private final Pigeon2 pigeon;
     private final StatusSignal<Angle> yaw; // main thread copy (refreshed here, not by the thread) [deg]
     private final StatusSignal<AngularVelocity> yawRate; // [deg/s]
@@ -363,15 +367,17 @@ public class ExampleSwerveWithPose extends SubsystemBase {
      * (flipped too) first. Call it again for every autonomous run: a command can be used in one
      * composition only, e.g. {@code chassis.follow(examplePath())}. Pass the blue path; the command flips it.
      *
-     * @param path the path, written for the blue alliance
+     * @param path the path, written for the blue alliance (this robot's constraints are applied once per Path object)
      * @return a new command that requires this chassis
      */
     public Command follow(Path path) {
+        Path constrained = constrainedPaths.computeIfAbsent(path,
+                p -> p.withConstraints(PathConstraints.fromConfig(kinematicsConfig, pathsConfig)));
         return Commands.defer(() -> {
             Path active = path.forCurrentAlliance(followerConfig); // blue: the path itself; red: the flipped path
             Pose2d start = new Pose2d(active.startPoint(), active.startHeading().orElse(getPose().getRotation()));
             FollowPathCommand follow = new FollowPathCommand(
-                    path.withConstraints(PathConstraints.fromConfig(kinematicsConfig, pathsConfig)),
+                    constrained,
                     this::getPose, this::getFieldSpeeds, this::driveFieldRelative, this)
                     .withKinematics(kinematicsConfig)
                     .withPathsConfig(pathsConfig)

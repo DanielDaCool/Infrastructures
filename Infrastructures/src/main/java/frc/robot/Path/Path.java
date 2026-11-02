@@ -55,7 +55,7 @@ public final class Path {
      * @param points      two or more points
      */
     public Path(PathConstraints constraints, Point... points) {
-        this(Objects.requireNonNull(constraints, Point.nullMessage("new Path", "the constraints")),
+        this(Objects.requireNonNull(constraints, Point.nullMessage("new Path", "the constraints", "a PathConstraints (for example PathConstraints.fromConfig(config))")),
                 checkPoints("new Path", points), false);
     }
 
@@ -98,14 +98,14 @@ public final class Path {
 
     /** @return a path through the points */
     public static Path of(List<Point> points) {
-        Objects.requireNonNull(points, Point.nullMessage("Path.of", "the points list"));
+        Objects.requireNonNull(points, Point.nullMessage("Path.of", "the points list", "a list of Points (for example List.of(new Point(1, 2), new Point(3, 4)))"));
         return new Path(points.toArray(new Point[0]));
     }
 
     /** @return a path through the points with per-path constraints */
     public static Path of(PathConstraints constraints, List<Point> points) {
-        Objects.requireNonNull(constraints, Point.nullMessage("Path.of", "the constraints"));
-        Objects.requireNonNull(points, Point.nullMessage("Path.of", "the points list"));
+        Objects.requireNonNull(constraints, Point.nullMessage("Path.of", "the constraints", "a PathConstraints (for example PathConstraints.fromConfig(config))"));
+        Objects.requireNonNull(points, Point.nullMessage("Path.of", "the points list", "a list of Points (for example List.of(new Point(1, 2), new Point(3, 4)))"));
         return new Path(constraints, points.toArray(new Point[0]));
     }
 
@@ -117,7 +117,7 @@ public final class Path {
      *         flip of the renamed blue path
      */
     public Path withName(String name) {
-        Objects.requireNonNull(name, Point.nullMessage("withName", "the name"));
+        Objects.requireNonNull(name, Point.nullMessage("withName", "the name", "a text (for example withName(\"drive to reef\"))"));
         if (blueSource != null) {
             return blueSource.withName(name).flippedBy(flipKey);
         }
@@ -126,7 +126,7 @@ public final class Path {
 
     /** @return a copy with per-path constraints; on a flipped copy, the same flip of the changed blue path */
     public Path withConstraints(PathConstraints constraints) {
-        Objects.requireNonNull(constraints, Point.nullMessage("withConstraints", "the constraints"));
+        Objects.requireNonNull(constraints, Point.nullMessage("withConstraints", "the constraints", "a PathConstraints (for example PathConstraints.fromConfig(config))"));
         if (blueSource != null) {
             return blueSource.withConstraints(constraints).flippedBy(flipKey);
         }
@@ -139,7 +139,7 @@ public final class Path {
      * @return a copy whose robot front faces the target
      */
     public Path withFaceTarget(Translation2d target) {
-        Objects.requireNonNull(target, Point.nullMessage("withFaceTarget", "the face target"));
+        Objects.requireNonNull(target, Point.nullMessage("withFaceTarget", "the face target", "a Translation2d in meters (for example new Translation2d(4.6, 4.0))"));
         if (blueSource != null) {
             return blueSource.withFaceTarget(target).flippedBy(flipKey);
         }
@@ -152,7 +152,7 @@ public final class Path {
             if (points.get(i).angle().isPresent()) {
                 extra.add(i, "withAngle is ignored here: the robot looks at the face target ("
                         + GeometryBuilder.fmt(target.getX()) + ", " + GeometryBuilder.fmt(target.getY())
-                        + "); remove withAngle or use withoutFaceTarget().");
+                        + "). Remove withAngle from this point, or call withoutFaceTarget() to turn the face target off.");
             }
         }
         List<String> all = new ArrayList<>(warnings);
@@ -177,7 +177,7 @@ public final class Path {
      *         the changed blue path
      */
     public Path withEvent(PathEvent event) {
-        Objects.requireNonNull(event, Point.nullMessage("withEvent", "the event"));
+        Objects.requireNonNull(event, Point.nullMessage("withEvent", "the event", "a PathEvent (for example PathEvent.atFraction(0.5, intake.runCommand()))"));
         if (blueSource != null) {
             return blueSource.withEvent(event).flippedBy(flipKey);
         }
@@ -186,7 +186,8 @@ public final class Path {
             double f = event.value();
             if (!(f >= 0.0 && f <= 1.0)) {
                 throw new IllegalArgumentException("Event fraction " + f
-                        + " must be between 0 and 1 (0 = start of the path, 1 = end).");
+                        + " must be a number from 0 to 1 (0 = start of the path, 1 = end), for example"
+                        + " withEventAtFraction(0.5, command).");
             }
             s = f * table.length();
         } else {
@@ -199,25 +200,25 @@ public final class Path {
 
     /** @return a copy with an event at fraction f of the length */
     public Path withEventAtFraction(double fraction, Command action) {
-        Objects.requireNonNull(action, Point.nullMessage("withEventAtFraction", "the event action"));
+        Objects.requireNonNull(action, Point.nullMessage("withEventAtFraction", "the event action", "a Command or a Runnable (for example intake.runCommand())"));
         return withEvent(PathEvent.atFraction(fraction, action));
     }
 
     /** @return a copy with an event at fraction f of the length */
     public Path withEventAtFraction(double fraction, Runnable action) {
-        Objects.requireNonNull(action, Point.nullMessage("withEventAtFraction", "the event action"));
+        Objects.requireNonNull(action, Point.nullMessage("withEventAtFraction", "the event action", "a Command or a Runnable (for example intake.runCommand())"));
         return withEvent(PathEvent.atFraction(fraction, action));
     }
 
     /** @return a copy with an event at the point index the user wrote */
     public Path withEventAtPoint(int pointIndex, Command action) {
-        Objects.requireNonNull(action, Point.nullMessage("withEventAtPoint", "the event action"));
+        Objects.requireNonNull(action, Point.nullMessage("withEventAtPoint", "the event action", "a Command or a Runnable (for example intake.runCommand())"));
         return withEvent(PathEvent.atPoint(pointIndex, action));
     }
 
     /** @return a copy with an event at the point index the user wrote */
     public Path withEventAtPoint(int pointIndex, Runnable action) {
-        Objects.requireNonNull(action, Point.nullMessage("withEventAtPoint", "the event action"));
+        Objects.requireNonNull(action, Point.nullMessage("withEventAtPoint", "the event action", "a Command or a Runnable (for example intake.runCommand())"));
         return withEvent(PathEvent.atPoint(pointIndex, action));
     }
 
@@ -228,8 +229,8 @@ public final class Path {
      * @return the flipped path, memoized per mode and field size
      */
     public Path flipped(PathFollowerConfig config) {
-        Objects.requireNonNull(config, Point.nullMessage("flipped", "the config"));
-        FlipMode mode = Objects.requireNonNull(config.flipMode(), Point.nullMessage("flipped", "the flip mode"));
+        Objects.requireNonNull(config, Point.nullMessage("flipped", "the config", "a PathFollowerConfig (for example PathFollowerConfig.defaults())"));
+        FlipMode mode = Objects.requireNonNull(config.flipMode(), Point.nullMessage("flipped", "the flip mode", "a FlipMode (for example FlipMode.ROTATE)"));
         if (mode == FlipMode.NONE) {
             return this;
         }
@@ -273,7 +274,7 @@ public final class Path {
      * @return the path for the alliance the DriverStation reports
      */
     public Path forCurrentAlliance(PathFollowerConfig config) {
-        Objects.requireNonNull(config, Point.nullMessage("forCurrentAlliance", "the config"));
+        Objects.requireNonNull(config, Point.nullMessage("forCurrentAlliance", "the config", "a PathFollowerConfig (for example PathFollowerConfig.defaults())"));
         Optional<Alliance> alliance = DriverStation.getAlliance();
         if (alliance.isPresent() && alliance.get() == Alliance.Red) {
             return flipped(config);
@@ -390,16 +391,17 @@ public final class Path {
         if (i < 0 || i >= points.size()) {
             throw new IllegalArgumentException("Event point index " + i + " does not exist: the path has "
                     + points.size() + " points, numbered 0 to " + (points.size() - 1)
-                    + ". Index 0 is the first point you passed to new Path(...).");
+                    + ". Index 0 is the first point you passed to new Path(...). Use an index in that range, for example"
+                    + " withEventAtPoint(1, command).");
         }
         return i;
     }
 
     /** @return the points as an unmodifiable list; throws V3 for null, V1 for fewer than 2 */
     private static List<Point> checkPoints(String method, Point[] points) {
-        Objects.requireNonNull(points, Point.nullMessage(method, "the points array"));
+        Objects.requireNonNull(points, Point.nullMessage(method, "the points array", "the points (for example new Path(new Point(1, 2), new Point(3, 4)))"));
         for (int i = 0; i < points.length; i++) {
-            Objects.requireNonNull(points[i], Point.nullMessage(method, "point " + i));
+            Objects.requireNonNull(points[i], Point.nullMessage(method, "point " + i, "a Point for every position (for example new Point(1, 2))"));
         }
         if (points.length < 2) {
             throw new IllegalArgumentException("Path needs at least 2 points (a start and an end), but you gave "

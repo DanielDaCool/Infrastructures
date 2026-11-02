@@ -262,19 +262,25 @@ Path adds no logging library.
 |---|---|
 | Program stops with `Path needs at least 2 points ...` | `new Path(...)` got fewer than two points |
 | `All ... points of the path are at the same place` | Every point is within 1 mm of the first; check the coordinates |
+| `new Path: point 1 is null; pass a Point for every position (for example new Point(1, 2)).` (any `... is null; pass ...` text) | A null argument: pass the thing named in the text |
+| `PathConstraints.vMax must be a finite number above 0 (m/s), but it is -1.0. Start from PathConstraints.fromConfig(config) and change one value, for example PathConstraints.fromConfig(config).withVMax(3.0).` (same form for `PathsConfig` and `PathFollowerConfig`) | A config value is zero, negative, NaN or infinite; start from the factory named in the text |
 | `Point(NaN, ...)` error | A division by zero or a value never set in the coordinates |
 | `... has both stop() and withRadius(...)` | A stop point is a sharp corner; remove one of the two |
-| `withVelocity(...)` / `stop(...)` error | A negative number. Use `withVelocity(0)` or `stop()` to stop |
+| `withVelocity(-1.0): the speed must be 0 or more (m/s). withVelocity(0) is the same as stop(). To limit the speed at a point use a positive number, for example withVelocity(1.0).` (`stop(...)` and `withRadius(...)` are alike) | A negative number. Use `withVelocity(0)` or `stop()` to stop |
 | Warning: corner became a stop | Turn sharper than 150 degrees, or no arc fits. Move the points apart or use `.withRadius(r)` |
-| Warning: radius shrunk | The radius you asked for does not fit between the neighbors |
-| Warning: ... is ignored | `withRadius` on the first or last point or on a straight-line point, `withVelocity` on the first or last point, or `withAngle` while a face target is set |
+| Warning: `radius 5 m does not fit and was shrunk to 1.3107 m because a neighbor point is too close to the circle. Move the points farther apart, or give a smaller radius, for example withRadius(1.3107).` | The radius you asked for does not fit between the neighbors |
+| Warning: `withRadius(0.5) is ignored here: only a point where the path turns has a corner radius. Remove withRadius from this point.` (also `withVelocity`, `stop()`, `withAngle ... is ignored here`) | `withRadius` on the first or last point or on a straight-line point, `withVelocity` on the first or last point, or `withAngle` while a face target is set |
 | Warning: point is only a pass marker | The point is on a straight line and the path misses it; add `.stop()` there or remove the point |
 | Robot drives a whole corner slowly | The heading must turn too fast at the corner point (a big angle change there); spread the turn over more path or use a larger radius. `withVelocity` slows the robot only near its point |
 | Robot runs wide on arcs | `tauLag` too small (tuning step 4), or `latency` in `KinematicsConfig` is wrong |
 | Robot weaves around the path | `kN` too high for the lag (tuning steps 2 and 3) |
 | Robot ends a little short or late | `kP` low, or the finish tolerance is tight; see `eN` and `s` |
-| Result `FAILED_TIMEOUT` | The robot was blocked, or `aAcc` is above what the limiter allows |
-| Result `FAILED_START_TOO_FAR` | The robot was more than 0.5 m from the first point: wrong alliance flip, wrong path, or the start pose was not set |
+| Warning: `{what} {v} m/s is above ... ; the limiter will clip it and the robot will fall behind the profile. Lower it to {lim} m/s or less, for example constraints.withVMax({lim}).` | A limit is higher than the robot can do; lower it as the text says |
+| Warning: `no PathConstraints and no KinematicsConfig: using the defaults ... Call path.withConstraints(PathConstraints.fromConfig(yourConfig)) or command.withKinematics(yourConfig).` | The path has no limits; give it the robot's config |
+| Alert: `the measured speed is NaN or infinite; check the speed supplier you passed to FollowPathCommand (for example swerve::getFieldSpeeds) and that the gyro and encoders are connected.` | The measured-speed supplier returned NaN or infinity |
+| Alert: `alliance unknown; driving the blue path. For a red run, connect the Driver Station (or set the alliance in the simulator) before the command starts.` | The alliance was not known when the command started |
+| Result `FAILED_TIMEOUT` | The robot was blocked, or `aAcc` is above what the limiter allows. The alert says: `free the robot, or lower the limits, for example constraints.withVMax(2.0)` |
+| Result `FAILED_START_TOO_FAR` | The robot was more than 0.5 m from the first point: wrong alliance flip, wrong path, or the start pose was not set. The alert says: `put the robot on the start point, check setStartPose and the alliance flip, or raise the tolerance, for example PathFollowerConfig.defaults().withStartTol(1.0)` |
 | Robot spins the wrong way | The drivetrain flips omega for `toSwerveModuleStates` once; do not flip it again |
 | Red alliance drives a mirrored path | Wrong `FlipMode` for this field, or a pose supplier in red-origin coordinates |
 | An event never fires | The robot never reached that point or fraction, or it was added after the command was created |

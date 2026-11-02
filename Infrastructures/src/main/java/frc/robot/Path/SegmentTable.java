@@ -32,7 +32,9 @@ final class SegmentTable {
      */
     SegmentTable(List<Segment> segments, double[] waypointS) {
         if (segments == null || segments.isEmpty()) {
-            throw new IllegalArgumentException("SegmentTable needs at least one segment");
+            throw new IllegalArgumentException("SegmentTable needs at least one segment, but it got none. Give the path"
+                    + " two points that are not at the same place, for example new Path(new Point(1, 2),"
+                    + " new Point(3, 4)).");
         }
         this.segments = Collections.unmodifiableList(new ArrayList<>(segments));
         this.waypointS = waypointS.clone();

@@ -42,12 +42,12 @@ public final class Point {
 
     /** @param position blue-frame position */
     public Point(Translation2d position) {
-        this(Objects.requireNonNull(position, nullMessage("Point", "the position")).getX(), position.getY());
+        this(Objects.requireNonNull(position, nullMessage("Point", "the position", "a Translation2d in meters (for example new Point(new Translation2d(1, 2)))")).getX(), position.getY());
     }
 
     /** @param pose blue-frame position plus {@code withAngle(pose.getRotation())} */
     public Point(Pose2d pose) {
-        this(checkFinite("Point", Objects.requireNonNull(pose, nullMessage("Point", "the pose")).getX(), "x",
+        this(checkFinite("Point", Objects.requireNonNull(pose, nullMessage("Point", "the pose", "a Pose2d (for example new Point(new Pose2d(1, 2, Rotation2d.kZero)))")).getX(), "x",
                 "meters", pose.getX()),
                 checkFinite("Point", pose.getY(), "y", "meters", pose.getY()),
                 checkAngle("Point", pose.getRotation()), Double.NaN, Double.NaN, false, 0.0);
@@ -55,7 +55,7 @@ public final class Point {
 
     /** @return a copy with a heading anchor (section 6) */
     public Point withAngle(Rotation2d angle) {
-        Objects.requireNonNull(angle, nullMessage("withAngle", "the angle"));
+        Objects.requireNonNull(angle, nullMessage("withAngle", "the angle", "a Rotation2d (for example withAngle(Rotation2d.fromDegrees(90)))"));
         checkAngle("withAngle", angle);
         return new Point(x, y, angle, maxVelocity, radius, stop, dwell);
     }
@@ -80,7 +80,7 @@ public final class Point {
         if (meters < 0) {
             throw new IllegalArgumentException("withRadius(" + meters
                     + "): the radius must be 0 or more (meters). Use withRadius(0) to make the robot stop "
-                    + "at this point, or leave withRadius out so the library chooses the radius.");
+                    + "at this point, or leave withRadius out so the library chooses the radius, for example withRadius(0.5).");
         }
         return new Point(x, y, angle, maxVelocity, meters, stop, dwell);
     }
@@ -115,9 +115,9 @@ public final class Point {
         return new Point(newX, newY, newAngle, maxVelocity, radius, stop, dwell);
     }
 
-    /** @return the V3 message for a null argument */
-    static String nullMessage(String method, String argument) {
-        return method + ": " + argument + " is null. Every argument must be set; see the example in Path.md \"Quick start\".";
+    /** @return the V3 message for a null argument; pass is what to pass, with an example in brackets */
+    static String nullMessage(String method, String argument, String pass) {
+        return method + ": " + argument + " is null; pass " + pass + ".";
     }
 
     /** @return the V4 message for a NaN or infinite number */

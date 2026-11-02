@@ -208,7 +208,7 @@ final class GeometryBuilder {
             Node node = merged.get(m);
             if (node.hasRadius()) {
                 warnings.add(node.userIndex, "withRadius(" + fmt(node.radius) + ") is ignored here: only a point "
-                        + "where the path turns has a corner radius.");
+                        + "where the path turns has a corner radius. Remove withRadius from this point.");
             }
         }
 
@@ -341,7 +341,7 @@ final class GeometryBuilder {
         }
         for (int i = 1; i < n - 1; i++) {
             if (fallbackZeroed[i]) {
-                String why = shrinkReasons.get(i).isEmpty() ? "" : " (" + checkList(shrinkReasons.get(i)) + ")";
+                String why = shrinkReasons.get(i).isEmpty() ? "" : ", because " + checkList(shrinkReasons.get(i));
                 warnings.add(nodes[i].userIndex, stopText("no radius fitted within " + maxIter
                         + " shrink passes, so every corner arc was removed" + why));
                 continue;
@@ -352,12 +352,11 @@ final class GeometryBuilder {
             String why = checkList(shrinkReasons.get(i));
             if (r[i] == 0) {
                 warnings.add(nodes[i].userIndex, stopText("radius " + fmt(r0[i]) + " m was shrunk below "
-                        + fmt(R_MIN) + " m to fit, " + why));
+                        + fmt(R_MIN) + " m to fit, because " + why));
             } else {
                 warnings.add(nodes[i].userIndex, "radius " + fmt(r0[i]) + " m does not fit and was shrunk to "
-                        + fmt(r[i]) + " m (" + why + "). Why: F1 = the neighbor point is too close to the circle, "
-                        + "F2 = the line would run more than 30 degrees off the straight leg, F3 = the arc would "
-                        + "turn much more than the corner angle. Move the points apart, or give a smaller radius.");
+                        + fmt(r[i]) + " m because " + why + ". Move the points farther apart, or give a smaller"
+                        + " radius, for example withRadius(" + fmt(r[i]) + ").");
             }
         }
 
@@ -544,7 +543,7 @@ final class GeometryBuilder {
     private static void mergeInto(Node kept, int u, Point p, double d, PathWarnings warnings) {
         StringBuilder text = new StringBuilder("points " + kept.userIndex + " and " + u + " are only "
                 + fmt(d * 1000.0) + " mm apart. Point " + u + " was merged into point " + kept.userIndex
-                + ". Remove one of them.");
+                + ". Remove one of them from your list, for example delete point " + u + ".");
         if (p.angle().isPresent()) {
             if (kept.angle != null) {
                 text.append(both("withAngle", fmt(kept.angle.getDegrees()) + " deg",
@@ -591,25 +590,25 @@ final class GeometryBuilder {
         if (first.stop) {
             if (first.dwell > 0) {
                 warnings.add(first.userIndex, "stop(" + fmt(first.dwell) + ") on the first point does not change "
-                        + "the path; the robot waits " + fmt(first.dwell) + " s before it starts.");
+                        + "the path; the robot waits " + fmt(first.dwell) + " s before it starts. Remove the wait unless you want it.");
             } else {
-                warnings.add(first.userIndex, "stop() is ignored here: the robot starts with its measured speed.");
+                warnings.add(first.userIndex, "stop() is ignored here: the robot starts with its measured speed. Remove stop() from this point.");
             }
         } else if (!Double.isNaN(first.maxVelocity)) {
             warnings.add(first.userIndex, "withVelocity(" + fmt(first.maxVelocity) + ") is ignored here: the robot "
-                    + "starts with its measured speed.");
+                    + "starts with its measured speed. Remove withVelocity from this point.");
         }
         if (first.hasRadius()) {
             warnings.add(first.userIndex, "withRadius(" + fmt(first.radius) + ") is ignored here: only a point where "
-                    + "the path turns has a corner radius.");
+                    + "the path turns has a corner radius. Remove withRadius from this point.");
         }
         if (!Double.isNaN(last.maxVelocity)) {
             warnings.add(last.userIndex, "withVelocity(" + fmt(last.maxVelocity) + ") is ignored here: the robot "
-                    + "always ends at speed 0 in this version.");
+                    + "always ends at speed 0 in this version. Remove withVelocity from the last point.");
         }
         if (last.hasRadius()) {
             warnings.add(last.userIndex, "withRadius(" + fmt(last.radius) + ") is ignored here: only a point where "
-                    + "the path turns has a corner radius.");
+                    + "the path turns has a corner radius. Remove withRadius from this point.");
         }
     }
 
@@ -622,9 +621,13 @@ final class GeometryBuilder {
 
     /** @return "F1, F2" style list */
     private static String checkList(Set<Check> checks) {
-        StringJoiner joiner = new StringJoiner(", ");
+        StringJoiner joiner = new StringJoiner(" and ");
         for (Check check : checks) {
-            joiner.add(check.name());
+            joiner.add(switch (check) {
+                case F1 -> "a neighbor point is too close to the circle";
+                case F2 -> "the line would run more than 30 degrees off the straight leg";
+                case F3 -> "the arc would turn much more than the corner angle";
+            });
         }
         return joiner.toString();
     }

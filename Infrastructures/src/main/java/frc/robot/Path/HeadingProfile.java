@@ -81,7 +81,8 @@ final class HeadingProfile {
     static HeadingProfile anchors(double[] pointS, double[] pointAngle, double theta0, double length) {
         requireFiniteTheta0(theta0);
         if (pointS.length != pointAngle.length) {
-            throw new IllegalArgumentException("HeadingProfile: pointS and pointAngle differ in length");
+            throw new IllegalArgumentException("HeadingProfile: pointS has " + pointS.length + " entries but pointAngle has "
+                    + pointAngle.length + "; they need one entry per point (an internal error, please report it).");
         }
         List<double[]> anchors = new ArrayList<>();
         for (int i = 0; i < pointS.length; i++) {
@@ -273,8 +274,9 @@ final class HeadingProfile {
 
     private static void requireFiniteTheta0(double theta0) {
         if (!Double.isFinite(theta0)) {
-            throw new IllegalArgumentException("HeadingProfile: measured start heading theta0 must be finite, got "
-                    + theta0);
+            throw new IllegalArgumentException("HeadingProfile: the measured start heading must be a finite number"
+                    + " (radians), but it is " + theta0 + ". Check that the pose supplier returns a real rotation, for"
+                    + " example swerve::getPose.");
         }
     }
 
@@ -351,7 +353,8 @@ final class HeadingProfile {
             }
         }
         if (seg == null) {
-            throw new IllegalStateException("HeadingProfile: path has no positive-length entry");
+            throw new IllegalStateException("HeadingProfile: no part of the path has a length above 0 m (an internal"
+                    + " error, please report it).");
         }
         double q = Math.max(0.0, Math.min(seg.length, s - seg.sStart));
         if (seg.type == Segment.Type.LINE) {

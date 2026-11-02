@@ -11,6 +11,8 @@ import edu.wpi.first.wpilibj2.command.Commands;
  */
 public final class PathEvent {
 
+    private static final String ACTION_HINT = "a Command or a Runnable (for example intake.runCommand())";
+
     /** How {@link #value()} is read. */
     public enum Kind { FRACTION, POINT_INDEX }
 
@@ -21,7 +23,7 @@ public final class PathEvent {
     private PathEvent(Kind kind, double value, Command action) {
         this.kind = kind;
         this.value = value;
-        this.action = Objects.requireNonNull(action, "PathEvent: the action is null");
+        this.action = Objects.requireNonNull(action, Point.nullMessage("PathEvent", "the action", ACTION_HINT));
     }
 
     /** @return an event at fraction f of the path length (0 = start, 1 = end) */
@@ -31,7 +33,7 @@ public final class PathEvent {
 
     /** @return an event at fraction f; the Runnable is wrapped with {@code Commands.runOnce} */
     public static PathEvent atFraction(double fraction, Runnable action) {
-        Objects.requireNonNull(action, "PathEvent.atFraction: the action is null");
+        Objects.requireNonNull(action, Point.nullMessage("PathEvent.atFraction", "the action", ACTION_HINT));
         return atFraction(fraction, Commands.runOnce(action));
     }
 
@@ -42,7 +44,7 @@ public final class PathEvent {
 
     /** @return an event at a point index; the Runnable is wrapped with {@code Commands.runOnce} */
     public static PathEvent atPoint(int pointIndex, Runnable action) {
-        Objects.requireNonNull(action, "PathEvent.atPoint: the action is null");
+        Objects.requireNonNull(action, Point.nullMessage("PathEvent.atPoint", "the action", ACTION_HINT));
         return atPoint(pointIndex, Commands.runOnce(action));
     }
 

@@ -21,20 +21,18 @@ public record PathConstraints(double vMax, double aAcc, double aDec, double aLat
     public static final double PROFILE_MARGIN = 0.9;
 
     public PathConstraints {
-        requirePositive("vMax", vMax);
-        requirePositive("aAcc", aAcc);
-        requirePositive("aDec", aDec);
-        requirePositive("aLat", aLat);
-        requirePositive("omegaMax", omegaMax);
-        requirePositive("alphaMax", alphaMax);
-        requirePositive("jerkMax", jerkMax);
+        requirePositive("vMax", vMax, "m/s", "withVMax(3.0)");
+        requirePositive("aAcc", aAcc, "m/s^2", "withAAcc(4.0)");
+        requirePositive("aDec", aDec, "m/s^2", "withADec(4.0)");
+        requirePositive("aLat", aLat, "m/s^2", "withALat(4.0)");
+        requirePositive("omegaMax", omegaMax, "rad/s", "withOmegaMax(6.0)");
+        requirePositive("alphaMax", alphaMax, "rad/s^2", "withAlphaMax(12.0)");
+        requirePositive("jerkMax", jerkMax, "m/s^3", "withJerkMax(50.0)");
     }
 
-    private static void requirePositive(String name, double value) {
-        if (!Double.isFinite(value) || value <= 0.0) {
-            throw new IllegalArgumentException(
-                    "PathConstraints." + name + " must be finite and > 0, got " + value + " (V16)");
-        }
+    private static void requirePositive(String name, double value, String unit, String change) {
+        ConfigCheck.requirePositive("PathConstraints", name, value, unit, "PathConstraints.fromConfig(config)",
+                "PathConstraints.fromConfig(config)." + change);
     }
 
     /**
@@ -45,8 +43,13 @@ public record PathConstraints(double vMax, double aAcc, double aDec, double aLat
      * @return the constraints
      */
     public static PathConstraints fromConfig(KinematicsConfig config, PathsConfig paths) {
-        if (config == null || paths == null) {
-            throw new IllegalArgumentException("PathConstraints.fromConfig: config and paths must not be null");
+        if (config == null) {
+            throw new NullPointerException("PathConstraints.fromConfig: the KinematicsConfig is null; pass your robot's"
+                    + " config (for example PathConstraints.fromConfig(new KinematicsConfig()))");
+        }
+        if (paths == null) {
+            throw new NullPointerException("PathConstraints.fromConfig: the PathsConfig is null; pass one (for example"
+                    + " PathConstraints.fromConfig(config, PathsConfig.defaults())), or leave it out");
         }
         double tilt = Math.min(config.maxTiltAccelFront, config.maxTiltAccelSide);
         double brake = Math.min(config.maxSkidAccel, tilt);
