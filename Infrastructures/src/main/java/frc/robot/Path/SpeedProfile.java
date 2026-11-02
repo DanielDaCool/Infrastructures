@@ -3,6 +3,7 @@ package frc.robot.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.OptionalDouble;
 
 import frc.robot.Kinematics.KinematicsConfig;
 
@@ -30,12 +31,14 @@ final class SpeedProfile {
     static final double PROFILE_TIME_GUARD = 10.0;
 
     /**
-     * Goal-capture gain k_p used when the caller gives none [1/s]. Equals the section 10 default of
-     * {@code PathFollowerConfig.kP}; kept here because {@code PathFollowerConfig.defaults()} belongs to
-     * a later phase.
+     * Goal-capture gain k_p for callers without a follower config [1/s]; the section 10 default of
+     * {@code PathFollowerConfig.kP}. Temporary until PathFollowerConfig.defaults() (phase 3).
      */
     static final double DEFAULT_KP = 3.0;
-    /** Position tolerance used when the caller gives none [m] (section 10, pos_tol). */
+    /**
+     * Position tolerance for callers without a follower config [m]; the section 10 default of pos_tol.
+     * Temporary until PathFollowerConfig.defaults() (phase 3).
+     */
     static final double DEFAULT_POS_TOL = 0.03;
     /** Nominal loop period of the offline profileTime run [s] (7.13.6). */
     static final double OFFLINE_DT = Tracker.DT_NOM;
@@ -101,56 +104,58 @@ final class SpeedProfile {
     private final double endDwell;
     private final double spanTime;
     private double profileTimeCache = Double.NaN;
+    private boolean profileGuardHit;
 
     // ---------------------------------------------------------------- build
 
     /**
-     * Builds the profile (7.17).
+     * Builds the profile of a path (7.17). The point data the segment table does not carry (each
+     * point's withVelocity and the last point's dwell) is read from {@code path.points()}.
      *
-     * @param table        geometry (active frame)
+     * @param path         the active (already flipped) path; uses table(), points() and sAtPoint
      * @param heading      heading profile (omega and alpha caps)
      * @param constraints  resolved constraints
-     * @param kinematics   motor curve (7.9); may be null to skip it
+     * @param kinematics   motor curve (7.9) and wheel cap; may be null to skip both
      * @param moduleRadius R_mod for the wheel-speed cap, 0 = skip (7.11)
-     * @param v0           measured start speed along T(0), at least 0 (7.6.4)
+     * @param v0           measured start speed along T(0); negative is clamped to 0 (7.6.4); must be finite
+     * @param kP           goal-capture gain k_p: hand-over d_h and v_h = kP d_h (8.3.7)
+     * @param posTol       position tolerance: the hand-over tail of profileTime (7.13.6)
      * @return the profile
      */
-    static SpeedProfile build(SegmentTable table, HeadingProfile heading, PathConstraints constraints,
-                              KinematicsConfig kinematics, double moduleRadius, double v0) {
-        return build(table, heading, constraints, kinematics, moduleRadius, v0, null, 0.0);
-    }
-
-    /**
-     * Same as {@link #build(SegmentTable, HeadingProfile, PathConstraints, KinematicsConfig, double, double)}
-     * with the point data the table does not carry.
-     *
-     * @param pointVelocity withVelocity of each user point, by user index (NaN = none); null = none
-     * @param endDwell      dwell of the last point [s] (7.10.4)
-     */
-    static SpeedProfile build(SegmentTable table, HeadingProfile heading, PathConstraints constraints,
-                              KinematicsConfig kinematics, double moduleRadius, double v0,
-                              double[] pointVelocity, double endDwell) {
-        double[] wpS = new double[table.waypointCount()];
-        for (int i = 0; i < wpS.length; i++) {
-            wpS[i] = table.waypointS(i);
+    static SpeedProfile build(Path path, HeadingProfile heading, PathConstraints constraints,
+                              KinematicsConfig kinematics, double moduleRadius, double v0, double kP,
+                              double posTol) {
+        if (path == null) {
+            throw new IllegalArgumentException("SpeedProfile: path must not be null");
         }
-        return build(HeadingProfile.segmentsOf(table), wpS, pointVelocity, endDwell, heading, constraints,
-                kinematics, moduleRadius, v0, DEFAULT_KP, DEFAULT_POS_TOL);
+        List<Point> points = path.points();
+        int n = points.size();
+        double[] wpS = new double[n];
+        double[] vel = new double[n];
+        for (int i = 0; i < n; i++) {
+            wpS[i] = path.sAtPoint(i);
+            OptionalDouble mv = points.get(i).maxVelocity();
+            vel[i] = mv.isPresent() ? mv.getAsDouble() : Double.NaN;
+        }
+        double endDwell = points.get(n - 1).dwellSeconds();
+        return build(HeadingProfile.segmentsOf(path.table()), wpS, vel, endDwell, heading, constraints, kinematics,
+                moduleRadius, v0, kP, posTol);
     }
 
     /**
-     * Core builder from plain geometry data (7.17). The table-based overloads call it; tests call it
-     * with hand-built entries.
+     * Core builder from plain geometry data (7.17); {@link #build(Path, HeadingProfile, PathConstraints,
+     * KinematicsConfig, double, double, double, double)} calls it, tests call it with hand-built entries.
+     * Point data required: pointVelocity must have one entry per user point (NaN = no withVelocity).
      *
      * @param segments      LINE / ARC / STOP entries in order
      * @param waypointS     s of each user point, by user index
-     * @param pointVelocity withVelocity per user point (NaN = none), or null
+     * @param pointVelocity withVelocity per user point (NaN = none); required, same length as waypointS
      * @param endDwell      dwell at the last point [s]
      * @param heading       heading profile
      * @param constraints   resolved constraints
      * @param kinematics    motor curve and wheel cap source, or null
      * @param moduleRadius  R_mod, 0 = no wheel cap
-     * @param v0            start speed
+     * @param v0            start speed (finite; negative is clamped to 0)
      * @param kP            goal-capture gain (hand-over speed v_h = kP d_h, 8.3.7)
      * @param posTol        position tolerance for the hand-over tail (7.13.6)
      * @return the profile
@@ -172,6 +177,16 @@ final class SpeedProfile {
                          double moduleRadius, double v0, double kP, double posTol) {
         if (constraints == null || heading == null || segments == null || segments.isEmpty()) {
             throw new IllegalArgumentException("SpeedProfile: segments, heading and constraints are required");
+        }
+        if (waypointS == null || pointVelocity == null || pointVelocity.length != waypointS.length) {
+            throw new IllegalArgumentException(
+                    "SpeedProfile: point data required: one pointVelocity entry (NaN = none) per waypoint");
+        }
+        requireFinite("v0", v0);
+        requireFinite("endDwell", endDwell);
+        requireFinite("moduleRadius", moduleRadius);
+        if (!(kP > 0.0) || !Double.isFinite(kP) || !(posTol > 0.0) || !Double.isFinite(posTol)) {
+            throw new IllegalArgumentException("SpeedProfile: kP and posTol must be finite and > 0");
         }
         this.c = constraints;
         this.v0 = Math.max(0.0, v0);
@@ -289,7 +304,7 @@ final class SpeedProfile {
         }
         double[] wpVel = new double[kCount + 1];
         Arrays.fill(wpVel, Double.POSITIVE_INFINITY);
-        if (pointVelocity != null) {
+        {
             int last = waypointS.length - 1;
             for (int i = 1; i < Math.min(last, pointVelocity.length); i++) {
                 double pv = pointVelocity[i];
@@ -420,6 +435,12 @@ final class SpeedProfile {
 
     // ---------------------------------------------------------------- build helpers
 
+    private static void requireFinite(String name, double x) {
+        if (!Double.isFinite(x)) {
+            throw new IllegalArgumentException("SpeedProfile: " + name + " must be finite, got " + x);
+        }
+    }
+
     private static int segmentAt(List<Segment> segments, double s) {
         int found = -1;
         for (int i = 0; i < segments.size(); i++) {
@@ -467,15 +488,46 @@ final class SpeedProfile {
                     pts.add(x);
                 }
             }
+        } else if (g.type == Segment.Type.ARC) {
+            // closest and farthest approach: the arc points on the line from C through the target
+            double phiT = Math.atan2(h.faceTarget().getY() - g.center.getY(), h.faceTarget().getX() - g.center.getX());
+            for (double phi : new double[] {phiT, phiT + Math.PI}) {
+                double x = g.sStart + g.r * PathMath.mod2pi(g.sigma * (phi - g.phi0));
+                if (x > s0 && x < s1) {
+                    pts.add(x);
+                }
+            }
         }
         double m1 = 0.0;
         double m2 = 0.0;
+        double at1 = Double.NaN;
+        double at2 = Double.NaN;
         for (double s : pts) {
             if (h.isFrozen(s)) {
                 continue;
             }
-            m1 = Math.max(m1, Math.abs(h.faceSlope(s)));
-            m2 = Math.max(m2, Math.abs(h.faceSlope2(s)));
+            double v1 = Math.abs(h.faceSlope(s));
+            double v2 = Math.abs(h.faceSlope2(s));
+            if (v1 > m1) {
+                m1 = v1;
+                at1 = s;
+            }
+            if (v2 > m2) {
+                m2 = v2;
+                at2 = s;
+            }
+        }
+        // refine around the sampled maxima (an interior extremum between two samples)
+        double w = (s1 - s0) / FT_SAMPLES;
+        for (int i = -FT_SAMPLES; i <= FT_SAMPLES; i++) {
+            double x1 = at1 + w * i / FT_SAMPLES;
+            if (!Double.isNaN(at1) && x1 > s0 && x1 < s1 && !h.isFrozen(x1)) {
+                m1 = Math.max(m1, Math.abs(h.faceSlope(x1)));
+            }
+            double x2 = at2 + w * i / FT_SAMPLES;
+            if (!Double.isNaN(at2) && x2 > s0 && x2 < s1 && !h.isFrozen(x2)) {
+                m2 = Math.max(m2, Math.abs(h.faceSlope2(x2)));
+            }
         }
         return new double[] {m1, m2};
     }
@@ -746,19 +798,74 @@ final class SpeedProfile {
         return Math.max(0, Math.min(len.length - 1, i));
     }
 
-    /** @return backward-pass speed limit at s, {@code min(vCap, sqrt(vB[k+1]^2 + 2 aD (l - q)))} (7.13.10) */
+    /**
+     * @return backward-pass speed limit at s, {@code min(vCap, sqrt(vB[k+1]^2 + 2 aD (l - q)))} (7.13.10). At a
+     *     junction it reads the later span: at a stop s_c that is the restart envelope of the next
+     *     sub-profile. A robot approaching a stop uses {@link #vBack(double, double)}.
+     */
     double vBack(double s) {
-        int k = spanAt(s);
+        return vBackIn(spanAt(s), s);
+    }
+
+    /**
+     * vBack clamped to the sub-profile that ends at sGoal (7.13.10 step 1): s is clamped into that
+     * sub-profile, so at s = s_c the approaching robot reads 0, not the restart envelope.
+     *
+     * @param s     progress
+     * @param sGoal end of the current sub-profile (a stop or L), as from {@link #nextStopS(double)}
+     * @return vBack at s within that sub-profile
+     */
+    double vBack(double s, double sGoal) {
+        int k = spanInSub(s, sGoal);
+        return vBackIn(k, s);
+    }
+
+    /** @return full profile speed at s, for logging (7.13.10 step 4); later span at a junction, like vBack(s) */
+    double vProf(double s) {
+        return vProfIn(spanAt(s), s);
+    }
+
+    /**
+     * vProf clamped to the sub-profile that ends at sGoal (7.13.10).
+     *
+     * @param s     progress
+     * @param sGoal end of the current sub-profile (a stop or L)
+     * @return vProf at s within that sub-profile
+     */
+    double vProf(double s, double sGoal) {
+        return vProfIn(spanInSub(s, sGoal), s);
+    }
+
+    private double vBackIn(int k, double s) {
         double q = Math.max(0.0, Math.min(len[k], s - sStart[k]));
         return Math.min(cap[k], Math.sqrt(vB[k + 1] * vB[k + 1] + 2.0 * aD[k] * (len[k] - q)));
     }
 
-    /** @return full profile speed at s, for logging (7.13.10 step 4) */
-    double vProf(double s) {
-        int k = spanAt(s);
+    private double vProfIn(int k, double s) {
         double q = Math.max(0.0, Math.min(len[k], s - sStart[k]));
         double up = upSpeed(k, vF[k], q);
         return Math.min(cap[k], Math.min(up, Math.sqrt(vF[k + 1] * vF[k + 1] + 2.0 * aD[k] * (len[k] - q))));
+    }
+
+    /** @return the span at s, clamped into the sub-profile that ends at the junction nearest sGoal */
+    private int spanInSub(double s, double sGoal) {
+        int p = subProfileEndingAt(sGoal);
+        int first = subFirst[p];
+        int last = subLast[p] - 1;
+        return Math.max(first, Math.min(last, spanAt(s)));
+    }
+
+    private int subProfileEndingAt(double sGoal) {
+        int best = subFirst.length - 1;
+        double bestD = Double.POSITIVE_INFINITY;
+        for (int p = 0; p < subLast.length; p++) {
+            double d = Math.abs(js[subLast[p]] - sGoal);
+            if (d < bestD) {
+                bestD = d;
+                best = p;
+            }
+        }
+        return best;
     }
 
     /** @return speed cap vCap of the span at s (7.4) */
@@ -792,7 +899,28 @@ final class SpeedProfile {
 
     /** @return junctions with s in (sFrom, sGoal), ascending, for the law's constraint list (7.13.9) */
     List<Junction> junctionsAhead(double sFrom, double sGoal) {
-        List<Junction> out = new ArrayList<>();
+        int n = len.length + 1;
+        double[] ss = new double[n];
+        double[] vt = new double[n];
+        double[] d = new double[n];
+        boolean[] e = new boolean[n];
+        int m = fillJunctionsAhead(sFrom, sGoal, ss, vt, d, e);
+        List<Junction> out = new ArrayList<>(m);
+        for (int i = 0; i < m; i++) {
+            out.add(new Junction(ss[i], vt[i], d[i], e[i]));
+        }
+        return out;
+    }
+
+    /**
+     * Allocation-free form of {@link #junctionsAhead(double, double)} for the 50 Hz law: writes the
+     * junctions into the arrays (each at least spanCount() + 1 long).
+     *
+     * @return the number of junctions written
+     */
+    int fillJunctionsAhead(double sFrom, double sGoal, double[] outS, double[] outVt, double[] outD,
+                           boolean[] outEntry) {
+        int n = 0;
         int k = spanAt(sFrom);
         double dmin = Double.POSITIVE_INFINITY;
         for (int j = k + 1; j < js.length; j++) {
@@ -805,10 +933,13 @@ final class SpeedProfile {
             if (js[j] <= sFrom) {
                 continue;
             }
-            boolean entry = j < len.length && kind[j - 1] == Kind.LINE && kind[j] != Kind.LINE;
-            out.add(new Junction(js[j], vB[j], Double.isFinite(dmin) ? dmin : c.aDec(), entry));
+            outS[n] = js[j];
+            outVt[n] = vB[j];
+            outD[n] = Double.isFinite(dmin) ? dmin : c.aDec();
+            outEntry[n] = j < len.length && kind[j - 1] == Kind.LINE && kind[j] != Kind.LINE;
+            n++;
         }
-        return out;
+        return n;
     }
 
     /**
@@ -852,30 +983,28 @@ final class SpeedProfile {
     /** @return the planned time including dwells, from the offline jerk law (7.12, 7.13.6, 7.10.5) */
     double profileTime() {
         if (Double.isNaN(profileTimeCache)) {
-            profileTimeCache = profileTime(kP, posTol);
+            double t = 0.0;
+            boolean hit = false;
+            for (int p = 0; p < subFirst.length; p++) {
+                double s0 = js[subFirst[p]];
+                double s1 = js[subLast[p]];
+                SpeedLaw.OfflineResult r = SpeedLaw.offlineRun(this, p == 0 ? v0 : 0.0, s0, s1, OFFLINE_DT);
+                t += r.time() + dwellAt(s1);
+                hit |= r.guardHit();
+            }
+            profileGuardHit = hit;
+            profileTimeCache = t;
         }
         return profileTimeCache;
     }
 
     /**
-     * profileTime with a given goal gain and position tolerance (7.13.6): the offline law per
-     * sub-profile (tau_lag = 0, dt_nom), each with its hand-over tail, plus every dwell.
-     *
-     * @param gainP  k_p [1/s]
-     * @param tol    pos_tol [m]
-     * @return the planned time [s]
+     * @return true if the offline run of {@link #profileTime()} hit its guard in any sub-profile (a bug:
+     *     "profile simulation did not reach the goal", reported on warning C2's channel, 7.13.6)
      */
-    double profileTime(double gainP, double tol) {
-        double dh = handOverDistance(c.jerkMax(), gainP);
-        double t = 0.0;
-        for (int p = 0; p < subFirst.length; p++) {
-            double s0 = js[subFirst[p]];
-            double s1 = js[subLast[p]];
-            t += SpeedLaw.offlineTime(this, c.jerkMax(), c.aAcc(), c.aDec(), dh, p == 0 ? v0 : 0.0, s0, s1,
-                    OFFLINE_DT, gainP, tol);
-            t += dwellAt(s1);
-        }
-        return t;
+    boolean profileGuardHit() {
+        profileTime();
+        return profileGuardHit;
     }
 
     // ---------------------------------------------------------------- extra accessors (logging, tests)
@@ -888,6 +1017,21 @@ final class SpeedProfile {
     /** @return path length L */
     double length() {
         return length;
+    }
+
+    /** @return the resolved constraints */
+    PathConstraints constraints() {
+        return c;
+    }
+
+    /** @return goal-capture gain k_p of the profile (8.3.7) */
+    double kP() {
+        return kP;
+    }
+
+    /** @return position tolerance of the hand-over tail [m] */
+    double posTol() {
+        return posTol;
     }
 
     /** @return hand-over distance d_h used by the profile (8.3.7) */

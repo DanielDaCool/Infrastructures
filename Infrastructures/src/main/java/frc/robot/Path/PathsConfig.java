@@ -66,8 +66,14 @@ public record PathsConfig(
      * @return the config
      */
     public static PathsConfig fromModules(Translation2d... modules) {
+        if (modules == null) {
+            throw new IllegalArgumentException("PathsConfig.fromModules: modules must not be null");
+        }
         double r = 0.0;
         for (Translation2d m : modules) {
+            if (m == null) {
+                throw new IllegalArgumentException("PathsConfig.fromModules: a module position is null");
+            }
             r = Math.max(r, m.getNorm());
         }
         return defaults().withModuleRadius(r);

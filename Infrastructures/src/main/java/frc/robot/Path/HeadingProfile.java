@@ -14,9 +14,6 @@ import edu.wpi.first.math.geometry.Translation2d;
  */
 final class HeadingProfile {
 
-    /** Inside this distance of the face target the reference heading freezes [m] (6.9). */
-    static final double R_FACE_MIN = 0.50;
-
     /** Two anchors closer than this along the path are one anchor; the later one wins (6.2, W3) [m]. */
     private static final double ANCHOR_MERGE = 1e-9;
     /** Sampling step used to find the face-target freeze intervals [m] (6.9). */
@@ -56,6 +53,7 @@ final class HeadingProfile {
      * @return the profile
      */
     static HeadingProfile build(Path path, double theta0) {
+        requireFiniteTheta0(theta0);
         Optional<Translation2d> face = path.faceTarget();
         if (face.isPresent()) {
             return faceTarget(face.get(), segmentsOf(path.table()));
@@ -81,6 +79,7 @@ final class HeadingProfile {
      * @return the profile
      */
     static HeadingProfile anchors(double[] pointS, double[] pointAngle, double theta0, double length) {
+        requireFiniteTheta0(theta0);
         if (pointS.length != pointAngle.length) {
             throw new IllegalArgumentException("HeadingProfile: pointS and pointAngle differ in length");
         }
@@ -120,7 +119,7 @@ final class HeadingProfile {
     }
 
     /**
-     * Face-target profile (6.9): theta_FT(s) = atan2(target - x(s)), frozen inside R_FACE_MIN.
+     * Face-target profile (6.9): theta_FT(s) = atan2(target - x(s)), frozen inside {@link Tracker#R_FACE_MIN}.
      *
      * @param target   face target in the active frame
      * @param segments geometry entries in order (LINE / ARC / STOP)
@@ -227,7 +226,7 @@ final class HeadingProfile {
 
     // ---------------------------------------------------------------- face-target helpers (6.9)
 
-    /** @return true if s lies in a freeze interval (abs(target - x(s)) &lt; R_FACE_MIN) */
+    /** @return true if s lies in a freeze interval (abs(target - x(s)) &lt; Tracker.R_FACE_MIN); closed at L (6.9) */
     boolean isFrozen(double s) {
         return target != null && freezeIndex(s) >= 0;
     }
@@ -272,9 +271,17 @@ final class HeadingProfile {
         return (-kappa * pDotT * d2 + 2.0 * n * pDotT) / (d2 * d2);
     }
 
+    private static void requireFiniteTheta0(double theta0) {
+        if (!Double.isFinite(theta0)) {
+            throw new IllegalArgumentException("HeadingProfile: measured start heading theta0 must be finite, got "
+                    + theta0);
+        }
+    }
+
     private int freezeIndex(double s) {
         for (int i = 0; i < freezeStart.length; i++) {
-            if (s > freezeStart[i] && s < freezeEnd[i]) {
+            boolean closedAtEnd = freezeEnd[i] >= length && s >= length; // interval ending at L includes L
+            if (s > freezeStart[i] && (s < freezeEnd[i] || closedAtEnd)) {
                 return i;
             }
             if (freezeStart[i] == 0.0 && s <= 0.0 && freezeEnd[i] > 0.0) {
@@ -294,7 +301,7 @@ final class HeadingProfile {
 
     private static boolean inside(Translation2d target, List<Segment> segments, double s) {
         double[] g = evaluate(segments, s);
-        return Math.hypot(target.getX() - g[0], target.getY() - g[1]) < R_FACE_MIN;
+        return Math.hypot(target.getX() - g[0], target.getY() - g[1]) < Tracker.R_FACE_MIN;
     }
 
     private static double rawTheta(Translation2d target, List<Segment> segments, double s) {
