@@ -2,7 +2,9 @@ package frc.robot.Path;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import edu.wpi.first.wpilibj.Alert.AlertType;
 
@@ -11,6 +13,9 @@ final class PathWarnings {
 
     /** Jerk warning threshold is max(aAcc, aDec) / (5 * dt_nom) (section 10, C2). */
     static final double JERK_WARNING_DT_FACTOR = 5.0;
+
+    /** Start-warning texts already sent (C1, C2 are reported once per text). */
+    private static final Set<String> SENT_START_WARNINGS = new HashSet<>();
 
     private final String pathName;
     private final List<String> warnings = new ArrayList<>();
@@ -43,12 +48,17 @@ final class PathWarnings {
 
     /** Sends a start warning (C1, C2) once per text (9.12.3). */
     static void startWarning(String text) {
-        throw new UnsupportedOperationException("TODO phase 3");
+        synchronized (SENT_START_WARNINGS) {
+            if (!SENT_START_WARNINGS.add(text)) {
+                return;
+            }
+        }
+        PathLogger.get().alert(text, AlertType.kWarning, true);
     }
 
     /** Sets or clears a run-time alert A1 to A3 (9.12.3). */
     static void runtimeAlert(String text, AlertType type, boolean active) {
-        throw new UnsupportedOperationException("TODO phase 3");
+        PathLogger.get().alert(text, type, active);
     }
 
     /** @return max(aAcc, aDec) / (5 * dtNom): the jerk above which C2 is raised (7.13.7) */

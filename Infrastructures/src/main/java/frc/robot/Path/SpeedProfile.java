@@ -31,15 +31,15 @@ final class SpeedProfile {
     static final double PROFILE_TIME_GUARD = 10.0;
 
     /**
-     * Goal-capture gain k_p for callers without a follower config [1/s]; the section 10 default of
-     * {@code PathFollowerConfig.kP}. Temporary until PathFollowerConfig.defaults() (phase 3).
+     * Alias of {@code PathFollowerConfig.DEFAULT_KP}, kept only because the phase 2 tests reference it;
+     * production code passes {@code PathFollowerConfig.kP()} to {@link #build}.
      */
-    static final double DEFAULT_KP = 3.0;
+    static final double DEFAULT_KP = PathFollowerConfig.DEFAULT_KP;
     /**
-     * Position tolerance for callers without a follower config [m]; the section 10 default of pos_tol.
-     * Temporary until PathFollowerConfig.defaults() (phase 3).
+     * Alias of {@code PathFollowerConfig.DEFAULT_POS_TOL}, kept only because the phase 2 tests reference
+     * it; production code passes {@code PathFollowerConfig.posTol()} to {@link #build}.
      */
-    static final double DEFAULT_POS_TOL = 0.03;
+    static final double DEFAULT_POS_TOL = PathFollowerConfig.DEFAULT_POS_TOL;
     /** Nominal loop period of the offline profileTime run [s] (7.13.6). */
     static final double OFFLINE_DT = Tracker.DT_NOM;
 

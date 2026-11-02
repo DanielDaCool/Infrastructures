@@ -1,5 +1,10 @@
 package frc.robot.Path;
 
+import java.util.Objects;
+
+import edu.wpi.first.apriltag.AprilTagFieldLayout;
+import edu.wpi.first.apriltag.AprilTagFields;
+
 /**
  * Follower gains, tolerances, timeout and alliance flip (design doc sections 9.6, 10).
  * Immutable; each {@code withX} returns a new record.
@@ -33,19 +38,91 @@ public record PathFollowerConfig(
         double fieldLength,
         double fieldWidth) {
 
+    /** Default cross-track gain k_n [1/s] (section 10). */
+    static final double DEFAULT_KN = 3.0;
+    /** Default heading gain k_theta [1/s] (section 10). */
+    static final double DEFAULT_KTHETA = 4.0;
+    /** Default goal-capture gain k_p [1/s] (section 10). */
+    static final double DEFAULT_KP = 3.0;
+    /** Default lookahead time tau_lag [s] (section 10). */
+    static final double DEFAULT_TAU_LAG = 0.05;
+    /** Default position tolerance [m] (section 10, decision 10). */
+    static final double DEFAULT_POS_TOL = 0.03;
+    /** Default finish heading tolerance, 2 deg [rad] (section 10, decision 10). */
+    static final double DEFAULT_ANG_TOL = Math.toRadians(2.0);
+    /** Default settle time [s] (section 10, decision 10). */
+    static final double DEFAULT_SETTLE = 0.1;
+    /** Default start tolerance [m] (section 10). */
+    static final double DEFAULT_START_TOL = 0.5;
+    /** Default timeout factor (section 10, decision 10). */
+    static final double DEFAULT_TIMEOUT_FACTOR = 1.5;
+    /** Default timeout margin [s] (section 10, decision 10). */
+    static final double DEFAULT_TIMEOUT_MARGIN = 1.0;
+    /** Placeholder field length [m], used only if the default AprilTag layout cannot be loaded (section 10). */
+    static final double FALLBACK_FIELD_LENGTH = 16.54;
+    /** Placeholder field width [m], used only if the default AprilTag layout cannot be loaded (section 10). */
+    static final double FALLBACK_FIELD_WIDTH = 8.07;
+
     public PathFollowerConfig {
-        // TODO phase 3: every number finite and > 0 (V16), flipMode not null (V3)
+        requirePositive("kN", kN, "1/s");
+        requirePositive("kTheta", kTheta, "1/s");
+        requirePositive("kP", kP, "1/s");
+        requirePositive("tauLag", tauLag, "s");
+        requirePositive("posTol", posTol, "m");
+        requirePositive("angTolRad", angTolRad, "rad");
+        requirePositive("tSettle", tSettle, "s");
+        requirePositive("startTol", startTol, "m");
+        requirePositive("timeoutFactor", timeoutFactor, "-");
+        requirePositive("timeoutMargin", timeoutMargin, "s");
+        Objects.requireNonNull(flipMode, Point.nullMessage("PathFollowerConfig", "the flip mode"));
+        requirePositive("fieldLength", fieldLength, "m");
+        requirePositive("fieldWidth", fieldWidth, "m");
+    }
+
+    private static void requirePositive(String name, double value, String unit) {
+        if (!Double.isFinite(value) || value <= 0.0) {
+            throw new IllegalArgumentException("PathFollowerConfig." + name + " must be a finite number more than 0 ("
+                    + unit + "), but it is " + value
+                    + ". Start from PathFollowerConfig.defaults() and change only what you need.");
+        }
     }
 
     /**
      * Section 10 values (k_n 3, k_theta 4, k_p 3, tau_lag 0.05, pos_tol 0.03, ang_tol 2 deg,
      * t_settle 0.1, startTol 0.5, timeout 1.5 / 1.0, ROTATE); field size from the default
-     * AprilTag layout.
+     * AprilTag layout (loaded once; the placeholder 16.54 x 8.07 m if it cannot be loaded).
      *
      * @return the defaults
      */
     public static PathFollowerConfig defaults() {
-        throw new UnsupportedOperationException("TODO phase 3");
+        return new PathFollowerConfig(DEFAULT_KN, DEFAULT_KTHETA, DEFAULT_KP, DEFAULT_TAU_LAG, DEFAULT_POS_TOL,
+                DEFAULT_ANG_TOL, DEFAULT_SETTLE, DEFAULT_START_TOL, DEFAULT_TIMEOUT_FACTOR, DEFAULT_TIMEOUT_MARGIN,
+                FlipMode.ROTATE, DefaultField.LENGTH, DefaultField.WIDTH);
+    }
+
+    /** Field size of {@code AprilTagFieldLayout.loadField(kDefaultField)}, read once (as RobotPose.java:94). */
+    private static final class DefaultField {
+        static final double LENGTH;
+        static final double WIDTH;
+
+        static {
+            double length = FALLBACK_FIELD_LENGTH;
+            double width = FALLBACK_FIELD_WIDTH;
+            try {
+                AprilTagFieldLayout layout = AprilTagFieldLayout.loadField(AprilTagFields.kDefaultField);
+                if (layout.getFieldLength() > 0.0 && layout.getFieldWidth() > 0.0) {
+                    length = layout.getFieldLength();
+                    width = layout.getFieldWidth();
+                }
+            } catch (RuntimeException e) {
+                // keep the placeholder pair (section 10)
+            }
+            LENGTH = length;
+            WIDTH = width;
+        }
+
+        private DefaultField() {
+        }
     }
 
     /** @return a copy with kN changed */
