@@ -114,7 +114,7 @@ All symbols in this document. ASCII names are used for Greek letters, one spelli
 | Q_in, Q_out | arc entry and exit points | m | |
 | phi0, phi_P, dphi | arc start angle (angle of C -> start point), angle of P_i seen from C, signed sweep | rad | dphi + = CCW; arc length = `r·abs(dphi)` |
 | w_in, w_out | arc angle from Q_in to P_i and from P_i to Q_out | rad | both >= 0 |
-| rot90, cross, mod2pi, wrap | `rot90(x, y) = (-y, x)`; `cross(a, b) = a.x·b.y - a.y·b.x`; mod2pi into [0, 2·pi); wrap into [-pi, pi) | | wrap = `MathUtil.angleModulus` |
+| rot90, cross, mod2pi, wrap | `rot90(x, y) = (-y, x)`; `cross(a, b) = a.x·b.y - a.y·b.x`; mod2pi into [0, 2·pi); wrap into (-pi, pi] (what `MathUtil.angleModulus` returns: both +pi and -pi map to +pi, checked by running it) | | wrap = `MathUtil.angleModulus` |
 | s | arc length from the path start | m | s in [0, L] |
 | L | total path length | m | L > 0 (a zero-length path is rejected) |
 | k, m | segment index, number of segments | | m = 2n-3 for n >= 3 (zero-length STOP entries kept) |
