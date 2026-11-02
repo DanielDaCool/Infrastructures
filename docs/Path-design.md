@@ -4364,9 +4364,10 @@ Only the decisions that remain, and the values that must be measured. Everything
 3. **Default flip mode and field size for 2027.** The default is ROTATE (**Uncertain**: the 2027 field is unknown). Set the mode once per robot
    (`PathFollowerConfig.withFlip`) when the field is announced, and check the field size of `PathFollowerConfig.defaults()` against the official
    layout; the examples' 16.54 x 8.07 m is a placeholder.
-4. **Big-loop checks (simplification item S2, not applied).** The check run before removing the 30 deg line check (F2) and the sweep check (F3)
-   found that they still change 5.76% of random field-sized paths after the bulge cap and TAU_STOP (section 5.7.3); both are kept until the user
-   decides.
+4. **Big-loop checks: decided, F2 and F3 are kept** (**Decision**, user). Removing the 30 deg line check (F2) and the sweep check (F3) would change
+   5.76% of random field-sized paths even with the bulge cap and TAU_STOP (section 5.7.3; sweeps up to 709 deg and 45 self-crossing corners
+   without them, script). The sweep is about tau_turn + 2·(line tilt), and the line is fixed once the circle is fixed (it starts at the previous
+   point and is tangent to the circle), so limiting the tilt means shrinking the radius, which is what F2 and F3 do. No longer open.
 
 **Uncertain** items that need no decision but should be watched in testing: the time cost of a heading-kink cap on an arc (the
 whole arc) and of the ARC_VAR share (section 7.8), the one-loop quantization of a = 0 at arc entries (section 7.8), the G1 toy model
