@@ -17,6 +17,7 @@ together so they can be tested as one project.
 |---|---|---|
 | Kinematics | Swerve kinematics (field-relative and robot-relative), feed-forwards, and a swerve acceleration limiter. No vendor libraries. | [Guide](docs/Kinematics.md), [Design](docs/Kinematics-design.md) |
 | RobotPose | Pose estimation from module positions and gyro, plus Limelight and Quest vision sources. Needs Phoenix 6 and QuestNav. | [Guide](docs/RobotPose.md), [Design](docs/RobotPose-design.md) |
+| Path | Autonomous paths: points to rounded corners, heading and speed profiles, and a command that follows the path. Uses Kinematics; any pose source. No vendor libraries. Not yet run on a robot. | [Guide](docs/Path.md), [Design](docs/Path-design.md) |
 
 Also in `docs/`: [library-plan.md](docs/library-plan.md), the plan for packaging both modules as one
 importable library.

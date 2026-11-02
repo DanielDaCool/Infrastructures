@@ -3,6 +3,7 @@ package frc.robot.example;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import com.ctre.phoenix6.BaseStatusSignal;
 import com.ctre.phoenix6.CANBus;
@@ -23,10 +24,18 @@ import edu.wpi.first.units.measure.Angle;
 import edu.wpi.first.units.measure.AngularVelocity;
 import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.DriverStation.Alliance;
+import edu.wpi.first.wpilibj2.command.Command;
+import edu.wpi.first.wpilibj2.command.Commands;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 import frc.robot.Kinematics.DemaciaKinematics;
 import frc.robot.Kinematics.KinematicsConfig;
 import frc.robot.Kinematics.SwerveAccelerationLimiter;
+import frc.robot.Path.FollowPathCommand;
+import frc.robot.Path.Path;
+import frc.robot.Path.PathConstraints;
+import frc.robot.Path.PathFollowerConfig;
+import frc.robot.Path.PathsConfig;
+import frc.robot.Path.Point;
 import frc.robot.RobotPose.RobotPose;
 import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator.OdometryData;
 import frc.robot.RobotPose.Estimation.PhoenixOdometryThread;
@@ -111,6 +120,9 @@ public class ExampleSwerveWithPose extends SubsystemBase {
     private final Translation2d[] moduleLocations;
     private final DemaciaKinematics kinematics;
     private final SwerveAccelerationLimiter limiter;
+    private final KinematicsConfig kinematicsConfig;
+    private final PathsConfig pathsConfig;
+    private final PathFollowerConfig followerConfig = PathFollowerConfig.defaults(); // gains, tolerances, red flip (ROTATE)
     private final Pigeon2 pigeon;
     private final StatusSignal<Angle> yaw; // main thread copy (refreshed here, not by the thread) [deg]
     private final StatusSignal<AngularVelocity> yawRate; // [deg/s]
@@ -137,6 +149,8 @@ public class ExampleSwerveWithPose extends SubsystemBase {
         }
         this.modules = modules;
         this.moduleLocations = moduleLocations;
+        this.kinematicsConfig = kinematicsConfig;
+        this.pathsConfig = PathsConfig.fromModules(moduleLocations); // module radius; the other values are placeholders
         this.kinematics = new DemaciaKinematics(kinematicsConfig, moduleLocations);
         this.limiter = new SwerveAccelerationLimiter(kinematicsConfig);
         this.pigeon = pigeon;
@@ -325,6 +339,48 @@ public class ExampleSwerveWithPose extends SubsystemBase {
     }
 
     /**
+     * Measured field-relative speeds: the module states (with the gyro rate for omega) turned by the
+     * gyro heading. Same two lines as the re-sync in {@link #periodic}. For the path follower.
+     *
+     * @return measured speeds, blue-alliance origin [m/s, rad/s], omega CCW positive
+     */
+    public ChassisSpeeds getFieldSpeeds() {
+        ChassisSpeeds measured = kinematics.toChassisSpeeds(getModuleStates(), getGyroRate());
+        return ChassisSpeeds.fromRobotRelativeSpeeds(measured, heading());
+    }
+
+    /** Example path (blue alliance, meters). Replace with your own points; see docs/Path.md. */
+    public static Path examplePath() {
+        return new Path(
+                new Point(1, 2),
+                new Point(3, 4).withVelocity(1.5), // slow to at most 1.5 m/s at this corner
+                new Point(5, 2).stop(1.0))         // stop here for 1 s
+                .withName("example");
+    }
+
+    /**
+     * A fresh path-following command: on red it drives the flipped path, and the start pose is set
+     * (flipped too) first. Call it again for every autonomous run: a command can be used in one
+     * composition only, e.g. {@code chassis.follow(examplePath())}. Pass the blue path; the command flips it.
+     *
+     * @param path the path, written for the blue alliance
+     * @return a new command that requires this chassis
+     */
+    public Command follow(Path path) {
+        return Commands.defer(() -> {
+            Path active = path.forCurrentAlliance(followerConfig); // blue: the path itself; red: the flipped path
+            Pose2d start = new Pose2d(active.startPoint(), active.startHeading().orElse(getPose().getRotation()));
+            FollowPathCommand follow = new FollowPathCommand(
+                    path.withConstraints(PathConstraints.fromConfig(kinematicsConfig, pathsConfig)),
+                    this::getPose, this::getFieldSpeeds, this::driveFieldRelative, this)
+                    .withKinematics(kinematicsConfig)
+                    .withPathsConfig(pathsConfig)
+                    .withConfig(followerConfig); // the command flips the path itself
+            return Commands.runOnce(() -> setStartPose(start)).andThen(follow);
+        }, Set.of(this));
+    }
+
+    /**
      * Re-sync: when something else drove the robot last loop (just enabled, {@link #drive}, a path
      * follower), the limit starts from the measured speeds, not from what it sent long ago.
      * {@code periodic} runs before the commands, so the flag is still last loop's.
@@ -332,8 +388,7 @@ public class ExampleSwerveWithPose extends SubsystemBase {
     @Override
     public void periodic() {
         if (!limitedLastLoop) {
-            ChassisSpeeds measured = kinematics.toChassisSpeeds(getModuleStates(), getGyroRate());
-            lastFieldSpeeds = ChassisSpeeds.fromRobotRelativeSpeeds(measured, heading());
+            lastFieldSpeeds = getFieldSpeeds();
         }
         limitedLastLoop = false;
     }

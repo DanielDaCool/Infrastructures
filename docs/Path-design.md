@@ -1,13 +1,12 @@
 # Path – design and details (for mentors and developers)
 
-**Status: design, not implemented. Nothing in this document was compiled or run on a robot; numbers marked (script) were computed with Python re-implementations.**
+**Status: implemented; unit-tested in simulation (JUnit, not committed); not yet run on a robot. Numbers marked (script) were computed with Python re-implementations; the Java `profileTime` values are slightly lower (see the note in section 7.13.7). Line numbers cited for `ExampleSwerveWithPose.java` are from the file before `getFieldSpeeds()` and `follow(Path)` were added.**
 
 The student guide is [Path.md](Path.md). This page has everything behind it: how a list of points
 becomes a path, how the heading and the speed are chosen along it, how the follow command drives
-the robot, the full planned API, every default, and the test cases for the implementation.
+the robot, the full API, every default, and the test cases.
 
-The planned code lives in `Infrastructures/src/main/java/frc/robot/Path` (package `frc.robot.Path`).
-It does not exist yet. It uses the [Kinematics](Kinematics.md) module on the drivetrain side and takes
+The code is in `Infrastructures/src/main/java/frc/robot/Path` (package `frc.robot.Path`). It uses the [Kinematics](Kinematics.md) module on the drivetrain side and takes
 the pose from a `Supplier<Pose2d>`, so any pose source works, for example [RobotPose](RobotPose.md).
 
 ## 1. Contents
@@ -307,7 +306,7 @@ d < 2r, with no check.
   change in commanded speed (:214-216, :295-296); module positions private, no getter (:58, :66).
 - `ExampleSwerveWithPose` (example only): `getPose()` (:264), `driveFieldRelative` (:304-313: desaturate,
   limiter, `drive`), `drive` negates omega (:287-297), `setStartPose` (:259), measured speeds computed in
-  `periodic()` (:335-336) but not exposed; `getGyroRate()` (:217) and `heading()` (:204) are private.
+  `periodic()` (:335-336, before `getFieldSpeeds()` was added); `getGyroRate()` and `heading()` are private.
 - RobotPose: `getEstimatedPose` documented as blue-alliance origin (RobotPose.java:267, method :270);
   field size from `AprilTagFieldLayout.loadField(kDefaultField)` (:94-95); `initSendable` (:178);
   `getFuturePose` (:291). `PoseLogger` has `putData` (PoseLogger.java:41) and `alert` (:51).
@@ -2550,6 +2549,8 @@ v1 profileTime and timeout (jerkMax = 50, EX unless stated):
 | Shared example + P1.withVelocity(1.0) (ARC_VAR arc, at most 1.0 m/s at P1) | 4.06 s | - | 4.06 s | 7.09 s |
 | Tight arc + P1.withVelocity(0.5) (ARC_VAR arc) | 5.00 s | - | 5.00 s | 8.50 s |
 
+**Java values.** The table is from the Python simulation. The Java `profileTime` uses the continuous hand-over tail and is about 0.01 s per goal below the Python numbers: shared example 3.53 s (timeout 6.30 s), `P1.stop()` 4.30 s (timeout 7.45 s), `P1.stop()` variants and the other rows lower by the same small amount, `P1.withVelocity(1.0)` 4.05 s (timeout 7.08 s). The 3.54 / 4.32 / 4.06 s values elsewhere in this document carry the same difference. The closed-form peak of PROF-26 is 3.7094 m/s.
+
 #### 7.13.8 Plant simulation
 
 Model: the follower's plant (section 8.15): commands every 20 ms, dead time 0.035 s, first-order velocity lag 0.04 s, skid limiter
@@ -2819,7 +2820,7 @@ profileTime and timeout (jerk law) are in section 7.13.7 where computed:
 | P1.withVelocity(1.0) | ARC_VAR arc (cap 2.1273, aA = aD = 1.8); junctions [0, 2.1273, 1.0, 2.1273, 0]; braking for the arc from s = 1.1425, for P1 from s = 2.0092 | 3.7751 s (grid oracle 3.5770 s) | 4.06 s / 7.09 s |
 | P1 at 180 deg (heading-kink cap) | whole arc at 1.4088 | 4.2812 s (grid oracle 3.4372 s) | 4.54 s / 7.81 s |
 | Measured start v0 = 1.5 | peak 2.9188 | 2.9051 s | not computed |
-| DEF + motor curve, no heading anchors | arc 3.1910, peak 3.7069 | 2.3101 s | 2.78 s / 5.17 s |
+| DEF + motor curve, no heading anchors | arc 3.1910, peak 3.7094 | 2.3101 s | 2.78 s / 5.17 s |
 | DEF + motor curve, with the P1 90 deg anchor | kink cap 2.8176 < arc cap 3.191: whole arc at 2.8176, junctions [0, 2.8176, 2.8176, 2.8176, 0] | 2.4549 s | 2.88 s / 5.32 s |
 | Tight arc (0,0), (4,0).withRadius(0.3), (4,4) | arc 1.0954 | 4.3210 s | 4.62 s / 7.93 s |
 | Tight arc + P1.withVelocity(0.5) | ARC_VAR arc (cap 0.9798, aA = aD = 1.8); junctions [0, 0.9798, 0.5, 0.9798, 0] | 4.5577 s (grid oracle 4.4469 s) | 5.00 s / 8.50 s |
@@ -3474,8 +3475,7 @@ The follow command takes `Supplier<Pose2d> pose`, `Supplier<ChassisSpeeds> measu
 Measured speeds: field-relative, blue frame, omega CCW. Used for v0 at initialize, the stop arrival test, the window, stale-pose detection and
 telemetry; never fed back into the speed reference (the 2026 bug). In the example drivetrain the value is
 `fromRobotRelativeSpeeds(kinematics.toChassisSpeeds(getModuleStates(), getGyroRate()), heading())`, the expression `periodic` uses
-(ExampleSwerveWithPose.java:335-336). **Fact:** the example has no public getter for it (`getGyroRate` is private, :217); the user adds
-`getFieldSpeeds()` (section 9.13f).
+(ExampleSwerveWithPose.java:335-336). The example now has `getFieldSpeeds()` for it (section 9.13f); `getGyroRate` stays private.
 
 Each loop: `output.accept(new ChassisSpeeds(vx, vy, omega))`, vx and vy field-relative in the blue frame [m/s], omega CCW-positive [rad/s]. The
 drivetrain does the rest; reference **Fact**, `ExampleSwerveWithPose.driveFieldRelative` (:304-313):
@@ -3610,8 +3610,8 @@ Tests: section 13.4.
 ## 9. Public API
 
 The public Java API of package `frc.robot.Path`. It changes no math; it names the classes, every user error with its
-exact text, and the examples. Everything here is **Recommendation** (planned API) unless a section is cited. Nothing was
-compiled; the signatures were not checked against a Java compiler.
+exact text, and the examples. The signatures and examples below were checked against the implemented code, which is the final
+reference.
 
 ### 9.1 Conventions
 
@@ -3965,6 +3965,7 @@ Rules:
 - **Failure:** `end` sends zero speeds once; `holdEndCommand()` holds actively if the user composes it.
 - **Output:** never negates omega, never discretizes.
 - **Logging:** through `PathLogger.get()` (section 9.11); there is no per-command logger.
+- **Package-private test hooks** (not API): `FollowPathCommand.withClock(DoubleSupplier)` and two accessors for the tracker and the telemetry `Sendable`.
 - **Scheduling twice:** allowed (a fresh `initialize`); the flipped path is memoized in `Path`.
 - Not in v1: a re-plan hook (`withReplanHook`, result `FAILED_REPLAN`, section 8.9), starting at the current pose (resolution R5) and a
   mid-path start (section 8.2.5).
@@ -4030,7 +4031,7 @@ Telemetry keys are in section 8.13; RobotPose uses lower-case keys with spaces, 
 Principles: constructors throw for values that can never be right; the text says what is wrong, shows the value and says how to fix it (`{x}` is
 filled at run time). `IllegalArgumentException` (IAE) for bad values, `NullPointerException` (NPE) for null. Everything the library can repair is
 a warning. **Decision** (user, simplification pass): about ten exceptions for real user mistakes and about five build and start warnings; the
-rest were merged or dropped. The types and wording are proposals.
+rest were merged or dropped. The types and wording are those of the code, except where a note below says otherwise.
 
 #### 9.12.1 Exceptions
 
@@ -4043,11 +4044,11 @@ rest were merged or dropped. The types and wording are proposals.
 | V9 | `withRadius(r)` with r < 0 | `Point.withRadius` | IAE | `withRadius({r}): the radius must be 0 or more (meters). Use withRadius(0) to make the robot stop at this point, or leave withRadius out so the library chooses the radius.` |
 | V11 | `withVelocity(v)` with v < 0 | `Point.withVelocity` | IAE | `withVelocity({v}): the speed must be 0 or more (m/s). withVelocity(0) is the same as stop(). To limit the speed at a point use a positive number, for example withVelocity(1.0).` |
 | V13 | `stop(d)` with d < 0 | `Point.stop` | IAE | `stop({d}): the wait time must be 0 or more (seconds). Use stop() to stop without waiting, or stop(1.5) to wait 1.5 seconds.` |
-| V16 | a config value out of range: a `PathConstraints` field, a `PathsConfig` angular limit or jerk, or a `PathFollowerConfig` number not finite or not > 0; `PathsConfig.moduleRadius` < 0 or NaN | the record constructors | IAE | `{record}.{field} must be a finite number {more than 0 / of 0 or more} ({unit}), but it is {v}. Start from {PathConstraints.fromConfig(yourKinematicsConfig) / PathsConfig.defaults() / PathFollowerConfig.defaults()} and change only what you need.` |
+| V16 | a config value out of range: a `PathConstraints` field, a `PathsConfig` angular limit or jerk, or a `PathFollowerConfig` number not finite or not > 0; `PathsConfig.moduleRadius` < 0 or NaN | the record constructors | IAE | `PathConstraints` / `PathsConfig`: `{record}.{field} must be finite and > 0, got {v} (V16)` (`PathsConfig.moduleRadius must be finite and >= 0, got {v} (V16)`). `PathFollowerConfig`: `PathFollowerConfig.{field} must be a finite number more than 0 ({unit}), but it is {v}. Start from PathFollowerConfig.defaults() and change only what you need.` |
 | V19 | event fraction outside [0, 1] or NaN; event point index outside 0..n-1 | `Path.withEventAtFraction`, `Path.withEventAtPoint`, `PathEvent` resolution | IAE | fraction: `Event fraction {f} must be between 0 and 1 (0 = start of the path, 1 = end).` Index: `Event point index {i} does not exist: the path has {n} points, numbered 0 to {n-1}. Index 0 is the first point you passed to new Path(...).` |
 | V20 | an event command requires a subsystem the follower also requires | `FollowPathCommand` constructor | IAE | `The event at {where} needs the subsystem {subsystem}, which FollowPathCommand also needs. Scheduling the event would cancel the path. Make the event command not require the drivetrain (for example, use only the mechanism).` ({where} is `fraction {f}` or `point {i}`) |
 | V24 | no requirement | `FollowPathCommand` constructor | IAE | `FollowPathCommand needs the drivetrain as a requirement, for example new FollowPathCommand(path, swerve::getPose, swerve::getFieldSpeeds, swerve::driveFieldRelative, swerve). Without it, two commands could drive the robot at the same time.` |
-| V30 | a point has `stop()`, `stop(d)` or `withVelocity(0)` **and** `withRadius(r)` with r > 0 | `Path` constructor | IAE | `Point {i} has both stop() and withRadius({r}). A stop point is a sharp corner (the robot stops exactly on the point), so it has no arc. Remove withRadius({r}) to stop on the point, or remove stop() to drive through the corner on a round arc.` |
+| V30 | a point has `stop()`, `stop(d)` or `withVelocity(0)` **and** `withRadius(r)` with r > 0 | `Path` constructor | IAE | `Point {i} has both stop() and withRadius({r}). A stop point is a sharp corner (the robot stops exactly on the point), so it has no arc. Remove withRadius({r}) to stop on the point, or remove stop() to drive through the corner on a round arc.` If the stop and the radius come from two points merged (closer than 1 mm), the text is `Points {i} and {j} are less than 1 mm apart and were merged into one point, but point {a} has stop() and point {b} has withRadius({r}). ...` with the same advice. |
 
 Notes: neighbors closer than 1 mm are merged with warning W3, not rejected; two equal points far apart in the list (a loop back to P_0) are legal.
 Not errors, deliberately: a radius larger than fits (shrunk, W2), `withVelocity` above vMax (C2). The IDs V2, V5, V7, V8, V10, V12, V14, V15,
@@ -4086,7 +4087,7 @@ Run-time alerts, through `PathLogger.alert`:
 
 ### 9.13 Examples
 
-All examples are **planned API**; none was compiled. Imports are omitted except in the first.
+All examples use the implemented API. Imports are omitted except in the first. The wiring example (f) is built into `ExampleSwerveWithPose` (`getFieldSpeeds()`, `follow(Path)`).
 
 **(a) Minimal 3-point path**
 
@@ -4177,22 +4178,22 @@ placed by fraction or by point index only.
 
 Based on `ExampleSwerveWithPose.java` (**Fact** for every cited line; the example is not used by the robot):
 
-| Follower input | In the example | Cite |
-|---|---|---|
-| `Supplier<Pose2d>` | `getPose()`, blue-alliance origin | ExampleSwerveWithPose.java:264 |
-| `Consumer<ChassisSpeeds>` | `driveFieldRelative(ChassisSpeeds wanted)`: desaturate, limiter, `drive`, remembers `lastFieldSpeeds` | :304-313 |
-| `Supplier<ChassisSpeeds>` (measured, field-relative) | **missing**; the expression is used in `periodic()` | :335-336 |
-| Limiter re-sync when the path starts | `periodic()` does it when the last loop did not use `driveFieldRelative` | :333-339 |
-| Start pose for the auto | `setStartPose(Pose2d)` | :259 |
-| Module locations | passed to the constructor; not stored as a public value | :133-141 |
+| Follower input | In the example |
+|---|---|
+| `Supplier<Pose2d>` | `getPose()`, blue-alliance origin |
+| `Consumer<ChassisSpeeds>` | `driveFieldRelative(ChassisSpeeds wanted)`: desaturate, limiter, `drive`, remembers `lastFieldSpeeds` |
+| `Supplier<ChassisSpeeds>` (measured, field-relative) | `getFieldSpeeds()` (added for Path; `periodic()` now calls it) |
+| Limiter re-sync when the path starts | `periodic()` does it when the last loop did not use `driveFieldRelative` |
+| Start pose for the auto | `setStartPose(Pose2d)` |
+| Module locations | passed to the constructor; `PathsConfig.fromModules(moduleLocations)` is built from them |
 
-`getGyroRate()` (:217) and `heading()` (:204) are private, so the user adds one public method inside the drivetrain class:
+`getGyroRate()` and `heading()` are private, so the drivetrain class needs one public method (it is in `ExampleSwerveWithPose`; `follow(Path)` there is the `follow` below):
 
 ```java
 /** Measured field-relative speeds [m/s, rad/s], omega CCW, blue-origin field frame. For FollowPathCommand. */
 public ChassisSpeeds getFieldSpeeds() {
-    ChassisSpeeds measured = kinematics.toChassisSpeeds(getModuleStates(), getGyroRate());  // as in periodic(), :335
-    return ChassisSpeeds.fromRobotRelativeSpeeds(measured, heading());                      // :336
+    ChassisSpeeds measured = kinematics.toChassisSpeeds(getModuleStates(), getGyroRate());  // as in periodic() before this method existed
+    return ChassisSpeeds.fromRobotRelativeSpeeds(measured, heading());
 }
 ```
 
@@ -4466,7 +4467,7 @@ gaps are intentional.
 | PROF-23 | heading 0 -> 180 deg at P1, alphaMax 4·pi, e_allow 5 deg | J at P1 = 1.4088 (kink cap); the whole arc at 1.4088, junctions [0, 1.4088, 1.4088, 1.4088, 0]; 4.2812 s (grid oracle 3.4372 s) |
 | PROF-24 | motor curve a_0 = 9, v_free = 5.3, 0 -> 2 m/s | ds = 0.3010 m, dt = 0.2790 s; inverting ds = 0.3010 gives 2.000 |
 | PROF-25 | `min(7.2, 9·(1 - v/5.3))`, 0 -> 2 m/s | knee 1.06; ds = 0.3068 m, dt = 0.2948 s |
-| PROF-26 | shared example geometry, DEF + motor curve, **no heading anchors** (theta0 = 0, no `withAngle`) | span = grid = 2.3101 s; peak 3.7069; arc 3.1910 |
+| PROF-26 | shared example geometry, DEF + motor curve, **no heading anchors** (theta0 = 0, no `withAngle`) | span = grid = 2.3101 s; peak 3.7094; arc 3.1910 |
 | PROF-26b | shared example as in section 3 (P1 `withAngle(90 deg)`), DEF + motor curve | kink cap 2.8176 at P1; the whole arc at 2.8176; junctions [0, 2.8176, 2.8176, 2.8176, 0]; span time 2.4549 s; v1 time 2.88 s |
 | PROF-27 | tight arc (0,0), (4,0).withRadius(0.3), (4,4), EX | spans [3.7819, 0.2426, 0.2426, 3.7819]; arc 1.0954; 4.3210 s (span = grid) |
 | PROF-29 | PathConstraints with aLat = 0 or NaN | IAE V16 |

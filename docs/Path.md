@@ -10,9 +10,8 @@ along it. It uses the [Kinematics](Kinematics.md) module for the drivetrain and 
 source, for example [RobotPose](RobotPose.md).
 
 > [!WARNING]
-> **Planned API, not built or tested.** Everything below describes the *planned* API. Nothing here has
-> been compiled, run in simulation or tested on a robot, and names may still change. The numbers are
-> starting values from the design report, not tuned values.
+> **Status: implemented; unit-tested in simulation (JUnit, not committed); not yet run on a robot.** The
+> numbers are starting values from the design report, not tuned values.
 
 > [!NOTE]
 > This page is the student guide. The geometry, the heading and speed profiles, the follower, every
@@ -68,11 +67,11 @@ source, for example [RobotPose](RobotPose.md).
 **1. Write the points.** Meters, on the blue-alliance side of the field (x toward the red wall, y to the left).
 
 ```java
-Path path = new Path(new Point(1, 2), new Point(3, 4), new Point(5, 2));
+Path path = new Path(new Point(1, 2), new Point(3, 4), new Point(5, 2));   // also: Path.of(List<Point>)
 ```
 
-**2. Add `getFieldSpeeds()` to your drivetrain.** The follower needs the real speed of the robot. In
-`ExampleSwerveWithPose` the same two lines are in `periodic()` (lines 335-336):
+**2. Add `getFieldSpeeds()` to your drivetrain.** The follower needs the real speed of the robot. It is
+already in `ExampleSwerveWithPose` (which also has a `follow(Path)` method like step 3):
 
 ```java
 public ChassisSpeeds getFieldSpeeds() {
@@ -222,7 +221,7 @@ on the dashboard. The gains and tolerances are `PathFollowerConfig` settings, fo
 1. **Settings of the drivetrain first.** `KinematicsConfig` (`latency`, speed limits) must be right. Path does not
    fix a drivetrain that does not follow its commands.
 2. **Measure the lag.** Drive a straight line, start the robot 0.2 m to the side, and look at how `eN` goes to zero.
-   Fit it to `exp(-k_n * (t - lag))`, or compare `vRef` with `vMeas`. The planned model value is 0.085 s (not
+   Fit it to `exp(-k_n * (t - lag))`, or compare `vRef` with `vMeas`. The design model value is 0.085 s (not
    measured).
 3. **`kN`** (default 3.0). Raise it until `eN` overshoots on the step, then lower it by 25%. Stay below 4 until the lag
    is measured.
@@ -284,7 +283,7 @@ Path adds no logging library.
 
 ## Project structure
 
-All paths are relative to `Infrastructures/src/main/java/frc/robot/Path` (planned).
+All paths are relative to `Infrastructures/src/main/java/frc/robot/Path` (`frc.robot.Path`).
 
 | Path | Description |
 |---|---|
