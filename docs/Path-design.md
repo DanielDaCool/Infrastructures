@@ -58,7 +58,8 @@ drivetrain's field-relative drive method.
 3. **Heading and speed profiles, in `initialize()`.** The heading is piecewise linear in s between
    points that have an angle. The speed is a closed-form profile per span (a piece of path with
    constant limits): speed up along the motor curve, cruise, slow down. Arcs are driven at constant speed,
-   so the speed changes only on lines. Junction speeds come from one backward and one forward pass. Stops
+   so the speed changes only on lines, except on the arc of a point with `withVelocity`, which slows to at most that speed at
+   the point inside a fixed share of the grip (ARC_VAR, section 7.8). Junction speeds come from one backward and one forward pass. Stops
    split the profile.
 4. **Follower, every 20 ms.** The robot must start within 0.5 m of P0. Project the pose onto the path to get progress s*. Command the speed
    with a jerk-aware online trapezoid law whose limits come from the profile (each loop it speeds up, holds or brakes so
@@ -80,7 +81,7 @@ drivetrain's field-relative drive method.
 | Continuity | G1 (line + arc) in v1; clothoids are v2 if a logged criterion says so (section 5.12) | Closed-form geometry; the speed profile handles the curvature step |
 | User stop | `stop()`, `stop(dwell)`, `withVelocity(0)`; removes the corner's arc (section 5.8.7) | At rest an arc buys nothing; swerve changes direction at rest |
 | Heading | Piecewise linear in s between anchors, from the start heading to the first anchor, hold after the last; shortest way; face-target mode (section 6) | Constant heading rate per span, so the speed caps stay exact |
-| Speed profile | Closed-form trapezoid per span with motor-curve speed-up, constant speed on every arc, junction passes (section 7) | Equals the time-optimal grid profile when every arc is driven at its curvature cap; stays inside the limiter |
+| Speed profile | Closed-form trapezoid per span with motor-curve speed-up, constant speed on every arc except the arc of a `withVelocity` point (ARC_VAR), junction passes (section 7) | Equals the time-optimal grid profile when every arc is driven at its curvature cap; stays inside the limiter |
 | Runtime speed | Jerk-aware online trapezoid law (brief decision 18): limits from the per-span profile, stopping distance from (v, a), jerkMax default 50 m/s^3 (sections 7.13, 8.3.7) | No stall at the start or after a stop; braking by position; jerk-limited speed with no overshoot in simulation |
 | Projection | Windowed, monotonic progress, window capped at the next stop (section 8.2.3) | No jumps to another branch of a self-approaching path |
 | Finish | 0.03 m, 2 deg, 0.1 s settle; timeout `1.5·profileTime + 1 s`; zero speed once on failure (section 8.7) | Brief decision; a command that never ends blocks autonomous sequences |
@@ -154,6 +155,7 @@ All symbols in this document. ASCII names are used for Greek letters, one spelli
 | v_in, v_out | entry and exit speed of a span | m/s | |
 | a, a_t, a_n | tangential acceleration (+ speeding up), tangential, lateral `v^2·kappa` | m/s^2 | a_n + toward N |
 | aAccEff(v, s) | effective speed-up limit at speed v and progress s | m/s^2 | section 7.6.5 |
+| rho_lat | grip share of an ARC_VAR span (ARC_RHO = 0.8): cap `sqrt(rho_lat·aLat/abs(kappa))`, tangential limits `sqrt(1 - rho_lat^2)` = 0.6 of aAcc and aDec | | section 7.8 |
 | a_0, v_free, v_knee | motor-curve stall acceleration (`0.9·maxForwardAccel`), free speed, knee speed | m/s^2, m/s, m/s | section 7.9 |
 | R_mod | largest distance from the robot center to a module | m | robot frame |
 | vWheelMax | `KinematicsConfig.maxAllowedModuleVelocity` | m/s | |
@@ -1532,7 +1534,7 @@ it needs the measured start speed and heading. It is a short table, one row per 
 | `sStart[k]`, `l[k]` | start and length of the span | m |
 | `kappa[k]` | curvature (constant on the span) | 1/m |
 | `dtheta[k]` | heading slope theta' (constant on the span, section 6.4) | rad/m |
-| `kind[k]` | LINE or ARC; an ARC span has aA = aD = 0 (constant speed, section 7.8) | |
+| `kind[k]` | LINE, ARC or ARC_VAR; an ARC span has aA = aD = 0 (constant speed); an ARC_VAR span (the arc of a `withVelocity` point) has the grip-shared limits of section 7.8 | |
 | `vCap[k]` | span cap: highest allowed speed on the span | m/s |
 | `aA[k]`, `aD[k]` | speed-up limit at rest, slow-down limit | m/s^2 |
 | `vB[j]` | junction speed after the backward pass (j = 0..K) | m/s |
@@ -1652,7 +1654,8 @@ sample; on the shared example both give 3.2723 s (script).
 
 Exceptions, where speed-dependent limits make a pure trapezoid inexact:
 - arcs: the traction ellipse makes the speed-change limit on an arc depend on v; v1 avoids this by driving every arc
-  at constant speed (section 7.8);
+  at constant speed, except the arc of a `withVelocity` point, which gets a fixed grip share with constant limits (ARC_VAR,
+  section 7.8);
 - speed-up above the motor-curve knee, handled in closed form (section 7.9);
 - face-target heading: theta' changes continuously, handled by sub-spans with conservative caps (section 6.9);
 - v2 clothoids: kappa changes linearly, handled by sub-spans.
@@ -1677,7 +1680,8 @@ Spans k = 0..K-1, junctions j = 0..K. Junction j is the start of span j; junctio
 
 ```
 span cap      vCap[k] = min( vMax,
-                             sqrt(aLat/abs(kappa[k]))                     (on an arc, section 7.4.3),
+                             sqrt(aLat/abs(kappa[k]))                     (on an arc, section 7.4.3;
+                                                                           sqrt(rho_lat*aLat/abs(kappa[k])) on ARC_VAR, 7.8),
                              omegaMax/abs(theta'[k])                      (if theta'[k] != 0),
                              0.9*vWheelMax/(1 + abs(theta'[k])*R_mod)     (if R_mod known) )
 junction cap  J[j]    = min( vCap[j-1], vCap[j],                          (the spans on both sides)
@@ -1687,7 +1691,8 @@ junction cap  J[j]    = min( vCap[j-1], vCap[j],                          (the s
               J[first junction of a sub-profile after a stop] uses the normal caps, NOT 0     (section 7.10.2)
 ```
 
-On an arc span aA = aD = 0, so the junction passes give all junctions of one arc the same speed (section 7.8).
+On a constant-speed arc span aA = aD = 0, so the junction passes give all junctions of that arc the same speed. The arc of a
+`withVelocity` point is ARC_VAR instead: it brakes into the point and speeds up after it inside a grip share (section 7.8).
 
 #### 7.4.1 vMax
 
@@ -1695,22 +1700,25 @@ On an arc span aA = aD = 0, so the junction passes give all junctions of one arc
 
 #### 7.4.2 withVelocity (point cap at a junction)
 
-**Decision** (**Recommendation**, kept by the integration; the arc case changed in the simplification pass): the cap
-applies at the waypoint's single s value. On a straight part (a PASS marker, section 5.8.3) it means "pass this point
-no faster than v_w": the backward pass brakes before the point and the forward pass speeds up after it, so the robot
-never cruises at v_w. On a corner the point lies on an arc, and every arc is driven at constant speed (section 7.8),
-so **the whole arc** is driven at no more than v_w. Ranges are v2 speed zones (decision 5).
+**Decision** (**Recommendation**, kept by the integration; the arc case is a **Decision** of the user: only the arc of the point may
+change speed): the cap applies at the waypoint's single s value: the robot passes the point at no more than v_w. On a straight part
+(a PASS marker, section 5.8.3) the backward pass brakes before the point and the forward pass speeds up after it, so the robot never
+cruises at v_w. On a corner the point lies on an arc, and that arc becomes ARC_VAR (section 7.8): it brakes into the point and speeds
+up after it with a fixed share of the grip, so again the cap acts at the point itself. Every other arc keeps its constant speed.
+Ranges are v2 speed zones (decision 5).
 
 Rules:
 - `withVelocity(0)` means `stop()` (decision 15). `withVelocity(v)` with v < 0 throws (V11).
 - `P_0.withVelocity(v)`: ignored, warning W4. The start speed is the measured speed.
 - `P_{n-1}.withVelocity(v)`: ignored in v1, warning W4 (the end speed is 0). In v2 it becomes the end speed (section 7.4.7).
 - A value above vMax has no effect (warning C2).
+- On a corner, v_w at or above the arc's ARC_VAR cap (89% of its curvature cap) leaves the arc at constant speed, then at most v_w
+  (section 7.8): an ARC_VAR arc could not even reach v_w there.
 
-Example: `P1.withVelocity(1.0)` on the shared example sets J[2] = 1.0. With aA = aD = 0 on the arc the passes carry it
-over the whole arc: junctions vF = [0, 1.0, 1.0, 1.0, 0]. Braking for the arc entry starts on line 0 at s = 0.8487 m
-(peak 2.2566 m/s); trapezoid profile time **5.2576 s** (script), v1 time 5.52 s with the jerk law. The grid oracle
-with the exact ellipse, which may change speed on the arc, gives 3.5770 s (Appendix B).
+Example: `P1.withVelocity(1.0)` on the shared example sets J[2] = 1.0. Both arc spans are ARC_VAR (cap 2.1273 m/s, aA = aD =
+1.8 m/s^2): junctions vF = [0, 2.1273, 1.0, 2.1273, 0]. Braking for the arc entry starts on line 0 at s = 1.1425 m (peak 2.6182 m/s),
+braking for P1 on the arc at s = 2.0092 m; trapezoid profile time **3.7751 s** (script; 5.2576 s with the earlier rule that held every arc at
+constant speed), v1 time 4.06 s with the jerk law (was 5.52 s). The grid oracle with the exact ellipse gives 3.5770 s (Appendix B).
 
 #### 7.4.3 Curvature cap
 
@@ -1781,7 +1789,8 @@ v_end^2 = v_start^2 + 2*a*l          (exact for constant a)
 ```
 J[j] = junction caps (section 7.4);  vB = copy(J)
 backward:  for j = K-1 down to 0:  vB[j] = min(vB[j], sqrt(vB[j+1]^2 + 2*aD[j]*l[j]))
-                                   if span j is a line that starts at an arc exit: vB[j] = min(vB[j], vJerk(j))   (section 7.8)
+                                   if span j is a line that starts at a constant-arc exit, or the first span of an ARC_VAR arc:
+                                       vB[j] = min(vB[j], vJerk(j))                                                (section 7.8)
 forward:   vF = copy(vB);  vF[0] = min(vF[0], v0)
            for j = 1 .. K:         vF[j] = min(vF[j], F_{j-1}(vF[j-1], l[j-1]))
 ```
@@ -1846,16 +1855,16 @@ the speed-up in time, at run time:
 ```
 v_cmd[k] = min( vBack(s*_k), v_cmd[k-1] + aAccEff(v_cmd[k-1], s*_k) * dt )
 v_cmd[-1] = v0                                       (dt measured by the follower, nominal 0.02 s)
-aAccEff(v, s) = 0 on an arc (no speed-up on an arc, section 7.8); on a line:
-                min( aAcc,
+aAccEff(v, s) = 0 on a constant-speed arc (no speed-up there, section 7.8); on a line or an ARC_VAR span:
+                min( aAcc   (sqrt(1 - rho_lat^2)*aAcc on ARC_VAR),
                      alphaMax/abs(theta'(s))                                  (if theta' != 0),
                      0.9*maxForwardAccel*max(0, 1 - v/freeSpeed) )            (motor curve, if the config is given)
 ```
 
 - `dv/dt = a` in time is the same constraint as `v·dv/ds = a` in s. If the robot tracks, it moves exactly along vProf.
 - Braking stays tied to position (vBack(s*)), so stops and corners are safe even if the robot falls behind.
-- The ramp uses the motor curve exactly, not the span's constant aA. On an arc it holds the speed the robot had at the
-  arc entry.
+- The ramp uses the motor curve exactly, not the span's constant aA. On a constant-speed arc it holds the speed the robot had
+  at the arc entry.
 - The follower adds the lag lead and the hand-over point on top (section 8.3.7).
 
 Example (no jerk limit): from rest with aAcc = 3, the commands are 0.06, 0.12, 0.18 m/s in successive loops, until they meet
@@ -1899,7 +1908,7 @@ q2 = l - (vCap^2 - v_out^2)/(2*aD)           (slow-down starts)
 if q1 <= q2:  cruise exists.  t = (vCap - v_in)/aA + (q2 - q1)/vCap + (vCap - v_out)/aD
 else:         peak at q* = (v_out^2 - v_in^2 + 2*aD*l)/(2*(aA + aD)),  v_p = sqrt(v_in^2 + 2*aA*q*)
               t = (v_p - v_in)/aA + (v_p - v_out)/aD
-aA = aD = 0 (an arc, section 7.8; then v_in = v_out):  v = v_in on the whole span,  t = l/v_in
+aA = aD = 0 (a constant-speed arc, section 7.8; then v_in = v_out):  v = v_in on the whole span,  t = l/v_in
 ```
 
 a(q) is +a(v) in speed-up, 0 in cruise, and -aD in slow-down.
@@ -1918,7 +1927,7 @@ side (section 8.1), and a line ends with a speed > 0; if it ever happens, throw 
 zero-length span, which is merged away. Clamp the
 radicands at 0; if q1 or q2 lands outside [0, l], use the "else" branch.
 
-### 7.8 Arcs at constant speed
+### 7.8 Arcs at constant speed, and ARC_VAR at a withVelocity point
 
 Tangential and lateral acceleration share the tire grip. The record has a limit per direction, so the limit is an ellipse:
 
@@ -1932,12 +1941,13 @@ limiter's skid disk.
 
 **Rule** (**Decision**, user, simplification pass; it replaces the earlier two arc modes, one at the arc's cap and one
 with a traction share for speed changes on the arc): **every arc is driven at constant speed; the speed changes only on
-lines.** On every arc span `aA = aD = 0` and the span cap is `min(vMax, sqrt(aLat/abs(kappa)), rotation cap, wheel cap)`.
-The junction passes then give all junctions of one arc the same speed, the **arc speed**:
+lines**, with one exception, the arc of a `withVelocity` point (ARC_VAR, below). On every constant-speed arc span `aA = aD = 0` and
+the span cap is `min(vMax, sqrt(aLat/abs(kappa)), rotation cap, wheel cap)`. The junction passes then give all junctions of one
+such arc the same speed, the **arc speed**:
 
 ```
 v_arc = min( sqrt(aLat/abs(kappa)),                curvature cap (7.4.3)
-             withVelocity of the arc's waypoint,     point cap (7.4.2)
+             withVelocity of the arc's waypoint,     point cap (7.4.2), when it does not make the arc ARC_VAR
              heading-kink cap at the waypoint,       (7.4.6)
              rotation and wheel caps of both arc spans,
              vB at the arc exit,                     backward pass, jerk-aware on the line after the arc (below)
@@ -1946,41 +1956,90 @@ v_arc = min( sqrt(aLat/abs(kappa)),                curvature cap (7.4.3)
 
 On the arc `a_t = 0` and `a_n = v_arc^2·abs(kappa) <= aLat`, so the arc is inside the ellipse by construction, with no
 mode loop and no traction share to tune. The runtime law follows the same rule: it reaches the arc speed with a = 0 by the
-arc entry and holds it on the arc; it does not speed up on an arc and brakes there only in an emergency (section 7.13.4).
+arc entry and holds it on the arc; it does not speed up on a constant-speed arc and brakes there only in an emergency (section 7.13.4).
 A speed-up on the line after an arc starts at the arc exit.
 
-**Cost.** The span method is exact (equal to the grid oracle with the exact ellipse, Appendix B) whenever every arc is
-driven at its curvature cap, the common case, because the backward pass brakes on the line before the arc. When a point
-cap on the arc binds, the whole arc is driven at that cap, not only the point (script):
+**ARC_VAR: the arc of a `withVelocity` point** (**Decision**, user: `withVelocity(v)` caps the speed at the point itself, so only
+that point's arc may change speed). The arc through a waypoint P_i with `withVelocity(v)` is already split at s(P_i) (section 7.3.1).
+If v is below the ARC_VAR cap of every span of that arc, all its spans become **ARC_VAR**, with a fixed share of the grip (the share
+rule of the earlier design, kept for this arc only; ARC_RHO = rho_lat = 0.8, **Recommendation**):
 
-| Path | Grid + ellipse (Appendix B) | Span method, constant-speed arcs | Penalty | Earlier arc rule (removed) |
+| Span kind | Cap | aA, aD on the span | Ellipse check |
+|---|---|---|---|
+| ARC (constant speed) | `sqrt(aLat/abs(kappa))` | 0, 0 | a_t = 0, a_n <= aLat: on the ellipse |
+| ARC_VAR | `sqrt(rho_lat·aLat/abs(kappa))` | `sqrt(1 - rho_lat^2)·aAcc`, `sqrt(1 - rho_lat^2)·aDec` | `(a_n/aLat)^2 <= rho_lat^2`, `(a_t/aT)^2 <= 1 - rho_lat^2`: sum <= 1 |
+
+Both kinds also take the rotation and wheel caps; on ARC_VAR, alphaMax/abs(theta') lowers aA and aD as on a line, and the speed-up
+uses the constant `aA = min(sqrt(1 - rho_lat^2)·aAcc, 0.9·maxForwardAccel·(1 - vCap/freeSpeed))` (motor limit at the span cap; arc caps
+are low speeds, so this costs little). With rho_lat = 0.8 the cap drops to sqrt(0.8) = 89.4% of the curvature cap and the tangential
+limits to 60%. Example: r = 1.4142, aLat = 4, aAcc = aDec = 3 give cap 2.1273 m/s and aA = aD = 1.8 m/s^2; at the cap
+a_n = 3.2 = 0.8·aLat, and with a_t = 1.8 = 0.6·aT the use is 0.64 + 0.36 = 1.
+
+Selection, once per sub-profile before the passes (mechanical, no loop):
+
+```
+for every waypoint P_i with withVelocity(v), v > 0, that lies inside an arc:
+    capVar = min over the spans of that arc of the ARC_VAR span cap (with the rotation and wheel caps)
+    if v < capVar:  every span of that arc is ARC_VAR; J at P_i = min(v, the other junction caps)
+    else:           the arc stays constant speed; its arc speed is at most v
+```
+
+The second branch keeps the cap at the point and is the faster choice: there v >= capVar (at least 89% of the curvature cap), so an
+ARC_VAR arc could not even reach v. Example (script): tight arc + P1.withVelocity(1.0) (ARC_VAR cap 0.9798, curvature cap 1.0954): the
+arc is driven at 1.0 m/s, trapezoid 4.4075 s, v1 time 4.70 s.
+
+On an ARC_VAR arc the junction passes work as on lines: the backward pass brakes on the span into P_i, the forward pass speeds up on
+the span after it. The junctions at the two ends of the arc take the ARC_VAR cap (the smaller span cap on both sides), so the robot
+reaches it on the line before the arc. The runtime law reaches the ARC_VAR entry with a = 0 like every arc entry, may then brake and
+speed up inside the span's limits (traction clamp `a >= -aD`, "up" capped by aA), and passes P_i at no more than v (section 7.13.4).
+A heading-kink cap at the waypoint of an ARC_VAR arc then also acts at the point only. Face-target sub-spans of the arc are all
+ARC_VAR; the junctions between them only need v <= vt.
+
+**Why a = 0 at the ARC_VAR entry** (**Recommendation**, chosen in this change; script). The entry speed is at most the ARC_VAR cap, so
+with a = 0 there the use at the entry is at most rho_lat^2 = 0.64, and inside the arc the traction clamp keeps it <= 1. A speed-only
+entry (the robot may keep braking from the line, where aD is larger, into the arc) reached 1.198 on ARC_VAR spans (above 1 in 5 of 428
+random chains below the C2 threshold); with a = 0 the largest was 0.9505 (random chains below). The entry also gets the room-to-brake
+cap vJerk (end of this section), so from a = 0 at the entry the law can meet P_i and every later limit inside the ARC_VAR share; in
+the same chains vJerk at the entry changed the largest use by less than 0.005 and the summed time by +0.13%, so it is a guarantee more
+than a fix (**Inference**).
+
+**Cost.** The span method is exact (equal to the grid oracle with the exact ellipse, Appendix B) whenever every arc is
+driven at its curvature cap, the common case, because the backward pass brakes on the line before the arc. A `withVelocity` on an
+arc costs the ARC_VAR share; a heading-kink cap on an arc still slows the whole arc (script):
+
+| Path | Grid + ellipse (Appendix B) | Span method | Penalty | Every arc constant (before ARC_VAR) |
 |---|---|---|---|---|
 | Shared example, EX | 3.2723 s | 3.2723 s | 0.00% | 3.2723 s |
-| Shared example + P1.withVelocity(1.0) | 3.5770 s | 5.2576 s (arc at 1.0) | +47.0% | 3.7751 s |
+| Shared example + P1.withVelocity(1.0) | 3.5770 s | 3.7751 s (ARC_VAR) | +5.54% | 5.2576 s (+47.0%) |
 | Tight arc: (0,0), (4,0).withRadius(0.3), (4,4) | 4.3210 s | 4.3210 s | 0.00% | 4.3210 s |
-| Tight arc + P1.withVelocity(0.5) | 4.4469 s | 5.1528 s (arc at 0.5) | +15.9% | 4.5577 s |
+| Tight arc + P1.withVelocity(0.5) | 4.4469 s | 4.5577 s (ARC_VAR) | +2.49% | 5.1528 s (+15.9%) |
 | (0,0), (4,0), (4,1): short exit line, r = 0.5 | 3.0920 s | 3.0919 s | 0.00% | 3.0919 s |
 | Shared example, DEF + motor curve (no heading anchors) | 2.3101 s | 2.3101 s | 0.00% | 2.3101 s |
 | Tight arc, DEF + motor curve | 3.1056 s | 3.1055 s | 0.00% | 3.1055 s |
+| Shared example, P1 at 180 deg (heading-kink cap 1.4088), EX | 3.4372 s | 4.2812 s (whole arc at 1.4088) | +24.6% | 4.2812 s |
+
+The ARC_VAR rows equal the earlier two-mode rule with the same share (3.7751 and 4.5577 s), which used it on these arcs too.
 
 With the shared example's P1 `withAngle(90 deg)` anchor and DEF + motor curve, the heading-kink cap at P1 (2.8176 m/s) is
 below the arc cap (3.191 m/s), so the whole arc is driven at 2.8176 m/s: junctions vF = [0, 2.8176, 2.8176, 2.8176, 0], span
 time **2.4549 s** (script; 2.439 s with the earlier rule). With EX the anchor changes nothing (its kink cap 2.818 is above the
 EX arc cap 2.3784).
 
-**Recommendation** for users: a speed limit on a corner point slows the whole arc. To slow down only briefly, put the limit on a
-point of a straight part (a PASS marker), or make the corner tighter with `withRadius`.
+**Recommendation** for users: `withVelocity` on a corner point limits the speed at that point; the robot brakes on the arc into the
+point and speeds up after it, with 89% of the arc's curvature cap on that arc. A heading turn that is too fast for a corner (the
+heading-kink cap) slows the whole arc; spread the turn over more path (an earlier anchor) or use a larger radius.
 
 **Runtime check** (ideal tracking, 50 Hz, the law of section 7.13; script). Largest traction-ellipse use
 `(a_t/aT)^2 + (a_n/aLat)^2` at an arc entry, relative to the profile limits:
 
-| Path, jerkMax 50 | Use at arc entry | v1 time (ideal) |
+| Path, jerkMax 50 | Use at arc entry (ARC_VAR: largest on the arc) | v1 time (ideal) |
 |---|---|---|
 | Shared example, EX / DEF + motor | 0.9703 / 0.9955 | 3.54 s / 2.78 s |
 | Tight arc, EX / DEF + motor | 0.9472 / 0.8892 | 4.62 s / 3.58 s |
 | Two arcs joined by a 0.77 m line, the second faster: (0,0), (4,0), (5,1.2).withRadius(1.0), (9,1.2), EX | 0.9639 | 5.22 s |
 | Two arcs joined by a 0.12 m line: (0,0), (4,0), (4.6,0.8).withRadius(1.0), (9,0.8), EX | 1.0000 | 6.30 s |
-| Shared example + P1.withVelocity(1.0), EX | 0.0312 | 5.52 s |
+| Shared example + P1.withVelocity(1.0), EX (ARC_VAR) | 0.9608 (speeding up at 1.8 m/s^2 at 2.094 m/s, after P1) | 4.06 s |
+| Tight arc + P1.withVelocity(0.5), EX (ARC_VAR) | 0.8885 | 5.00 s |
 
 Over jerkMax 10 to 150 on these paths the use never exceeded 1: it is exactly 1.0000 where the robot enters an arc at its
 curvature cap with a = 0 (the 0.12 m case), and at most 0.9982 elsewhere (shared example, jerkMax 10). So it stays <= 0.81 of
@@ -1993,22 +2052,35 @@ braking, and reached 1.97 (1.59 of the drivetrain limits) in 16 of 504 such chai
 reaches 2.0 the same way. On the 0.12 m line the jerk-limited law gains little speed, so the second arc is driven slower than the closed-form
 profile assumes (span time 5.69 s against 6.30 s); profileTime comes from the law, so the timeout is right.
 
+Random chains with ARC_VAR arcs (script, 1200 chains, two seeds): lines with random aD (heading-limited) and caps, `withVelocity` on pass
+markers, constant-speed arcs, ARC_VAR arcs (a `withVelocity` point at 15 to 85% of the arc, v from 0.15 to 1.2 of the ARC_VAR cap), short
+lines after arcs, the end; aAcc, aDec, aLat from 2 to 8 m/s^2. Below the C2 threshold (841 chains, 531 with an ARC_VAR arc): use <= 0.99944
+on all arcs in these chains (an independent run with another seed reached 1.0027 once, by the one-loop constant-arc entry effect below; treat the bound as <= 1 except that effect, <= about 1.08) and <= 0.9505 on ARC_VAR spans; the speed at a `withVelocity` point was never above v, and at any junction at most 0.05 mm/s
+above vB; no stall; the goal was never passed. The summed time was 8533 s, against 10631 s with every arc at constant speed (-19.7%). Above the
+threshold the use on ARC_VAR spans reached 1.49 and the speed at a point 5.2 mm/s above v (warning C2). These numbers take the law's state at
+the end of every loop that ends on an arc, as the earlier chain checks did. A stricter check that also interpolates the state where a loop
+crosses a junction next to an arc reached 1.074 in 3 of the 841 chains, always at the entry of a constant-speed arc, and the same with every
+arc at constant speed (2 chains, 1.074): the robot gets below vt one loop before the entry while still braking, safe() then skips the entry,
+and the last loop of the ramp-out crosses it. On ARC_VAR spans the stricter check gives the same 0.9505. **Uncertain**: this one-loop
+quantization of the a = 0 rule is older than ARC_VAR; the implementation tests should look at it (PROF-J17).
+
 **Room to brake after an arc** (**Decision**, review of the simplification pass). The jerk-free backward pass leaves the line after
 an arc exactly the jerk-free braking distance to the next limit. The jerk law needs more (it ramps the deceleration in and out), so on
 a line about that short it ran out of room and braked at aDec while still on the arc, beyond the ellipse. So for every line span j that
-starts at an arc exit, the backward pass also applies
+starts at the exit of a constant-speed arc, and for the first span j of every ARC_VAR arc (where the law also holds a = 0), the backward
+pass also applies
 
 ```
 vJerk(j) = the largest v such that, for every later constraint q of the sub-profile,
            stopDist(v, 0, vt_q, jerkMax, D_q) + STOP_DIST_MARGIN <= s_q - s_j
            (q: every later junction with vt_q = vB[q], and the hand-over point s_goal - d_h with vt = v_h;
-            D_q = min aD over the line spans between, as in section 7.13.4)
+            D_q = min aD over the line and ARC_VAR spans between, as in section 7.13.4)
 ```
 
 found by bisection on [0, vB[j]] (stopDist grows with v, so the test is monotone; 60 steps). It caps vB at the arc exit, and the pass
-(aD = 0 on the arc) carries it to the whole arc. From the arc exit at a = 0 the law can then meet every limit after the arc with jerk,
-so it never has to brake on the arc. Lines that do not start at an arc exit keep the jerk-free pass: the law brakes on the line before
-them. Cases from the review (ideal tracking, jerkMax 50 unless stated; script):
+(aD = 0 on the arc) carries it to the whole arc; at an ARC_VAR entry it caps vB there. From the arc exit at a = 0 the law can then
+meet every limit after the arc with jerk, so it never has to brake on the arc. Lines that do not start at an arc exit keep the
+jerk-free pass: the law brakes on the line before them. Cases from the review (ideal tracking, jerkMax 50 unless stated; script):
 
 | Path | Arc speed before -> after | Ellipse use on the arc before -> after | v1 time before -> after |
 |---|---|---|---|
@@ -2020,7 +2092,7 @@ them. Cases from the review (ideal tracking, jerkMax 50 unless stated; script):
 
 The rule costs time only where the line after an arc is short against the braking it must hold (up to +0.26 s in the cases tried, a
 0.5 m line at DEF). It changes no path of the rest of this document: their lines after arcs are long enough, so every vB, span time and
-v1 time quoted elsewhere is the same (script).
+v1 time quoted elsewhere is the same, and at the ARC_VAR entries of the examples in this section it does not bind (script).
 
 Edge case: an arc right after the start or a stop is entered at the speed reached on the line before it; a very short line
 there (possible only with `withRadius`) gives a slow arc.
@@ -2305,16 +2377,19 @@ by the speed budget of section 8.3.9), and the constraint list of the current su
 ```
 for every junction j ahead in the sub-profile:   (s_j, vt_j = vB[j], D_j)
 the goal (stop or end):                           (s_goal - d_h, vt = v_h = k_p*d_h, D_goal)     (hand-over point, 8.3.7)
-D_j    = min(aD[k] of every line span overlapping [s, s_j])     (aD[k] = min(aDec, alphaMax/abs(theta'[k])); arc spans
-                                                                  have constant speed and are skipped; aDec if none)
+D_j    = min(aD[k] of every line or ARC_VAR span overlapping [s, s_j])
+                                       (aD[k] = min(aDec, alphaMax/abs(theta'[k])) on a line, min(sqrt(1 - rho_lat^2)*aDec,
+                                        alphaMax/abs(theta'[k])) on ARC_VAR; constant-speed arc spans are skipped; aDec if none)
 D_goal = the same rule over [s, s_goal - d_h]
 ```
 
 Two kinds of constraint (**Decision**, simplification pass, with the constant-speed arcs of section 7.8):
-- an **arc entry** (a junction from a line span into an arc span) and the **hand-over point** must be reached with
-  v <= vt **and a = 0, unless the robot is already below vt** (safe() skips a constraint once v1 <= vt and a1 <= 0), because the arc
-  then holds its speed and the CAPTURE law starts from a = 0;
-- every other junction (between two line spans: a PASS marker, a heading anchor on a line, a face-target sub-span)
+- an **arc entry** (a junction from a line span into an arc span, constant-speed or ARC_VAR) and the **hand-over point** must be
+  reached with v <= vt **and a = 0, unless the robot is already below vt** (safe() skips a constraint once v1 <= vt and a1 <= 0),
+  because a constant-speed arc then holds its speed, an ARC_VAR arc starts its grip share from a = 0 (section 7.8), and the CAPTURE
+  law starts from a = 0;
+- every other junction (between two line spans or two ARC_VAR spans: a PASS marker, the `withVelocity` point inside an ARC_VAR arc,
+  a heading anchor on a line, a face-target sub-span)
   only needs v <= vt. Its test is skipped while `v1 + max(0, a1)^2/(2·jerkMax) <= vt`, because ramping a to 0 from there
   can never pass vt. Without this skip the law forces a = 0 at every such junction: on a 6 m line cut into 0.1 m
   face-target sub-spans it took 4.80 s instead of 3.08 s (EX; DEF + motor 4.70 instead of 2.46 s; the uncut line 3.06 and
@@ -2327,26 +2402,28 @@ would let a low-aD span far ahead weaken the braking for a nearer junction):
 failed  = the constraints whose stopDist test failed for the candidates tried this loop (the binding ones)
 D_brake = max(D_j over failed)                       if failed is not empty
         = D_j of the nearest constraint              otherwise (brake reached through the cap or landing tests only)
-D_brake = min(D_brake, aD_cur)                       aD_cur = aD[k] of the current line span; aDec on an arc
+D_brake = min(D_brake, aD_cur)                       aD_cur = aD[k] of the current line or ARC_VAR span; aDec on a
+                                                     constant-speed arc
                                                      (emergency only, below); safety clamp
 ```
 
-Every D_j covers the current span when it is a line, so `D_j <= aD_cur` already holds there; the clamp only guards rounding and
-future changes. On an arc the law does not need to brake by construction: the jerk-aware pass of section 7.8 leaves room to meet
-every limit after the arc with jerk jerkMax from a = 0 at the arc exit. If it ever must (a robot pushed above the arc speed, a cut by the speed budget), it brakes at aDec. That is an emergency:
-the ellipse is exceeded for a moment and the limiter's skid disk bounds the vector.
+Every D_j covers the current span when it is a line or ARC_VAR, so `D_j <= aD_cur` already holds there; the clamp only guards rounding
+and future changes. On a constant-speed arc the law does not need to brake by construction: the jerk-aware pass of section 7.8 leaves
+room to meet every limit after the arc with jerk jerkMax from a = 0 at the arc exit. If it ever must (a robot pushed above the arc
+speed, a cut by the speed budget), it brakes at aDec. That is an emergency: the ellipse is exceeded for a moment and the limiter's
+skid disk bounds the vector.
 
 stopDist is conservative when the current deceleration b already exceeds D_j (it still plans with b, then at most D_j).
 
-**Traction clamp on every candidate.** All candidates ("up", "toward 0", "keep" and "brake") are clamped to `a1 >= -aD_cur`, so
-the deceleration of one line span does not carry onto a following line span whose aD is lower (heading-limited). When the clamp
-cuts a deceleration that is larger than aD_cur, that one loop can step the acceleration by more than jerkMax·dt. Recommendation:
-accept that step. Traction takes priority over the jerk limit, because exceeding traction skids the wheels while a single jerk step
-does not.
+**Traction clamp on every candidate.** All candidates ("up", "toward 0", "keep" and "brake") are clamped to `a1 >= -aD_cur`, so the
+deceleration of one line span does not carry onto a following line or ARC_VAR span whose aD is lower (heading-limited, or the ARC_VAR
+share). When the clamp cuts a deceleration that is larger than aD_cur, that one loop can step the acceleration by more than
+jerkMax·dt. Recommendation: accept that step. Traction takes priority over the jerk limit, because exceeding traction skids the wheels
+while a single jerk step does not.
 
 All junctions of the sub-profile are checked every loop; there are only a handful. Candidates, tried in order:
-1. **up**, only on a line span (never on an arc, section 7.8): `a1 = min(a + jerkMax·dt, Amax(v, s))`, with `Amax = aAccEff`
-   (section 7.6.5: alphaMax/abs(theta'), 0.9·motor curve);
+1. **up**, on a line or ARC_VAR span (never on a constant-speed arc, section 7.8): `a1 = min(a + jerkMax·dt, Amax(v, s))`, with
+   `Amax = aAccEff` (section 7.6.5: the ARC_VAR share, alphaMax/abs(theta'), 0.9·motor curve);
 2. **toward 0**: `a1 = a - sign(a)·min(abs(a), jerkMax·dt)`;
 3. **keep**: `a1 = a`.
 
@@ -2369,17 +2446,22 @@ safe(v1, a1, s1) =
   to a step it could not undo. dt is the follower's measured dt (section 8.2.2).
 - **Cruise mode**: at the cap, "up" fails the level-off test and "toward 0" keeps a = 0. The same mechanism lands on every v_t with
   a = 0. In the ideal-tracking runs (EX and DEF, jerkMax 30 to 150) the speed at an arc entry was 2 to 47 mm/s below vB, and the
-  arc was then driven at that speed (no "up" on an arc); against the earlier arc rule this changed the times of section 7.13.7 by
+  arc was then driven at that speed (no "up" on a constant-speed arc); against the earlier arc rule this changed the times of section 7.13.7 by
   0 to +0.02 s at jerkMax 50 (-0.16 to +0.16 s over jerkMax 10 to 150). In the random span chains of section 7.8 the speed
   interpolated exactly at a junction never exceeded vB while jerkMax is below the C2 threshold; above it, up to 6.7 mm/s above vB
-  (jerkMax 150), back at or below vB at the next 20 ms sample. No run stalled (script). The 0.9 profile margin covers this.
+  (jerkMax 150), back at or below vB at the next 20 ms sample. No run stalled (script). The 0.9 profile margin covers this. With
+  ARC_VAR arcs (section 7.8) the speed at a `withVelocity` point never exceeded v below the C2 threshold, and was up to 5.2 mm/s above
+  it above the threshold.
 - **Per-constraint braking check** (script): a 3 m line to vB = 1.0 m/s, then a 1 m line whose aD is lowered to 1.8 m/s^2 by the
   heading (alphaMax/abs(theta')) to vB = 0.5 m/s, then a 2 m line; jerkMax 50, aAcc = aDec = 3. With D_brake as above the robot
   reaches both junctions 0.020 m/s below vB. With the minimum over all constraints (D_brake = 1.8) it would reach the first
   junction 0.939 m/s **above** vB.
 - **Landing rule** `abs(a) <= sqrt(2·jerkMax·v)`: ramping out from deceleration b loses `b^2/(2·jerkMax)` of speed, so a larger
   deceleration would reach v = 0 with a != 0 and force a jump. Without it, jerkMax = 30 at DEF showed spikes of 270 to 330 m/s^3.
-- **Speed floor**: if v1 <= 0 anyway, set v1 = 0 and a1 = max(a1, 0); with the landing rule it did not occur in any simulation.
+- **Speed floor**: if v1 <= 0 anyway, set v1 = 0 and a1 = max(a1, 0); with the landing rule it did not occur on the paths of this
+  document in ideal tracking (once in the plant model, section 7.13.8). In the random chains of section 7.8 it acted once in 19 of the 841 runs below the C2 threshold, all with jerkMax 10, and
+  as often with every arc at constant speed (17 runs): the "up" candidate, which the landing rule does not test, lets the deceleration
+  toward the hand-over point outlast the speed, so the robot stops a few cm before that point and starts again. No run stalled (script).
 - STOP_DIST_MARGIN = 0.005 m (**Recommendation**) covers rounding and projection noise; a `v·dt` term is not needed because of the
   one-step lookahead (it only cost 0.06 to 0.2 s).
 - A sudden drop of Amax (the motor curve) may cut a by more than jerkMax·dt: traction wins. In the simulations it occurred only
@@ -2465,7 +2547,8 @@ v1 profileTime and timeout (jerkMax = 50, EX unless stated):
 | P1.stop(1.5) | 4.32 s | + 1.5 | 5.82 s | 9.73 s |
 | Tight arc r = 0.3 | 4.62 s | - | 4.62 s | 7.93 s |
 | Shared example, DEF + motor (no heading anchors) | 2.78 s | - | 2.78 s | 5.17 s |
-| Shared example + P1.withVelocity(1.0) (whole arc at 1.0 m/s) | 5.52 s | - | 5.52 s | 9.28 s |
+| Shared example + P1.withVelocity(1.0) (ARC_VAR arc, at most 1.0 m/s at P1) | 4.06 s | - | 4.06 s | 7.09 s |
+| Tight arc + P1.withVelocity(0.5) (ARC_VAR arc) | 5.00 s | - | 5.00 s | 8.50 s |
 
 #### 7.13.8 Plant simulation
 
@@ -2495,6 +2578,14 @@ means the robot never passed the goal.
 - The **vector** jerk of the command (110 to 320 m/s^3) is **not** limited by this law. Its sources (**Inference**): the G1 curvature
   step at arc joints (a_n jumps by up to aLat, i.e. aLat/dt = 200 to 360 m/s^3), the cross-track correction, the CAPTURE hand-over. The
   limiter limits acceleration, not jerk. Clothoids (v2, section 5.12.3) are the fix for arc joints.
+- ARC_VAR arcs, same plant (script): shared example + P1.withVelocity(1.0), EX, jerkMax 30 / 50: end 4.04 / 4.02 s, 1.9 / 2.0 cm;
+  tight arc + P1.withVelocity(0.5): 4.94 / 4.86 s, 1.3 / 1.2 cm; shared example + P1.withVelocity(1.0), DEF + motor: 3.26 / 3.04 s;
+  (0,0), (3,0).withVelocity(1.0), (3,3).stop(), (0,3), EX: stop 4.08 / 4.00 s, end 6.22 / 6.18 s. No overshoot. Ellipse use of the
+  command on arcs (at the law's lag-led s_v) <= 0.944, of the measured acceleration <= 0.86. The measured speed when s* passes the point
+  was up to 1.7% above the cap (1.017 m/s for 1.0, 0.505 for 0.5): the lead tau_lag = 0.05 s does not cancel the whole modelled lag
+  (**Inference**). The tangential jerk stayed at jerkMax except in one run (DEF + motor, jerkMax 30): one step of 170 m/s^3
+  from the speed floor of section 7.13.4 at the hand-over point (v_cmd = 0.057 m/s, a_cmd = -3.4 m/s^2, s_v held at s_goal - d_h); the
+  same path without `withVelocity` does not show it (**Uncertain**: a goal-approach case of the speed floor, not of ARC_VAR).
 - These are model results, not robot results (**Uncertain** how well the toy plant matches the robot).
 
 #### 7.13.9 Pseudocode (law only)
@@ -2502,9 +2593,9 @@ means the robot never passed the goal.
 ```
 step(v, a, s, cap):                              # once per loop, s = s_v (lag-led, clamped at s_goal - d_h)
   cons = [(s_j, vB[j], D_j, isArcEntry(j)) for junctions ahead] + [(s_goal - d_h, k_p*d_h, D_goal, true)]
-  onArc = (span at s is an arc);  aD_cur = aDec if onArc else aD[span at s]
+  onArc = (span at s is a constant-speed arc);  aD_cur = aDec if onArc else aD[span at s]       # line or ARC_VAR: its own aD
   failed = {}
-  cands = ([] if onArc else [min(a + jerkMax*dt, Amax(v, s))]) + [a - sign(a)*min(abs(a), jerkMax*dt), a]   # no "up" on an arc
+  cands = ([] if onArc else [min(a + jerkMax*dt, Amax(v, s))]) + [a - sign(a)*min(abs(a), jerkMax*dt), a]   # no "up" on a constant arc
   for a1 in cands:
       a1 = max(a1, -aD_cur)                                                     # traction clamp (may exceed jerkMax for one loop)
       v1 = v + (a + a1)/2*dt;  if v1 < 0: continue
@@ -2554,7 +2645,7 @@ through unchanged (:80); an allowed change is returned unchanged (:116-126), so 
 
 | Profile quantity | Limiter limit | Condition (margin 0.9) |
 |---|---|---|
-| a_n on arcs (a_t = 0 there, section 7.8), a_t on lines | skid disk maxSkidAccel | aAcc, aDec, aLat <= 0.9·maxSkidAccel |
+| a_n on arcs (a_t = 0 there, section 7.8; on ARC_VAR spans inside the grip share), a_t on lines | skid disk maxSkidAccel | aAcc, aDec, aLat <= 0.9·maxSkidAccel |
 | speed-up a_t | forward: `maxForwardAccel·(1 - v/freeSpeed)` | the speed-up phase follows 0.9 of that curve |
 | any acceleration, any direction in the robot frame | tilt box | <= 0.9·min(tiltFront, tiltSide); a box contains its inscribed disk |
 | omega, alpha | none (passed through) | the follower limits alpha itself (section 8.5.2) |
@@ -2590,7 +2681,8 @@ only, not production code; the equations and its use in tests are in Appendix B.
 The method of sections 7.3 to 7.10: in span k `v(q) = min(vCap_k, F_k(v_in, q), sqrt(v_out^2 + 2·aD·(l - q)))`, junction passes,
 stops as J = 0 with sub-profiles.
 - Caps and stops: exact when every arc is driven at its curvature cap (the common case); conservative when a point cap on an arc
-  binds, because the whole arc is driven at that cap (+16% and +47% in the two cases tried, section 7.8); each leg of a user stop is
+  binds: +2.5% and +5.5% for `withVelocity` (the ARC_VAR share), +24.6% for a heading-kink cap, which slows the whole arc (section 7.8);
+  each leg of a user stop is
   one span from 0 to 0; face-target needs 0.1 m sub-spans.
 - Cost: O(spans); lookup is one sqrt (plus a bisection in a motor-curve speed-up).
 - Matches the drivetrain: yes, with the motor curve in closed form. A pure constant-acceleration version is either outside
@@ -2652,7 +2744,7 @@ example with DEF (no heading anchors) but a_t reaches 8.49 m/s^2 at low speed, a
 | Method | a continuous? | Caps / stops | Build cost | Matches limiter | Shared example | DEF + motor (no heading anchors) |
 |---|---|---|---|---|---|---|
 | 1 Grid trapezoid + ellipse + motor | no | exact / sample v = 0 | ~1000 samples | yes | 3.2723 s | 2.3101 s |
-| **2 Span closed form + motor ramp + constant-speed arcs** | no | exact when every arc is at its curvature cap, +16..47% when a point cap on an arc binds / junction 0 | O(spans) | yes | **3.2723 s** | **2.3101 s** |
+| **2 Span closed form + motor ramp + constant-speed arcs (ARC_VAR at a `withVelocity` point)** | no | exact when every arc is at its curvature cap, +2.5..5.5% with `withVelocity` on an arc, +24.6% with a heading-kink cap / junction 0 | O(spans) | yes | **3.2723 s** | **2.3101 s** |
 | 2' Span, pure constant-acceleration trapezoid | no | same | O(spans) | no: outside, or slow if folded | 3.2723 s | 2.2573 s (outside) or 2.8188 s (folded) |
 | 3 Per-span S-curve | yes | jerk-aware junction distances / junction 0 | O(spans) + bisection | no extra benefit | 3.3881 s (j=30), 3.6025 s (j=10) | not computed |
 | 4 Motor curve alone | in speed-up | needs a braking model and traction cap | O(spans) | best shape, invalid alone | n/a | 2.2961 s (a_t 8.49 > 7.2) |
@@ -2664,10 +2756,12 @@ example with DEF (no heading anchors) but a_t reaches 8.49 m/s^2 at low speed, a
 (default jerkMax = 50 m/s^3; cost +4 to 6% time at EX and +10 to 15% at DEF).
 
 **v1: method 2**, with its refinements: junction speeds from passes across spans; speed-up along
-`min(aAcc, 0.9·motor curve)` in closed form; constant speed on every arc (simplification pass); stops as junction 0 with
+`min(aAcc, 0.9·motor curve)` in closed form; constant speed on every arc (simplification pass) except the ARC_VAR arc of a
+`withVelocity` point (user decision); stops as junction 0 with
 sub-profiles that restart with normal caps; runtime command = the jerk-aware law (vBack plus the time ramp is its unlimited-jerk
 limit). Reasons: it gives exactly the grid's time whenever every arc is driven at its curvature cap; it is never faster than the
-grid (always traction-safe); a point cap on an arc slows the whole arc (+16 to 47% in the cases tried, section 7.8); it stays
+grid (always traction-safe); a `withVelocity` on an arc costs +2.5 to 5.5% (ARC_VAR) and a heading-kink cap, which slows the whole
+arc, +24.6% in the cases tried (section 7.8); it stays
 inside the limiter by construction; it is small, exact and easy to debug. **The grid method stays as the test oracle**
 (Appendix B: span time >= grid time, equal within 1e-3 s when every arc is driven at its curvature cap). **v2**: speed zones, non-zero end speed, clothoid sub-spans (the lateral jerk at arc joints; the tangential jerk is
 already limited in v1).
@@ -2722,12 +2816,13 @@ profileTime and timeout (jerk law) are in section 7.13.7 where computed:
 | Main | arc 2.3784, peak 2.7241 | 3.2723 s | 3.54 s / 6.31 s |
 | P1.stop() | two 2.8284 m lines, peaks 2.9130 at s = 1.4142 and 4.2426 | 3.8839 s | 4.32 s / 7.48 s |
 | P1.stop(0.5) | + 0.5 dwell | 4.3839 s | 4.82 s / 8.23 s |
-| P1.withVelocity(1.0) | whole arc at 1.0; junctions [0, 1.0, 1.0, 1.0, 0]; braking for the arc from s = 0.8487 | 5.2576 s (grid oracle 3.5770 s) | 5.52 s / 9.28 s |
+| P1.withVelocity(1.0) | ARC_VAR arc (cap 2.1273, aA = aD = 1.8); junctions [0, 2.1273, 1.0, 2.1273, 0]; braking for the arc from s = 1.1425, for P1 from s = 2.0092 | 3.7751 s (grid oracle 3.5770 s) | 4.06 s / 7.09 s |
 | P1 at 180 deg (heading-kink cap) | whole arc at 1.4088 | 4.2812 s (grid oracle 3.4372 s) | 4.54 s / 7.81 s |
 | Measured start v0 = 1.5 | peak 2.9188 | 2.9051 s | not computed |
 | DEF + motor curve, no heading anchors | arc 3.1910, peak 3.7069 | 2.3101 s | 2.78 s / 5.17 s |
 | DEF + motor curve, with the P1 90 deg anchor | kink cap 2.8176 < arc cap 3.191: whole arc at 2.8176, junctions [0, 2.8176, 2.8176, 2.8176, 0] | 2.4549 s | 2.88 s / 5.32 s |
 | Tight arc (0,0), (4,0).withRadius(0.3), (4,4) | arc 1.0954 | 4.3210 s | 4.62 s / 7.93 s |
+| Tight arc + P1.withVelocity(0.5) | ARC_VAR arc (cap 0.9798, aA = aD = 1.8); junctions [0, 0.9798, 0.5, 0.9798, 0] | 4.5577 s (grid oracle 4.4469 s) | 5.00 s / 8.50 s |
 
 ### 7.17 Pseudocode
 
@@ -2735,23 +2830,28 @@ profileTime and timeout (jerk law) are in section 7.13.7 where computed:
 buildProfile(path(flipped), c: PathConstraints, cfg: KinematicsConfig?, R_mod, v0, heading):
   spans = splitAt({0, L} ∪ segmentStarts ∪ waypointS ∪ stops [∪ FT sub-spans])            # merge < S_EPS
   for k: kappa[k] = segmentKappa(k); dtheta[k] = heading.slope(k)                       # section 6.4
+  for k: kind[k] = LINE or ARC; every span of an arc whose withVelocity point asks for less than
+         its ARC_VAR cap (min over the arc's spans) becomes ARC_VAR                           # section 7.8
   for k: (vCap[k], aA[k], aD[k]) = spanLimits(k)
   for each sub-profile [s_a, s_b] between stops:
       J[j] = min(vCap[j-1], vCap[j], wpVel(j), headingKinkCap(j));  J[first] uses normal caps;  J[last] = 0
       vB = J; for j = last-1 .. first: vB[j] = min(vB[j], sqrt(vB[j+1]^2 + 2*aD[j]*l[j]))
-                                       if line j starts at an arc exit: vB[j] = min(vB[j], vJerk(j))   # 7.8, bisection
+                                       if (line j starts at a constant-arc exit) or (j is the first span of an ARC_VAR arc):
+                                           vB[j] = min(vB[j], vJerk(j))                                  # 7.8, bisection
       vF = vB; vF[first] = min(vF[first], subStartSpeed)                           # v0 for the first, 0 after a stop
-      for j = first+1 .. last: vF[j] = min(vF[j], Fup(j-1, vF[j-1], l[j-1]))      # trapezoid or motor ramp; vF[j-1] on an arc
+      for j = first+1 .. last: vF[j] = min(vF[j], Fup(j-1, vF[j-1], l[j-1]))      # trapezoid or motor ramp; vF[j-1] on a constant arc
       t_k = spanTime(vF[k], vF[k+1], vCap[k], aA[k], aD[k], l[k])                      # closed form
   spanTimeLowerBound = sum t_k
   profileTime = offlineSpeedLaw(v0, spans, constraints, guard = 10*spanTimeLowerBound + 10) + sum_goals handoverTail + sum_stops dwell + lastDwell   # 7.13.6
 
 spanLimits(k):
   cap = c.vMax; aA = c.aAcc; aD = c.aDec
-  if kappa[k] != 0: cap = min(cap, sqrt(c.aLat/abs(kappa[k]))); aA = aD = 0          # arc: constant speed (7.8)
+  if kind[k] == ARC:     cap = min(cap, sqrt(c.aLat/abs(kappa[k]))); aA = aD = 0                     # constant speed (7.8)
+  if kind[k] == ARC_VAR: cap = min(cap, sqrt(RHO*c.aLat/abs(kappa[k]))); aA *= sqrt(1-RHO^2); aD *= sqrt(1-RHO^2)   # 7.8
   if dtheta != 0: cap = min(cap, c.omegaMax/abs(dtheta)); aA = min(aA, c.alphaMax/abs(dtheta)); aD = min(aD, c.alphaMax/abs(dtheta))
   if R_mod > 0 and cfg: cap = min(cap, 0.9*cfg.maxAllowedModuleVelocity/(1 + abs(dtheta)*R_mod))
-  return (cap, aA, aD)                       # LINE: Fup uses min(aA, 0.9*motor curve) in closed form
+  if kind[k] == ARC_VAR and cfg: aA = min(aA, 0.9*cfg.maxForwardAccel*(1 - cap/cfg.freeSpeed))   # motor at the cap (7.8)
+  return (cap, aA, aD)                       # LINE: Fup uses min(aA, 0.9*motor curve) in closed form; RHO = ARC_RHO = 0.8
 
 runtime (each loop, current sub-profile):  (v_cmd, a_cmd) = speedLaw.step(v_cmd, a_cmd, s_v, cap)   # 7.13.9; follower 8.3.1, 8.14
 ```
@@ -2939,7 +3039,7 @@ Worked example (shared example, EX, jerkMax = 50, real geometry) (hand, script):
 - Law state v_cmd = 2.3604 m/s, a_cmd = 0: the law reached the arc speed with a = 0 at the arc entry (ideal-run value with jerkMax 50,
   section 7.13.4). tau_lag = 0.05: `s_L = s_v = 1.4849 + 2.3604·0.05 = 1.6029`, inside the arc (`s_goal - d_h = 5.9269` does not clamp).
   `c = -3·0.0707 = -0.2121 m/s`; cap = min(2.3784, sqrt(16 - 0.045) = 3.994) = 2.3784.
-- Law: s_v is on an arc, so "up" is not tried (section 7.13.4). "toward 0" with a = 0 gives a1 = 0 and v1 = 2.3604, below the cap; the
+- Law: s_v is on a constant-speed arc, so "up" is not tried (section 7.13.4). "toward 0" with a = 0 gives a1 = 0 and v1 = 2.3604, below the cap; the
   next junction (P1, vB = 2.3784) is above v1 with a1 = 0, so it is safe: **v_t = 2.3604 m/s**, a_cmd = 0. The arc is driven at this
   speed.
 - `T(s_L) = (0.5572, 0.8303)` (rotated 2.9 deg into the right turn).
@@ -3558,7 +3658,7 @@ directory"). Public classes are the API; internal classes are package-private. T
 | `Projector` | windowed projection | 5.10, 8.2 |
 | `PathFlipper` | NONE / MIRROR / ROTATE of a built table, angles, face target | 5.13 |
 | `HeadingProfile` | theta(s), theta'(s); face-target heading | 6 |
-| `SpeedProfile` | spans, caps, passes, constant-speed arcs, sub-profiles, vBack / vProf, time | 7 |
+| `SpeedProfile` | spans, caps, passes, constant-speed and ARC_VAR arcs, sub-profiles, vBack / vProf, time | 7 |
 | `SpeedLaw` | the jerk-aware online law | 7.13 |
 | `Tracker` | state machine and the translation and heading laws; finish test; the follower constants | 8.2 to 8.7 |
 | `EventSchedule` | latches and firing rules | 8.8 |
@@ -3580,7 +3680,7 @@ public final class Point {
 
     // each returns a NEW Point; the last call of a kind wins
     public Point withAngle(Rotation2d angle);         // heading anchor (section 6)
-    public Point withVelocity(double metersPerSecond);// max speed here (on a corner: the whole arc); 0 means stop()
+    public Point withVelocity(double metersPerSecond);// max speed at this point; 0 means stop()
     public Point withRadius(double meters);           // corner radius override; 0 = stop corner
     public Point stop();                              // v = 0 here, no wait
     public Point stop(double dwellSeconds);           // v = 0 here, then wait
@@ -3603,8 +3703,8 @@ Rules:
 - `withAngle`: any point, including P_0 and P_{n-1}. The heading is linear in s between anchors, the short way (section 6.3); a point
   without an angle has no anchor; after the last anchor the heading holds; with no angle on P_0 the path starts from the robot's
   measured heading.
-- `withVelocity(v > 0)`: a cap at this waypoint's s, not a speed zone (section 7.4.2). On a corner the point is on an arc, and the
-  whole arc is driven at no more than v (arcs have constant speed, section 7.8). Ignored with warning W4 on P_0 and, in v1, on
+- `withVelocity(v > 0)`: a cap at this waypoint's s: the robot passes the point at no more than v; not a speed zone (section 7.4.2). On a
+  corner the arc through the point brakes into it and speeds up after it (ARC_VAR, section 7.8). Ignored with warning W4 on P_0 and, in v1, on
   P_{n-1}. `withVelocity(0)` is exactly `stop()`. `v < 0` throws (V11).
 - `stop()` / `stop(d)`: any middle point; on the last point the stop is the default and `stop(d)` holds d seconds after the finish test
   passes; on P_0 no effect on the path (W4), `stop(d)` delays the start by d. A stop splits the profile (section 7.10) and runs arrive,
@@ -4022,9 +4122,10 @@ Path path = new Path(
     new Point(5, 2));
 ```
 
-(3, 4) is a corner, so the whole arc through it is driven at no more than 1.0 m/s (arcs have constant speed, section 7.8). With EX the
-trapezoid profile time (no jerk limit) goes from 3.2723 s to 5.2576 s (v1 with the jerk law: 5.52 s), and braking for the arc starts at
-s = 0.8487 m on line 0 (section 7.4.2). On a straight part the limit acts at the point only: the robot brakes before it and speeds up after it;
+(3, 4) is a corner: the arc through it brakes from its ARC_VAR cap 2.1273 m/s to 1.0 m/s at the point and speeds up again after it
+(section 7.8). With EX the trapezoid profile time (no jerk limit) goes from 3.2723 s to 3.7751 s (v1 with the jerk law: from 3.54 to
+4.06 s); braking for the arc starts at s = 1.1425 m on line 0 and for the point at s = 2.0092 m on the arc (section 7.4.2). On a straight
+part the limit also acts at the point only: the robot brakes before it and speeds up after it;
 between two capped points on a line spaced d apart, with a = aAcc = aDec, the peak is `sqrt(v_w^2 + a·d)` (**Inference**, constant
 acceleration on both halves). Zones with a length are v2.
 
@@ -4155,6 +4256,7 @@ reasoned and simulated in Python only, not tuned on a robot, unless marked **Fac
 | moduleRadius | 0 (unknown; `fromModules` computes it) | m | `PathsConfig.moduleRadius` | 7.2.2, 7.11 | 0 skips the wheel-speed cap |
 | PROFILE_MARGIN | 0.9 | - | `PathConstraints` constant | 7.2.1, 7.9, 7.11 | also the 0.9 of the motor curve and the wheel cap |
 | STOP_DIST_MARGIN | 0.005 | m | `SpeedLaw` (internal constant) | 7.13.4 | |
+| ARC_RHO (rho_lat) | 0.8 | - | `SpeedProfile` (internal constant) | 7.8 | grip share of an ARC_VAR arc (the arc of a `withVelocity` point): cap sqrt(0.8) = 89% of the curvature cap, tangential limits 0.6 of aAcc and aDec |
 | D_H_MAX | 0.05; `d_h = min(D_H_MAX, jerkMax·dt_nom/k_p^2)` | m | `Tracker` (internal constant) | 8.3.7 | hand-over distance; at rest the hand-over band is d_h + 2·STOP_DIST_MARGIN |
 | jerk warning threshold | `max(aAcc, aDec)/(5·dt_nom)` | m/s^3 | `PathWarnings` (internal constant) | 7.13.7 (C2) | |
 | R_MIN | 0.05 | m | `GeometryBuilder` (internal constant) | 5.7.3 | **Decision** (brief decision 2) |
@@ -4178,7 +4280,7 @@ reasoned and simulated in Python only, not tuned on a robot, unless marked **Fac
 | S_EPS | 1e-6 | m | `SpeedProfile` (internal constant) | 7.3.1 | span merge |
 | face-target alpha split | 0.5 of alphaMax per term | - | `SpeedProfile` (internal constant) | 6.9 | |
 | motor-curve inversion | 50 bisection iterations | - | `SpeedProfile` (internal constant) | 7.9 | |
-| room-to-brake bisection | 60 iterations | - | `SpeedProfile` (internal constant) | 7.8 | vJerk on lines after arcs |
+| room-to-brake bisection | 60 iterations | - | `SpeedProfile` (internal constant) | 7.8 | vJerk on lines after constant-speed arcs and at ARC_VAR entries |
 | offline profileTime guard | `10·spanTime + 10` | s | `SpeedProfile` (internal constant) | 7.13.6 | |
 | DEFAULT_DS | 0.02 | m | grid test oracle only (test code) | Appendix B | not in production code |
 | dt_nom | 0.02 | s | `Tracker` (internal constant) | 8.2.2 | the only home of the nominal loop period; equals `KinematicsConfig.cycleDt` (**Fact** :25). Run time uses the measured dt |
@@ -4221,13 +4323,13 @@ reasoned and simulated in Python only, not tuned on a robot, unless marked **Fac
 | Per-point `withRadius` | yes | - | decision 2 |
 | `cutCorner()` | no | classic fillet that misses the point | decision 1 |
 | Clothoid transitions (G2) | no | if the logged criterion fails (median dE > 0.03 m over >= 20 entries) | decisions 3, 14, 5.12.3 |
-| Per-point speed cap `withVelocity(v > 0)` | yes (at the point on a line; the whole arc on a corner) | - | decision 5, 7.8 |
+| Per-point speed cap `withVelocity(v > 0)` | yes, at the point (on a corner the arc through it changes speed: ARC_VAR) | - | decision 5, user decision, 7.4.2, 7.8 |
 | Speed zones over an s range | no | yes | decision 5 |
 | Stops at any middle point: `stop()`, `stop(d)`, `withVelocity(0)` | yes | - | decisions 15, 17 |
 | Turn in place at a stop (a heading step) | no: heading continuous, ROTATE corrects residuals only | candidate | resolution R1 |
 | Non-zero end speed, chaining paths | no (end speed 0; `withVelocity` on the last point ignored) | yes | decision 5, 7.4.7 |
 | Heading anchors (linear in s) and face target (front toward the target) | yes | face target for an s range | decision 4, resolution R1, simplification pass |
-| Speed profile | per-span closed form, motor curve, constant speed on arcs, junction passes | speed zones, clothoid sub-spans, speed changes on arcs | decision 16, resolution R10, simplification pass |
+| Speed profile | per-span closed form, motor curve, constant speed on arcs except ARC_VAR at a `withVelocity` point, junction passes | speed zones, clothoid sub-spans, speed changes on any arc with the exact ellipse | decision 16, resolution R10, simplification pass |
 | Runtime speed command | jerk-aware online trapezoid law (tangential jerk) | lateral jerk at arc joints via clothoids | decision 18 |
 | Events at a fraction of the path or a waypoint index | yes | - | decision 7, simplification pass |
 | Alliance flip NONE / MIRROR / ROTATE | yes | - | decision 9, resolution R6 |
@@ -4266,9 +4368,9 @@ Only the decisions that remain, and the values that must be measured. Everything
    found that they still change 5.76% of random field-sized paths after the bulge cap and TAU_STOP (section 5.7.3); both are kept until the user
    decides.
 
-**Uncertain** items that need no decision but should be watched in testing: the time cost of constant-speed arcs when a point cap binds on an
-arc (section 7.8), the G1 toy model (section 5.12.1), the duration of ROTATE (section 8.6), and WPILib `angleModulus` at exactly +-pi
-(implemented explicitly, section 6.3).
+**Uncertain** items that need no decision but should be watched in testing: the time cost of a heading-kink cap on an arc (the
+whole arc) and of the ARC_VAR share (section 7.8), the one-loop quantization of a = 0 at arc entries (section 7.8), the G1 toy model
+(section 5.12.1), the duration of ROTATE (section 8.6), and WPILib `angleModulus` at exactly +-pi (implemented explicitly, section 6.3).
 
 ## 13. Test cases
 
@@ -4345,13 +4447,13 @@ gaps are intentional.
 | PROF-3 | shared example, EX, span profile | spans [1.5307, 1.4578, 1.4577, 1.5307]; vB = [3.8524, 2.3784, 2.3784, 2.3784, 0]; trapezoid peaks 2.7241 at s = 1.2368 and 4.7401; trapezoid time 3.2723 s (no jerk limit) |
 | PROF-4 | span method vs grid oracle (ds 0.005, Appendix B), paths where every arc is driven at its curvature cap | times equal within 1e-3 s |
 | PROF-5 | span method vs grid, any path | span time >= grid time - 1e-3 s |
-| PROF-6 | any path, any s | vProf <= vCap; `vProf^2·abs(kappa) <= aLat + 1e-9`; vProf constant on every arc (a_t = 0 there) |
+| PROF-6 | any path, any s | vProf <= vCap; `vProf^2·abs(kappa) <= aLat + 1e-9`; vProf constant on every constant-speed arc (a_t = 0 there); on ARC_VAR spans `vProf^2·abs(kappa) <= rho_lat·aLat + 1e-9` and `(a_t/aT)^2 + (a_n/aLat)^2 <= 1 + 1e-9` |
 | PROF-7 | span boundaries | every segment start, waypoint s and stop s is a boundary (abs(diff) < 1e-9) |
 | PROF-8 | naive-trapezoid trap: a 0.3 m span entered at 3 m/s must end at 0, aDec 3 | vB at its entry = 1.3416; the previous span brakes 3 -> 1.3416 over 1.2 m |
 | PROF-9 | start stall: v0 = 0, ideal robot (s += v_cmd·dt), jerkMax = 50 | leaves s = 0; v_cmd = 0.01, 0.04, 0.09 m/s after 1, 2, 3 loops (aAcc 3); jerk-free limit 0.06, 0.12, 0.18 |
 | PROF-12 | sideways start V_meas = (0.5, 1.0), T(0) = (1, 0) | v0 = 0.5; no warning |
 | PROF-13 | V_meas = (-1, 0), T(0) = (1, 0) | v0 = 0 |
-| PROF-14 | shared example + P1.withVelocity(1.0), span method | the whole arc at 1.0 m/s; junctions vF = [0, 1.0, 1.0, 1.0, 0]; braking for the arc from s = 0.8487 (peak 2.2566); total 5.2576 s; v1 time 5.52 s |
+| PROF-14 | shared example + P1.withVelocity(1.0), span method | both arc spans ARC_VAR: cap 2.1273, aA = aD = 1.8; junctions vF = [0, 2.1273, 1.0, 2.1273, 0]; braking for the arc from s = 1.1425 (peak 2.6182), for P1 from s = 2.0092; total 3.7751 s; v1 time 4.06 s, timeout 7.09 s |
 | PROF-15 | same, grid oracle | 3.5770 s |
 | PROF-16 | `withVelocity(0)` on P1 | identical to P1.stop() |
 | PROF-17 | `withVelocity(-1)` | IAE V11 |
@@ -4370,7 +4472,7 @@ gaps are intentional.
 | PROF-30 | limiter pass-through: run the profile through `SwerveAccelerationLimiter` with the default config (simulation) | output equals input every loop (difference < 1e-9) on the shared example |
 | PROF-31 | measured start v0 = 1.5, shared example | 2.9051 s |
 | PROF-33 | hand-over tail, k_p 3, jerkMax 50 | d_h = 0.05 m, tail `ln(0.05/0.03)/3 = 0.170 s` per goal |
-| PROF-34 | law, ideal tracking: shared example and tight arc, EX and DEF + motor, jerkMax 30 to 150 | a = 0 at every arc entry (within one loop), no "up" on an arc, speed constant on the arc; traction-ellipse use at the arc entry <= 1 (largest 0.9982 in the script, at jerkMax 10) |
+| PROF-34 | law, ideal tracking: shared example and tight arc, EX and DEF + motor, jerkMax 30 to 150 | a = 0 at every arc entry (within one loop), no "up" on a constant-speed arc, speed constant on it; traction-ellipse use at the arc entry <= 1 (largest 0.9982 in the script, at jerkMax 10) |
 | PROF-35 | two arcs joined by a 0.7729 m line: (0,0), (4,0), (5,1.2).withRadius(1.0), (9,1.2), EX, jerkMax 50 | arc speeds 1.2498 and 2.0; the speed changes only on the line; ellipse use at the second arc entry 0.9639; time to 0.03 m 5.22 s |
 | PROF-36 | 6 m straight line cut into 0.1 m spans (face-target style), EX, jerkMax 50 | 3.08 s (the uncut line 3.06 s): line-to-line junctions do not force a = 0 |
 | PROF-J1 | stopDist(3, 0, 0, jerkMax = 30, D = 3) | 1.6500 m, 1.1000 s |
@@ -4387,8 +4489,10 @@ gaps are intentional.
 | PROF-J13 | jerkMax = 0 or NaN | IAE V16 |
 | PROF-J15 | jerkMax = 400 with DEF | warning C2 |
 | PROF-J16 | spans: line 0-3 m (aD 3) to vB = 1.0, line 3-4 m with aD 1.8 (heading-limited) to vB = 0.5, line 4-6 m; jerkMax 50, aAcc = aDec = 3, from rest | D_j = 3 for the first junction, 1.8 for the second and the goal; D_brake = 3 while the first junction binds; both junctions reached at or below vB, within the 4 mm/s junction tolerance (0.020 m/s below in the script; not 0.939 m/s above, as with the minimum over all constraints) |
-| PROF-J17 | random span chains (lines with random aD, constant-speed arcs, point caps, short lines after arcs into slower arcs, stops, the end), jerkMax <= the C2 threshold `max(aAcc, aDec)/(5·dt_nom)` | speed at any junction at most 4 mm/s above vB (interpolated; never above in the script), no stall, traction-ellipse use on arcs <= 1 (<= 0.99995 in the script). Above the threshold the speed reached 6.7 mm/s above vB and the use 1.97 (documented, section 7.8) |
+| PROF-J17 | random span chains (lines with random aD, constant-speed arcs, ARC_VAR arcs with a `withVelocity` point, point caps, short lines after arcs into slower arcs, stops, the end), jerkMax <= the C2 threshold `max(aAcc, aDec)/(5·dt_nom)` | speed at any junction at most 4 mm/s above vB and at a `withVelocity` point at most 4 mm/s above v (interpolated; never above in the script), no stall, traction-ellipse use on arcs <= 1 at the end of every loop, except the one-loop constant-arc entry effect (<= about 1.08; section 7.8) (<= 0.99995 in the earlier chains, <= 0.99944 with ARC_VAR arcs, <= 0.9505 on ARC_VAR spans). Also log the use interpolated at junctions next to arcs (up to 1.074 at constant-arc entries in the script, section 7.8). Above the threshold the speed reached 6.7 mm/s above vB and the use 1.97 (documented, section 7.8) |
 | PROF-J18 | DEF, line 3 m, arc r = 2 (2 m), 0.75 m line, arc r = 0.5 (0.8 m), line 2 m; jerkMax 50 | vJerk caps the first arc at 3.035 m/s (jerk-free pass: 3.795); no braking on either arc; ellipse use <= 1 (0.869 in the script) |
+| PROF-37 | ARC_VAR law, ideal tracking: shared example + P1.withVelocity(1.0) and tight arc + P1.withVelocity(0.5), EX, jerkMax 10 to 150 | a = 0 at the ARC_VAR entry (within one loop); braking and speed-up on the arc within aA = aD = 1.8; speed at P1 at most v + 4 mm/s (0.9746 and 0.5000 m/s at jerkMax 50 in the script); traction-ellipse use on the arc <= 1 (0.9608 and 0.8885); time to 0.03 m 4.06 and 5.00 s at jerkMax 50 |
+| PROF-38 | ARC_VAR selection: tight arc with P1.withVelocity(v), v = 0.5, 1.0 and 1.2, EX | 0.5 < ARC_VAR cap 0.9798: both arc spans ARC_VAR, 4.5577 s; 1.0 (between 0.9798 and the curvature cap 1.0954): constant arc at 1.0, 4.4075 s; 1.2: constant arc at its cap 1.0954, 4.3210 s, no warning |
 | PROF-J19 | law comes to rest within d_h + 2·STOP_DIST_MARGIN of a goal (jerkMax 150, rest 5.2 mm before the hand-over point) | hands over to CAPTURE at rest; the offline profileTime run ends; without the rule it never ends (guard reached) |
 
 The old physics test "turn in place pi/2 in 0.7071 s" is removed: v1 has no turn-in-place step (resolution R1).
@@ -4520,8 +4624,9 @@ the exact traction ellipse and motor curve at every sample, so the span method o
 **How to use it in tests.**
 - PROF-4: on paths where every arc is driven at its curvature cap, span time = grid time within 1e-3 s (shared example 3.2723 s both;
   DEF + motor 2.3101 s both; the zero-penalty rows of section 7.8).
-- PROF-5: on any path, span time >= grid time - 1e-3 s. With a point cap on an arc the span method is slower (shared example +
-  P1.withVelocity(1.0): 5.2576 against 3.5770 s), because v1 drives the whole arc at the cap.
+- PROF-5: on any path, span time >= grid time - 1e-3 s. With a point cap on an arc the span method is slower: shared example +
+  P1.withVelocity(1.0) 3.7751 against 3.5770 s (the ARC_VAR share), P1 at 180 deg 4.2812 against 3.4372 s (the heading-kink cap slows
+  the whole arc).
 - PROF-15 and the grid columns of sections 6.11 and 7.8 (3.5770 s, 3.4372 s, 4.4469 s) are regression numbers for the oracle code itself.
 - Two grid scripts with different arc sampling gave 3.5770 and 3.5761 s for the `withVelocity(1.0)` case; the 0.0009 s difference is the
   O(ds) error of the explicit step, so compare with a tolerance of 1e-3 s.

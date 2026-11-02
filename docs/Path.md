@@ -41,7 +41,8 @@ source, for example [RobotPose](RobotPose.md).
   you can set it per point.
 - **Speed from the path, not from a clock.** The robot slows for corners and for the end, and speeds up
   on straight parts, within the limits you give, with a limit on jerk so the speed changes smoothly. Round corners are
-  driven at a steady speed.
+  driven at a steady speed, except a corner whose point has `.withVelocity(v)`: there the robot slows down to at most `v` at the
+  point and speeds up after it.
 - **Stops where you ask.** `.stop()` on any middle point, with an optional wait.
 - **Headings.** An angle on some points (the robot turns smoothly between them), or "always face this spot".
 - **Events at a fraction of the path or at a point.** Run a command when the robot gets there.
@@ -126,7 +127,7 @@ return Commands.defer(() -> {
 |---|---|
 | `new Point(x, y)` | A point, meters |
 | `.withAngle(Rotation2d)` | The robot faces this way at this point (see [Headings](#headings)) |
-| `.withVelocity(v)` | At most `v` m/s at this point. On a corner the whole round arc is driven at most `v` (corners have a steady speed); on a straight part it is a limit at one point |
+| `.withVelocity(v)` | At most `v` m/s at this point. If it is faster, the robot slows down before the point and speeds up after it, also on a round corner (that corner then uses about 90% of its grip limit) |
 | `.withRadius(r)` | Use radius `r` m for this corner. `0` makes the corner a stop. Ignored (with a warning) on the first point, the last point, and a point exactly on a straight line |
 | `.stop()` | Stop exactly on this point |
 | `.stop(seconds)` | Stop, then wait that many seconds |
@@ -140,7 +141,7 @@ new Path(new Point(1, 2).withAngle(Rotation2d.fromDegrees(0)),
          new Point(3, 4).withAngle(Rotation2d.fromDegrees(90)),
          new Point(5, 2));
 
-// slow corner: the whole arc through (3, 4) at 1 m/s or less
+// at most 1 m/s at the corner point (3, 4); the robot slows into it and speeds up after it
 new Path(new Point(1, 2), new Point(3, 4).withVelocity(1.0), new Point(5, 2));
 
 // stop on a point, wait 1.5 s, continue
@@ -269,7 +270,7 @@ Path adds no logging library.
 | Warning: radius shrunk | The radius you asked for does not fit between the neighbors |
 | Warning: ... is ignored | `withRadius` on the first or last point or on a straight-line point, `withVelocity` on the first or last point, or `withAngle` while a face target is set |
 | Warning: point is only a pass marker | The point is on a straight line and the path misses it; add `.stop()` there or remove the point |
-| Robot drives a whole corner slowly | `withVelocity` on a corner point limits the whole arc |
+| Robot drives a whole corner slowly | The heading must turn too fast at the corner point (a big angle change there); spread the turn over more path or use a larger radius. `withVelocity` slows the robot only near its point |
 | Robot runs wide on arcs | `tauLag` too small (tuning step 4), or `latency` in `KinematicsConfig` is wrong |
 | Robot weaves around the path | `kN` too high for the lag (tuning steps 2 and 3) |
 | Robot ends a little short or late | `kP` low, or the finish tolerance is tight; see `eN` and `s` |
