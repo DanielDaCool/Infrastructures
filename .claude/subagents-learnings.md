@@ -10,6 +10,9 @@ date | task type | model used | signal | better model
 2026-10-31 | integrating 5 chapters + applying review fixes | opus (high) | one review fix introduced a Critical (braking rule) | opus (right; always re-review fixes)
 2026-11-01 | doc simplification pass with math re-verification | opus (high) | correctly halted one item on script evidence; constant-speed-arc change had a Major found at review | opus (right)
 2026-11-01 | design review / re-review (math, sim) | opus (high) | found Critical/Major issues each round with independent scripts | opus (right)
+2026-11-02 | FRC Java implementation from a finished design (geometry/profile/follower) | opus (medium) | compiled and passed its tests first try; reviewer found 1-2 Major per phase | opus medium (right)
+2026-11-02 | stub skeleton from API doc | sonnet (medium) | compiled first try, no review findings | sonnet (right)
+2026-11-02 | example wiring + doc sync to real API | sonnet (medium) | approved, minors only | sonnet (right)
 
 ## Rules
 - User preference: run subagents at effort "medium", not "high" (token cost). Escalate to high only with the user's OK.
