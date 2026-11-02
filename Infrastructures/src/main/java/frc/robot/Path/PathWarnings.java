@@ -1,5 +1,7 @@
 package frc.robot.Path;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import edu.wpi.first.wpilibj.Alert.AlertType;
@@ -10,9 +12,12 @@ final class PathWarnings {
     /** Jerk warning threshold is max(aAcc, aDec) / (5 * dt_nom) (section 10, C2). */
     static final double JERK_WARNING_DT_FACTOR = 5.0;
 
+    private final String pathName;
+    private final List<String> warnings = new ArrayList<>();
+
     /** @param pathName the path name used in the message prefix {@code Path "name"} */
     PathWarnings(String pathName) {
-        throw new UnsupportedOperationException("TODO phase 3");
+        this.pathName = pathName;
     }
 
     /**
@@ -23,12 +28,17 @@ final class PathWarnings {
      * @param text       the text of the table row
      */
     void add(int pointIndex, String text) {
-        throw new UnsupportedOperationException("TODO phase 3");
+        String message = "Path \"" + pathName + "\"" + (pointIndex >= 0 ? ", point " + pointIndex : "") + ": " + text;
+        if (warnings.contains(message)) {
+            return;
+        }
+        warnings.add(message);
+        PathLogger.get().alert(message, AlertType.kWarning, true);
     }
 
     /** @return the warning strings collected so far (backs {@code Path.warnings()}) */
     List<String> list() {
-        throw new UnsupportedOperationException("TODO phase 3");
+        return Collections.unmodifiableList(new ArrayList<>(warnings));
     }
 
     /** Sends a start warning (C1, C2) once per text (9.12.3). */

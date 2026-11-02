@@ -36,29 +36,33 @@ public final class Point {
 
     /** @param x blue-frame x [m] @param y blue-frame y [m] */
     public Point(double x, double y) {
-        this(x, y, null, Double.NaN, Double.NaN, false, 0.0);
-        // TODO phase 1: V4 finite check
+        this(checkFinite("Point", x, "x", "meters", x), checkFinite("Point", y, "y", "meters", y), null,
+                Double.NaN, Double.NaN, false, 0.0);
     }
 
     /** @param position blue-frame position */
     public Point(Translation2d position) {
-        this(Objects.requireNonNull(position, "Point: position is null").getX(), position.getY());
+        this(Objects.requireNonNull(position, nullMessage("Point", "the position")).getX(), position.getY());
     }
 
     /** @param pose blue-frame position plus {@code withAngle(pose.getRotation())} */
     public Point(Pose2d pose) {
-        this(Objects.requireNonNull(pose, "Point: pose is null").getX(), pose.getY(), pose.getRotation(),
-                Double.NaN, Double.NaN, false, 0.0);
+        this(checkFinite("Point", Objects.requireNonNull(pose, nullMessage("Point", "the pose")).getX(), "x",
+                "meters", pose.getX()),
+                checkFinite("Point", pose.getY(), "y", "meters", pose.getY()),
+                checkAngle("Point", pose.getRotation()), Double.NaN, Double.NaN, false, 0.0);
     }
 
     /** @return a copy with a heading anchor (section 6) */
     public Point withAngle(Rotation2d angle) {
-        Objects.requireNonNull(angle, "withAngle: the angle is null");
+        Objects.requireNonNull(angle, nullMessage("withAngle", "the angle"));
+        checkAngle("withAngle", angle);
         return new Point(x, y, angle, maxVelocity, radius, stop, dwell);
     }
 
     /** @return a copy with a max speed here; 0 means {@link #stop()}; v &lt; 0 throws (V11) */
     public Point withVelocity(double metersPerSecond) {
+        checkFinite("withVelocity", metersPerSecond, "the speed", "m/s", metersPerSecond);
         if (metersPerSecond < 0) {
             throw new IllegalArgumentException("withVelocity(" + metersPerSecond
                     + "): the speed must be 0 or more (m/s). withVelocity(0) is the same as stop(). "
@@ -72,6 +76,7 @@ public final class Point {
 
     /** @return a copy with a corner radius override; 0 = stop corner; r &lt; 0 throws (V9) */
     public Point withRadius(double meters) {
+        checkFinite("withRadius", meters, "the radius", "meters", meters);
         if (meters < 0) {
             throw new IllegalArgumentException("withRadius(" + meters
                     + "): the radius must be 0 or more (meters). Use withRadius(0) to make the robot stop "
@@ -93,12 +98,49 @@ public final class Point {
 
     /** @return a copy with v = 0 here, then a wait of dwellSeconds; d &lt; 0 throws (V13) */
     public Point stop(double dwellSeconds) {
+        checkFinite("stop", dwellSeconds, "the wait time", "seconds", dwellSeconds);
         if (dwellSeconds < 0) {
             throw new IllegalArgumentException("stop(" + dwellSeconds
                     + "): the wait time must be 0 or more (seconds). Use stop() to stop without waiting, "
                     + "or stop(1.5) to wait 1.5 seconds.");
         }
         return new Point(x, y, angle, Double.NaN, radius, true, dwellSeconds);
+    }
+
+    /**
+     * Internal: a copy at another position with another angle (null = none); speed, radius and
+     * stop are kept. Used by the alliance flip.
+     */
+    Point withPositionAndAngle(double newX, double newY, Rotation2d newAngle) {
+        return new Point(newX, newY, newAngle, maxVelocity, radius, stop, dwell);
+    }
+
+    /** @return the V3 message for a null argument */
+    static String nullMessage(String method, String argument) {
+        return method + ": " + argument + " is null. Every argument must be set; see the example in Path.md \"Quick start\".";
+    }
+
+    /** @return the V4 message for a NaN or infinite number */
+    static String notFiniteMessage(String method, double value, String name, String unit) {
+        return method + "(" + value + "): " + name + " must be a finite number (" + unit
+                + "), but it is NaN or infinite. A NaN usually comes from a division by zero or from a value "
+                + "that was never set.";
+    }
+
+    /** @return value; throws V4 if it is NaN or infinite */
+    private static double checkFinite(String method, double value, String name, String unit, double shown) {
+        if (!Double.isFinite(value)) {
+            throw new IllegalArgumentException(notFiniteMessage(method, shown, name, unit));
+        }
+        return value;
+    }
+
+    /** @return angle; throws V4 if it is NaN or infinite */
+    private static Rotation2d checkAngle(String method, Rotation2d angle) {
+        if (!Double.isFinite(angle.getCos()) || !Double.isFinite(angle.getSin())) {
+            throw new IllegalArgumentException(notFiniteMessage(method, angle.getRadians(), "the angle", "radians"));
+        }
+        return angle;
     }
 
     /** @return the position, blue frame */
