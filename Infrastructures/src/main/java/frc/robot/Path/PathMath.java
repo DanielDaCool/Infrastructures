@@ -21,7 +21,10 @@ final class PathMath {
     static double mod2pi(double angle) {
         double twoPi = 2.0 * Math.PI;
         double a = angle % twoPi;
-        return a < 0 ? a + twoPi : a;
+        if (a < 0) {
+            a += twoPi;
+        }
+        return a >= twoPi ? 0.0 : a;   // a tiny negative angle rounds to 2pi after the add
     }
 
     /** @return v rotated by +90 degrees: (x, y) becomes (-y, x) */

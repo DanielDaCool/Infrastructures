@@ -59,9 +59,13 @@ final class GeometryBuilder {
         double radius;
         boolean stop;
         double dwell;
+        int speedFrom;     // user index that set the stop / speed attribute
+        int radiusFrom;    // user index that set the radius
 
         Node(int userIndex, Point p) {
             this.userIndex = userIndex;
+            this.speedFrom = userIndex;
+            this.radiusFrom = userIndex;
             this.x = p.x();
             this.y = p.y();
             this.angle = p.angle().orElse(null);
@@ -130,6 +134,11 @@ final class GeometryBuilder {
      * @return the table; {@code waypointS} is indexed by the user's point index
      */
     static SegmentTable build(List<Point> points, PathWarnings warnings) {
+        return build(points, warnings, MAX_ITER);
+    }
+
+    /** Same as {@link #build(List, PathWarnings)} with another shrink-pass guard (tests force the fallback). */
+    static SegmentTable build(List<Point> points, PathWarnings warnings, int maxIter) {
         int userCount = points.size();
         if (userCount < 2) {
             throw new IllegalArgumentException("Path needs at least 2 points (a start and an end), but you gave "
@@ -166,7 +175,8 @@ final class GeometryBuilder {
         }
         for (Node node : merged) {
             if (node.stop && node.hasRadius() && node.radius > 0) {
-                throw stopWithRadius(node.userIndex, node.radius);
+                throw node.speedFrom == node.radiusFrom ? stopWithRadius(node.speedFrom, node.radius)
+                        : mergedStopWithRadius(node.speedFrom, node.radiusFrom, node.radius);
             }
         }
         warnEndpoints(merged.get(0), merged.get(merged.size() - 1), warnings);
@@ -295,13 +305,16 @@ final class GeometryBuilder {
         for (int i = 0; i < n; i++) {
             shrinkReasons.add(EnumSet.noneOf(Check.class));
         }
+        boolean[] fallbackZeroed = new boolean[n];
         Construction c = construct(n, px, py, r, sigma, tau, bx, by, legLength);
         int iter = 0;
         while (c.anyFailed()) {
-            if (++iter > MAX_ITER) {
+            if (++iter > maxIter) {
+                // hard guard (5.7.3): the polyline with stops always passes F1 to F3
                 for (int i = 1; i < n - 1; i++) {
                     if (r[i] > 0) {
                         shrinkReasons.get(i).addAll(c.failed.get(i));
+                        fallbackZeroed[i] = true;
                         r[i] = 0;
                     }
                 }
@@ -327,6 +340,12 @@ final class GeometryBuilder {
             c = construct(n, px, py, r, sigma, tau, bx, by, legLength);
         }
         for (int i = 1; i < n - 1; i++) {
+            if (fallbackZeroed[i]) {
+                String why = shrinkReasons.get(i).isEmpty() ? "" : " (" + checkList(shrinkReasons.get(i)) + ")";
+                warnings.add(nodes[i].userIndex, stopText("no radius fitted within " + maxIter
+                        + " shrink passes, so every corner arc was removed" + why));
+                continue;
+            }
             if (shrinkReasons.get(i).isEmpty()) {
                 continue;
             }
@@ -361,7 +380,7 @@ final class GeometryBuilder {
                 } else {
                     segments.add(Segment.stop(s, new Translation2d(px[i], py[i]),
                             new Translation2d(c.tx[j - 1], c.ty[j - 1]), new Translation2d(c.tx[j], c.ty[j]),
-                            geo.get(i), nodes[i].stop, nodes[i].stop ? nodes[i].dwell : 0.0));
+                            nodes[i].userIndex, nodes[i].stop, nodes[i].stop ? nodes[i].dwell : 0.0));
                     geoS[i] = s;
                 }
             }
@@ -539,6 +558,7 @@ final class GeometryBuilder {
                 text.append(both("a speed setting", speedText(kept.stop, kept.dwell, kept.maxVelocity),
                         speedText(p.isStop(), p.dwellSeconds(), p.maxVelocity().orElse(Double.NaN))));
             }
+            kept.speedFrom = u;
             kept.stop = p.isStop();
             kept.dwell = p.dwellSeconds();
             kept.maxVelocity = p.maxVelocity().orElse(Double.NaN);
@@ -547,6 +567,7 @@ final class GeometryBuilder {
             if (kept.hasRadius()) {
                 text.append(both("withRadius", fmt(kept.radius), fmt(p.radius().getAsDouble())));
             }
+            kept.radiusFrom = u;
             kept.radius = p.radius().getAsDouble();
         }
         warnings.add(kept.userIndex, text.toString());
@@ -613,6 +634,16 @@ final class GeometryBuilder {
         return new IllegalArgumentException("Point " + i + " has both stop() and withRadius(" + radius + "). A stop "
                 + "point is a sharp corner (the robot stops exactly on the point), so it has no arc. Remove withRadius("
                 + radius + ") to stop on the point, or remove stop() to drive through the corner on a round arc.");
+    }
+
+    /** @return the V30 exception when stop() and withRadius come from two merged points */
+    private static IllegalArgumentException mergedStopWithRadius(int stopIndex, int radiusIndex, double radius) {
+        return new IllegalArgumentException("Points " + Math.min(stopIndex, radiusIndex) + " and "
+                + Math.max(stopIndex, radiusIndex) + " are less than 1 mm apart and were merged into one point, but "
+                + "point " + stopIndex + " has stop() and point " + radiusIndex + " has withRadius(" + radius + "). A "
+                + "stop point is a sharp corner (the robot stops exactly on the point), so it has no arc. Remove "
+                + "withRadius(" + radius + ") from point " + radiusIndex + " to stop on the point, or remove stop() "
+                + "from point " + stopIndex + " to drive through the corner on a round arc.");
     }
 
     /** @return v rounded to 4 decimals, without trailing zeros */

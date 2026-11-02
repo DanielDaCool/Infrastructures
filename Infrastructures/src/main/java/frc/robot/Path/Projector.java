@@ -23,6 +23,8 @@ final class Projector {
 
     /**
      * Nearest path point with s in [sMin, sMax]; ties keep the s closest to sPrev (5.10.4).
+     * Never throws (run time): a NaN sPrev is read as 0, and a NaN window edge is replaced by
+     * sPrev, so a NaN window degenerates to the single point s = sPrev.
      *
      * @param p     robot position
      * @param sMin  window start
@@ -32,6 +34,15 @@ final class Projector {
      */
     Projection project(Translation2d p, double sMin, double sMax, double sPrev) {
         double length = table.length();
+        if (Double.isNaN(sPrev)) {
+            sPrev = 0.0;
+        }
+        if (Double.isNaN(sMin)) {
+            sMin = sPrev;
+        }
+        if (Double.isNaN(sMax)) {
+            sMax = sPrev;
+        }
         double lo = Math.max(0.0, Math.min(length, sMin));
         double hi = Math.max(0.0, Math.min(length, sMax));
         if (lo > hi) {

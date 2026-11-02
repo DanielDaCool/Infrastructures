@@ -34,7 +34,8 @@ public final class Path {
     private final String name;
     private final List<String> warnings;
     private final Path blueSource;                // null unless this is a flipped copy
-    private final Map<FlipKey, Path> flipCache;
+    private final FlipKey flipKey;                // null unless this is a flipped copy
+    private final Map<FlipKey, Path> flipCache;   // used on blue paths only
 
     /** Memo key of a flip: mode and field size. */
     private record FlipKey(FlipMode mode, double fieldLength, double fieldWidth) {
@@ -69,12 +70,14 @@ public final class Path {
         this.faceTarget = null;
         this.events = List.of();
         this.blueSource = null;
+        this.flipKey = null;
         this.flipCache = new HashMap<>();
     }
 
-    /** Copy constructor: shares the geometry. */
+    /** Copy constructor: shares the geometry. A flipped copy has a blue source and its flip key. */
     private Path(List<Point> points, SegmentTable table, PathConstraints constraints, Translation2d faceTarget,
-                 List<ResolvedEvent> events, String name, List<String> warnings, Path blueSource) {
+                 List<ResolvedEvent> events, String name, List<String> warnings, Path blueSource,
+                 FlipKey flipKey) {
         this.points = points;
         this.table = table;
         this.constraints = constraints;
@@ -83,7 +86,14 @@ public final class Path {
         this.name = name;
         this.warnings = warnings;
         this.blueSource = blueSource;
+        this.flipKey = flipKey;
         this.flipCache = new HashMap<>();
+    }
+
+    /** @return a blue copy with new values; geometry and points shared */
+    private Path blueCopy(PathConstraints c, Translation2d target, List<ResolvedEvent> evts, String n,
+                          List<String> w) {
+        return new Path(points, table, c, target, evts, n, w, null, null);
     }
 
     /** @return a path through the points */
@@ -94,25 +104,45 @@ public final class Path {
 
     /** @return a path through the points with per-path constraints */
     public static Path of(PathConstraints constraints, List<Point> points) {
+        Objects.requireNonNull(constraints, Point.nullMessage("Path.of", "the constraints"));
         Objects.requireNonNull(points, Point.nullMessage("Path.of", "the points list"));
         return new Path(constraints, points.toArray(new Point[0]));
     }
 
-    /** @return a copy with a name (telemetry key {@code Path/<name>}) */
+    /**
+     * The name is the telemetry key only: warning texts keep the automatic name the path had when
+     * it was built ({@code Path "path3", ...}); withName does not rewrite them.
+     *
+     * @return a copy with a name (telemetry key {@code Path/<name>}); on a flipped copy, the same
+     *         flip of the renamed blue path
+     */
     public Path withName(String name) {
         Objects.requireNonNull(name, Point.nullMessage("withName", "the name"));
-        return new Path(points, table, constraints, faceTarget, events, name, warnings, blueSource);
+        if (blueSource != null) {
+            return blueSource.withName(name).flippedBy(flipKey);
+        }
+        return blueCopy(constraints, faceTarget, events, name, warnings);
     }
 
-    /** @return a copy with per-path constraints */
+    /** @return a copy with per-path constraints; on a flipped copy, the same flip of the changed blue path */
     public Path withConstraints(PathConstraints constraints) {
         Objects.requireNonNull(constraints, Point.nullMessage("withConstraints", "the constraints"));
-        return new Path(points, table, constraints, faceTarget, events, name, warnings, blueSource);
+        if (blueSource != null) {
+            return blueSource.withConstraints(constraints).flippedBy(flipKey);
+        }
+        return blueCopy(constraints, faceTarget, events, name, warnings);
     }
 
-    /** @return a copy whose robot front faces the target (blue frame) */
+    /**
+     * The target is in the blue frame, also on a flipped copy (it is flipped with the path).
+     *
+     * @return a copy whose robot front faces the target
+     */
     public Path withFaceTarget(Translation2d target) {
         Objects.requireNonNull(target, Point.nullMessage("withFaceTarget", "the face target"));
+        if (blueSource != null) {
+            return blueSource.withFaceTarget(target).flippedBy(flipKey);
+        }
         if (!Double.isFinite(target.getX()) || !Double.isFinite(target.getY())) {
             throw new IllegalArgumentException(Point.notFiniteMessage("withFaceTarget",
                     Double.isFinite(target.getX()) ? target.getY() : target.getX(), "the face target", "meters"));
@@ -131,18 +161,26 @@ public final class Path {
                 all.add(w);
             }
         }
-        return new Path(points, table, constraints, target, events, name, Collections.unmodifiableList(all),
-                blueSource);
+        return blueCopy(constraints, target, events, name, Collections.unmodifiableList(all));
     }
 
-    /** @return a copy without a face target */
+    /** @return a copy without a face target; on a flipped copy, the same flip of the changed blue path */
     public Path withoutFaceTarget() {
-        return new Path(points, table, constraints, null, events, name, warnings, blueSource);
+        if (blueSource != null) {
+            return blueSource.withoutFaceTarget().flippedBy(flipKey);
+        }
+        return blueCopy(constraints, null, events, name, warnings);
     }
 
-    /** @return a copy with the event, resolved to s now (5.9.5) */
+    /**
+     * @return a copy with the event, resolved to s now (5.9.5); on a flipped copy, the same flip of
+     *         the changed blue path
+     */
     public Path withEvent(PathEvent event) {
         Objects.requireNonNull(event, Point.nullMessage("withEvent", "the event"));
+        if (blueSource != null) {
+            return blueSource.withEvent(event).flippedBy(flipKey);
+        }
         double s;
         if (event.kind() == PathEvent.Kind.FRACTION) {
             double f = event.value();
@@ -156,8 +194,7 @@ public final class Path {
         }
         List<ResolvedEvent> list = new ArrayList<>(events);
         list.add(new ResolvedEvent(s, event));
-        return new Path(points, table, constraints, faceTarget, Collections.unmodifiableList(list), name, warnings,
-                blueSource);
+        return blueCopy(constraints, faceTarget, Collections.unmodifiableList(list), name, warnings);
     }
 
     /** @return a copy with an event at fraction f of the length */
@@ -184,24 +221,38 @@ public final class Path {
         return withEvent(PathEvent.atPoint(pointIndex, action));
     }
 
-    /** @return the flipped path, memoized per mode and field size; mode NONE returns this */
+    /**
+     * Mode NONE returns this. On a flipped copy, the same mode and field size return this; another
+     * mode or field size returns that flip of the blue source.
+     *
+     * @return the flipped path, memoized per mode and field size
+     */
     public Path flipped(PathFollowerConfig config) {
         Objects.requireNonNull(config, Point.nullMessage("flipped", "the config"));
-        if (blueSource != null) {
-            return blueSource.flipped(config);
-        }
         FlipMode mode = Objects.requireNonNull(config.flipMode(), Point.nullMessage("flipped", "the flip mode"));
         if (mode == FlipMode.NONE) {
             return this;
         }
-        double fl = config.fieldLength();
-        double fw = config.fieldWidth();
-        FlipKey key = new FlipKey(mode, fl, fw);
+        FlipKey key = new FlipKey(mode, config.fieldLength(), config.fieldWidth());
+        if (blueSource != null && key.equals(flipKey)) {
+            return this;
+        }
+        return flippedBy(key);
+    }
+
+    /** @return the blue path flipped by key, memoized on the blue path */
+    private Path flippedBy(FlipKey key) {
+        if (blueSource != null) {
+            return blueSource.flippedBy(key);
+        }
         synchronized (flipCache) {
             Path cached = flipCache.get(key);
             if (cached != null) {
                 return cached;
             }
+            FlipMode mode = key.mode();
+            double fl = key.fieldLength();
+            double fw = key.fieldWidth();
             List<Point> flippedPoints = new ArrayList<>(points.size());
             for (Point p : points) {
                 flippedPoints.add(PathFlipper.flipPoint(p, mode, fl, fw));
@@ -209,13 +260,18 @@ public final class Path {
             Translation2d flippedTarget = faceTarget == null ? null
                     : PathFlipper.flipTranslation(faceTarget, mode, fl, fw);
             Path result = new Path(Collections.unmodifiableList(flippedPoints), PathFlipper.flip(table, mode, fl, fw),
-                    constraints, flippedTarget, events, name, warnings, this);
+                    constraints, flippedTarget, events, name, warnings, this, key);
             flipCache.put(key, result);
             return result;
         }
     }
 
-    /** @return this on blue or unknown alliance, {@code flipped(config)} on red */
+    /**
+     * Red: {@code flipped(config)} (this if this is already that flip, or for mode NONE). Blue or
+     * unknown: the blue path (the blue source of a flipped copy).
+     *
+     * @return the path for the alliance the DriverStation reports
+     */
     public Path forCurrentAlliance(PathFollowerConfig config) {
         Objects.requireNonNull(config, Point.nullMessage("forCurrentAlliance", "the config"));
         Optional<Alliance> alliance = DriverStation.getAlliance();
@@ -270,7 +326,7 @@ public final class Path {
         return events;
     }
 
-    /** @return every warning reported at build time */
+    /** @return every warning reported at build time; the texts keep the automatic name given at construction */
     public List<String> warnings() {
         return warnings;
     }

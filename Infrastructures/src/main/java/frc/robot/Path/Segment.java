@@ -40,7 +40,7 @@ final class Segment {
     // STOP
     /** Direction of arrival T_in. */
     final Translation2d tIn;
-    /** Index of the corner (after merging). */
+    /** User index of the stop point (the index the user wrote; for merged points, the kept one). */
     final int cornerIndex;
     /** True if the user wrote stop(); false for an automatic stop corner. */
     final boolean userStop;
