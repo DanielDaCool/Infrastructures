@@ -77,8 +77,15 @@ final class SpeedProfile {
         }
     }
 
-    /** A speed limit vCap on [sStart, sEnd]; a point limit has sStart == sEnd. */
-    record Limit(double sStart, double sEnd, double vCap) { }
+    /**
+     * A speed limit vCap on [sStart, sEnd] (a point limit has sStart == sEnd). vGrip = sqrt(aLat r) on an arc (speed-up
+     * shares the grip), rate = alphaMax/|theta'| on a heading piece (speed-up and braking toward it); else infinite.
+     */
+    record Limit(double sStart, double sEnd, double vCap, double vGrip, double rate) {
+        Limit(double sStart, double sEnd, double vCap) {
+            this(sStart, sEnd, vCap, Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY);
+        }
+    }
 
     private final List<Limit> limits = new ArrayList<>();
     private final List<double[]> stops = new ArrayList<>(); // {s, dwell} inside (0, L), ascending
@@ -104,7 +111,8 @@ final class SpeedProfile {
         int n = points.size();
         for (PathGeometry.Segment g : segs) {
             if (g.type() == PathGeometry.Segment.Type.ARC) {
-                p.limits.add(new Limit(g.sStart(), g.sEnd(), Math.sqrt(constraints.aLat() * g.r())));
+                double vGrip = Math.sqrt(constraints.aLat() * g.r());
+                p.limits.add(new Limit(g.sStart(), g.sEnd(), vGrip, vGrip, Double.POSITIVE_INFINITY));
             } else if (g.type() == PathGeometry.Segment.Type.STOP && g.sStart() > S_EPS && g.sStart() < p.length - S_EPS) {
                 p.stops.add(new double[] {g.sStart(), g.dwell()});
             }
@@ -116,14 +124,16 @@ final class SpeedProfile {
             Limit arc = p.limits.stream().filter(l -> s > l.sStart() + S_EPS && s < l.sEnd() - S_EPS).findFirst().orElse(null);
             if (v > 0.0) {
                 p.limits.remove(arc);
-                p.limits.add(arc == null ? new Limit(s, s, v) : new Limit(arc.sStart(), arc.sEnd(), Math.min(v, arc.vCap())));
+                p.limits.add(arc == null ? new Limit(s, s, v)
+                        : new Limit(arc.sStart(), arc.sEnd(), Math.min(v, arc.vCap()), arc.vGrip(), arc.rate()));
             }
         }
         double[] k = heading.breakpointsS();
         for (int i = 0; i + 1 < k.length; i++) {
             double dth = Math.abs(heading.dTheta(0.5 * (k[i] + k[i + 1])));
             if (dth > 0.0) {
-                p.limits.add(new Limit(k[i], k[i + 1], constraints.omegaMax() / dth));
+                p.limits.add(new Limit(k[i], k[i + 1], constraints.omegaMax() / dth, Double.POSITIVE_INFINITY,
+                        constraints.alphaMax() / dth));
             }
         }
         for (int i = 0; i < n && path.sAtPoint(i) == 0.0; i++) { // stop(d) on P_0 and the points merged into it
@@ -134,8 +144,11 @@ final class SpeedProfile {
         double s = 0.0;
         double v = Math.max(0.0, v0);
         double t = p.startDwell;
+        double dwells = p.startDwell + p.endDwell + p.stops.stream().mapToDouble(x -> x[1]).sum();
+        double vSlow = p.limits.stream().mapToDouble(Limit::vCap).reduce(constraints.vMax(), Math::min);
+        double tMax = 10.0 * (p.length / vSlow + dwells) + 10.0; // far longer than any real run
         for (double sGoal = p.nextStopS(0.0); ; ) {
-            if (t > 1000.0 || !Double.isFinite(v)) {
+            if (t > tMax || !Double.isFinite(v)) {
                 throw new IllegalStateException("SpeedProfile: the planned run does not reach s = " + sGoal + " m (stuck at s = "
                         + s + " m); an internal error, please report it with the path points and the constraints.");
             }
@@ -162,7 +175,7 @@ final class SpeedProfile {
      * One loop of the speed law (7.6.5, 8.3.7a): the smallest of {@link #ceiling}, cap (the correction budget, 8.3.9)
      * and {@code vPrev + aAcc dt}. A non-finite input, or dt &lt;= 0, holds vPrev.
      *
-     * @param s     progress s* (only checked to be finite)
+     * @param s     progress s*: limits overlapping [s*, sV] apply
      * @param sV    lag-led progress {@code s* + v_prev TAU_LAG}, clamped at sGoal - d_h
      * @param sGoal first stop point greater than s, or L
      * @return the new speed command [m/s], at least 0
@@ -173,28 +186,36 @@ final class SpeedProfile {
             return vPrev;
         }
         double vp = Math.max(0.0, vPrev);
-        double v = Math.min(Math.min(cap, ceiling(sV, sGoal, dt)), vp + c.aAcc() * dt);
+        double up = c.aAcc(); // speed-up: shares the grip on an arc, alphaMax/|theta'| on a heading piece
+        for (Limit l : limits) {
+            if (l.sStart() <= sV && l.sEnd() >= s) {
+                double lat = vp * vp / (l.vGrip() * l.vGrip());
+                up = Math.min(up, Math.min(l.rate(), c.aAcc() * Math.sqrt(Math.max(0.0, 1.0 - lat * lat))));
+            }
+        }
+        double v = Math.min(Math.min(cap, ceiling(s, sV, sGoal, dt)), vp + up * dt);
         if (v > vp) { // speeding up moves the lead sV by TAU_LAG dv more next loop: brake for that now
-            v = Math.max(vp, Math.min(v, ceiling(sV + PathFollowerConfig.TAU_LAG * (v - vp), sGoal, dt)));
+            v = Math.max(vp, Math.min(v, ceiling(s, sV + PathFollowerConfig.TAU_LAG * (v - vp), sGoal, dt)));
         }
         return Math.max(0.0, v);
     }
 
     /**
-     * @return the smallest of vMax, the limits containing sV, {@code sqrt(vCap^2 + 2 aDec (sStart - sV))} of every
+     * @return the smallest of vMax, the limits overlapping [s, sV], {@code sqrt(vCap^2 + 2 d (sStart - sV))} of every
      *     limit ahead of sV and before sGoal, and the hand-over envelope {@code sqrt(v_h^2 + 2 aDec (sGoal - d_h - sV))};
-     *     braking terms in the discrete form, so one loop never brakes harder than aDec
+     *     d = min(aDec, rate); braking terms in the discrete form, so one loop never brakes harder than d
      */
-    private double ceiling(double sV, double sGoal, double dt) {
+    private double ceiling(double s, double sV, double sGoal, double dt) {
         double d = c.aDec();
         double vH = kP * HAND_OVER;
         double v = Math.min(c.vMax(),
                 discrete(Math.sqrt(vH * vH + 2.0 * d * dt * vH + 2.0 * d * Math.max(0.0, sGoal - HAND_OVER - sV)), d, dt));
         for (Limit l : limits) {
-            if (l.sStart() <= sV && sV <= l.sEnd()) {
+            if (l.sStart() <= sV && l.sEnd() >= s) {
                 v = Math.min(v, l.vCap());
             } else if (l.sStart() > sV && l.sStart() < sGoal) {
-                v = Math.min(v, discrete(Math.sqrt(l.vCap() * l.vCap() + 2.0 * d * (l.sStart() - sV)), d, dt));
+                double dl = Math.min(d, l.rate());
+                v = Math.min(v, discrete(Math.sqrt(l.vCap() * l.vCap() + 2.0 * dl * (l.sStart() - sV)), dl, dt));
             }
         }
         return v;

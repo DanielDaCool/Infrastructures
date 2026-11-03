@@ -42,16 +42,18 @@ interim 2 cm sampled grid). `SpeedProfile` builds a short list of limits `Limit(
 (a `withVelocity` on its corner caps the whole arc), every heading piece between anchors with `theta' != 0` with `omegaMax/abs(theta')`,
 and a point limit for a `withVelocity` point that is not on an arc; vMax applies everywhere, and each stop and the end are goals.
 Each loop (like the 2025 `getVelocity`) the law is `v_cmd = min(ceiling(s_v), cap, v_prev + aAcc·dt)`, where `ceiling` is the
-smallest of vMax, every limit containing s_v, `sqrt(vCap^2 + 2·aDec·(sStart - s_v))` of every limit ahead of s_v and before
-s_goal, and the hand-over envelope `sqrt(v_h^2 + 2·aDec·(s_goal - d_h - s_v))`; the braking terms use the discrete form, so one
+smallest of vMax, every limit overlapping `[s*, s_v]` (so the lead point past a zone end does not lift its cap),
+`sqrt(vCap^2 + 2·d·(sStart - s_v))` of every limit ahead of s_v and before s_goal (d = aDec, or `min(aDec, alphaMax/abs(theta'))`
+toward a heading piece), and the hand-over envelope `sqrt(v_h^2 + 2·aDec·(s_goal - d_h - s_v))`; the braking terms use the discrete form, so one
 loop never brakes harder than aDec. When the command rises, the ceiling is also read at `s_v + tau_lag·dv` (the lead moves that
-much more next loop), which keeps the per-loop braking within aDec at the change from speeding up to braking. Speed-up is aAcc
-everywhere (arcs included), so there is no aAccEff, arc floor, heading-limited acceleration, heading-kink cap or per-span brake
-limit, and the CAPTURE law (8.3.7e) uses aAcc. `profileTime` simulates the same law at build with ideal tracking
+much more next loop), which keeps the per-loop braking within aDec at the change from speeding up to braking. Speed-up is aAcc,
+reduced on every limit overlapping `[s*, s_v]`: on an arc to `aAcc·sqrt(max(0, 1 - (v^2/(r·aLat))^2))` (grip ellipse <= 1) and on a
+heading piece to `alphaMax/abs(theta')`. There is no arc floor, heading-kink cap or per-span brake limit, and the CAPTURE law
+(8.3.7e) uses aAcc. `profileTime` simulates the same law at build with ideal tracking
 (`dt = 0.02 s`, from the measured start speed, `s += (v_prev + v)/2·dt` to each hand-over point, from rest after each stop), plus
-the start dwell, and per goal the dwell and the tail `max(0, ln(d_h/pos_tol)/k_p)`; a run that does not finish within 1000 s
-throws. Sections 7.3, 7.4, 7.6, 7.7 and 7.12 are replaced in v1 by this law and kept as reference. Reference numbers (EX, Java):
-shared example profileTime **3.3703 s** (closed form before: 3.4426 s), simulated run done 3.40 s, final error 0.019 m, no
+the start dwell, and per goal the dwell and the tail `max(0, ln(d_h/pos_tol)/k_p)`; a run longer than
+`10·(L/min(vMax, smallest vCap) + sum of dwells) + 10 s` throws. Sections 7.3, 7.4, 7.6, 7.7 and 7.12 are replaced in v1 by this law and kept as reference. Reference numbers (EX, Java):
+shared example profileTime **3.3703 s** (closed form before: 3.4426 s), simulated run done 3.40 s, final error 0.020 m, no
 overshoot; `P1.stop()` profileTime **4.0606 s** (before: 4.2245 s), done 4.08 s; `P1.stop(1.0)` done 5.10 s, final error 0.018 m,
 no overshoot of the stop or the end; `P1.withVelocity(1.0)` profileTime 5.3503 s. The simulated time is shorter than the closed
 form because the closed form also counted the last 5 cm before each goal at trapezoid speed on top of the tail, and arcs were
@@ -2902,24 +2904,26 @@ v1 (the code); the span version it replaced is described in sections 7.3 to 7.12
 ```
 buildProfile(path(flipped), c: PathConstraints, heading, v0, k_p, pos_tol):
   limits = []
-  for each ARC entry g:                      limits += (g.sStart, g.sEnd, sqrt(c.aLat * g.r))
+  for each ARC entry g:                      limits += (g.sStart, g.sEnd, vCap = vGrip = sqrt(c.aLat * g.r))
   for each inner point i with withVelocity v: if s_i is inside an arc: that arc's vCap = min(vCap, v)   # whole arc
                                               else limits += (s_i, s_i, v)                              # point limit
-  for each heading piece [s_a, s_b] with theta' != 0: limits += (s_a, s_b, c.omegaMax / abs(theta'))
+  for each heading piece [s_a, s_b] with theta' != 0: limits += (s_a, s_b, c.omegaMax / abs(theta'), rate = c.alphaMax / abs(theta'))
   goals = stops inside (0, L) in order, then L
   profileTime = startDwell; s = 0; v = max(0, v0)                          # simulate the law, ideal tracking
   for each goal: while goal - s > d_h: v1 = speed(v, s, s, goal, inf, 0.02); s += (v + v1)/2 * 0.02; v = v1; t += 0.02
-                 profileTime += max(0, ln(d_h/pos_tol)/k_p) + dwell(goal); s = goal; v = 0     # throws after 1000 s
+                 profileTime += max(0, ln(d_h/pos_tol)/k_p) + dwell(goal); s = goal; v = 0
+  # throws after 10*(L/min(vMax, smallest vCap) + sum dwells) + 10 s
 
-ceiling(s_v, s_goal, dt):                    # D = c.aDec; disc(vE) = sqrt(vE^2 + (D*dt)^2) - D*dt
+ceiling(s*, s_v, s_goal, dt):                # D = c.aDec; disc(vE, d) = sqrt(vE^2 + (d*dt)^2) - d*dt
   v = min(c.vMax, disc(sqrt(v_h^2 + 2*D*dt*v_h + 2*D*max(0, s_goal - d_h - s_v))))     # hand-over, lands on v_h = k_p*d_h
-  for each limit: if sStart <= s_v <= sEnd:          v = min(v, vCap)
-                  else if s_v < sStart < s_goal:      v = min(v, disc(sqrt(vCap^2 + 2*D*(sStart - s_v))))
+  for each limit: if sStart <= s_v and sEnd >= s*:   v = min(v, vCap)                  # overlaps [s*, s_v]
+                  else if s_v < sStart < s_goal:      d = min(D, rate); v = min(v, disc(sqrt(vCap^2 + 2*d*(sStart - s_v)), d))
   return v
 
 speed(v_prev, s*, s_v, s_goal, cap, dt):      # each loop; cap = sqrt(vMax^2 - c^2), 8.3.9; s_v = min(s* + v_prev*tau_lag, s_goal - d_h)
-  vp = max(0, v_prev); v = min(cap, ceiling(s_v, s_goal, dt), vp + c.aAcc*dt)
-  if v > vp: v = max(vp, min(v, ceiling(s_v + tau_lag*(v - vp), s_goal, dt)))   # the lead moves tau_lag*dv more next loop
+  up = c.aAcc; for each limit overlapping [s*, s_v]: up = min(up, rate, c.aAcc*sqrt(max(0, 1 - (vp^2/vGrip^2)^2)))
+  vp = max(0, v_prev); v = min(cap, ceiling(s*, s_v, s_goal, dt), vp + up*dt)
+  if v > vp: v = max(vp, min(v, ceiling(s*, s_v + tau_lag*(v - vp), s_goal, dt)))   # the lead moves tau_lag*dv more next loop
   return max(0, v)
 ```
 
