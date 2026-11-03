@@ -2921,8 +2921,9 @@ ceiling(s*, s_v, s_goal, dt):                # D = c.aDec; disc(vE, d) = sqrt(vE
   return v
 
 speed(v_prev, s*, s_v, s_goal, cap, dt):      # each loop; cap = sqrt(vMax^2 - c^2), 8.3.9; s_v = min(s* + v_prev*tau_lag, s_goal - d_h)
+  vp = max(0, v_prev)
   up = c.aAcc; for each limit overlapping [s*, s_v]: up = min(up, rate, c.aAcc*sqrt(max(0, 1 - (vp^2/vGrip^2)^2)))
-  vp = max(0, v_prev); v = min(cap, ceiling(s*, s_v, s_goal, dt), vp + up*dt)
+  v = min(cap, ceiling(s*, s_v, s_goal, dt), vp + up*dt)
   if v > vp: v = max(vp, min(v, ceiling(s*, s_v + tau_lag*(v - vp), s_goal, dt)))   # the lead moves tau_lag*dv more next loop
   return max(0, v)
 ```
