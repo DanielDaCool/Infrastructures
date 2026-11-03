@@ -60,9 +60,8 @@ Path path = new Path(
     new Point(3, 4).withAngle(Rotation2d.fromDegrees(90)),
     new Point(5, 2));
 
-Command follow = new FollowPathCommand(path, swerve::getPose, swerve::getFieldSpeeds,
-                                       swerve::driveFieldRelative, swerve)
-    .withKinematics(kinematicsConfig);
+Command follow = new FollowPathCommand(swerve, path);   // swerve implements PathDrivetrain
+// optional: .withConfig(PathFollowerConfig.defaults().withFlip(FlipMode.MIRROR))
 ```
 
 Points are in meters, in the blue-alliance field frame. Optional per point: an angle (`withAngle`), a
@@ -1630,9 +1629,9 @@ Notes:
 
 
 The record keeps its fields (brief decisions 6 and 18). Two optional inputs go to the command (section 9.10):
-- the `KinematicsConfig` (`withKinematics`): `maxForwardAccel` and `freeSpeed` (motor curve), `maxAllowedModuleVelocity`
+- the `KinematicsConfig`: `maxForwardAccel` and `freeSpeed` (motor curve), `maxAllowedModuleVelocity`
   (wheel cap), and the limiter limits for warning C2;
-- the `PathsConfig` (`withPathsConfig`), whose `moduleRadius` is R_mod: the largest distance from the robot center to a module.
+- the `PathsConfig`, whose `moduleRadius` is R_mod: the largest distance from the robot center to a module.
   `DemaciaKinematics` keeps the module positions private with no getter (DemaciaKinematics.java:58, :66), so the user
   computes R_mod from the same module locations.
 
@@ -3507,8 +3506,7 @@ The callback (`Function<ReplanRequest, ReplanDecision>`, CONTINUE or ABORT) fire
 Example: ROTATE, placeholder field 16.54 x 8.07 m: P0 = (1, 2) becomes (15.54, 6.07); heading 0 becomes pi.
 
 ### 8.11 Output interface
-
-The follow command takes `Supplier<Pose2d> pose`, `Supplier<ChassisSpeeds> measuredFieldSpeeds`, `Consumer<ChassisSpeeds> output` and
+The follow command takes a `PathDrivetrain` (section 9.10): it reads `getPose()` and `getFieldSpeeds()` and sends the command to `driveFieldRelative(ChassisSpeeds)`; the drivetrain is its requirement.
 `Subsystem... requirements`.
 
 Measured speeds: field-relative, blue frame, omega CCW. Used for v0 at initialize, the stop arrival test, the window, stale-pose detection and
@@ -3675,7 +3673,7 @@ reference.
 ### 9.2 Package layout
 
 Directory `Infrastructures/src/main/java/frc/robot/Path`, flat (like `frc/robot/Kinematics`, so installing is "copy one
-directory"). **Eight files** (v1, simplified 2026-11-03). There are exactly three public config types,
+directory"). **Nine files** (v1, simplified 2026-11-03). There are exactly three public config types,
 `PathConstraints`, `PathsConfig` and `PathFollowerConfig` (**Decision**, user, simplification pass).
 
 | File | Kind | Responsibility |
@@ -3685,6 +3683,7 @@ directory"). **Eight files** (v1, simplified 2026-11-03). There are exactly thre
 | `PathConstraints.java` | public record | vMax, aAcc, aDec, aLat, omegaMax, alphaMax, jerkMax; `fromConfig(KinematicsConfig, PathsConfig)` |
 | `PathsConfig.java` | public record | robot settings the Kinematics module does not have: max omega, max alpha, max jerk |
 | `PathFollowerConfig.java` | public record | follower gains, tolerances, timeout, flip mode and field size; nested `FlipMode`; constants `K_THETA`, `TAU_LAG`, `T_SETTLE`, `FIELD_LENGTH`, `FIELD_WIDTH` |
+| `PathDrivetrain.java` | public interface extends `Subsystem` | what the follower needs from the drivetrain: `getPose`, `getFieldSpeeds`, `driveFieldRelative`, default `getKinematicsConfig`, `getPathsConfig` |
 | `FollowPathCommand.java` | public class extends `Command` | the follower (the tracker is inside it); nested `Result`; a `Sendable` |
 | `PathGeometry.java` | package-private | merging, pass markers, corner circles, radius rule, tangents, sweeps, segment table, projection, flip (sections 5.3 to 5.13), the geometry constants; nested `PathSample` |
 | `SpeedProfile.java` | package-private | heading profile (section 6), spans, caps, passes, constant-speed arcs, time, the online speed law (sections 7, 7.13) |
@@ -3820,8 +3819,8 @@ aLat     = aDec formula
 omegaMax = p.maxAngularVelocity,  alphaMax = p.maxAngularAccel,  jerkMax = p.maxJerk     (no margin: these are path limits, not limiter limits)
 ```
 
-With `new KinematicsConfig()` and `PathsConfig.defaults()`: (4.05, 7.2, 7.2, 7.2, 2·pi, 4·pi, 50). The `KinematicsConfig` and the
-`PathsConfig` can also be passed to the command (`withKinematics`, `withPathsConfig`, section 9.10) when the path has no constraints. 
+With `new KinematicsConfig()` and `PathsConfig.defaults()`: (4.05, 7.2, 7.2, 7.2, 2·pi, 4·pi, 50). When the path has no constraints, the command takes the `KinematicsConfig` and the
+`PathsConfig` from the drivetrain (`getKinematicsConfig()`, `getPathsConfig()`, section 9.10). 
 
 ### 9.6 Config records
 
@@ -3918,16 +3917,18 @@ s values and L do not change. `NONE` is for a team that writes separate red path
 ### 9.10 FollowPathCommand
 
 ```java
+public interface PathDrivetrain extends Subsystem {
+    Pose2d getPose();                                // blue-origin field pose
+    ChassisSpeeds getFieldSpeeds();                  // measured, field-relative, omega CCW
+    void driveFieldRelative(ChassisSpeeds speeds);   // field-relative command, omega CCW
+    default KinematicsConfig getKinematicsConfig() { return new KinematicsConfig(); }   // limits when the path has no constraints
+    default PathsConfig getPathsConfig() { return PathsConfig.defaults(); }             // omega, alpha, jerk when the path has no constraints
+}
+
 public class FollowPathCommand extends Command {   // also a Sendable (initSendable adds the keys of 8.13)
-    public FollowPathCommand(Path path,
-                             Supplier<Pose2d> pose,                       // blue-origin field pose
-                             Supplier<ChassisSpeeds> measuredFieldSpeeds, // field-relative, omega CCW
-                             Consumer<ChassisSpeeds> output,              // field-relative command, omega CCW
-                             Subsystem... requirements);                  // the drivetrain
+    public FollowPathCommand(PathDrivetrain drivetrain, Path path);   // requires the drivetrain; null: NPE (V3)
 
     // configure before scheduling; each returns this; a change takes effect at the next initialize()
-    public FollowPathCommand withKinematics(KinematicsConfig config);      // limits when the path has no constraints
-    public FollowPathCommand withPathsConfig(PathsConfig config);          // omega, alpha, jerk when the path has no constraints
     public FollowPathCommand withConfig(PathFollowerConfig config);        // gains, tolerances, timeout, flip; default PathFollowerConfig.defaults()
     public FollowPathCommand withOnFinish(Consumer<Result> callback);
 
@@ -3955,10 +3956,9 @@ public class FollowPathCommand extends Command {   // also a Sendable (initSenda
 ```
 
 Rules:
-- **Constraints:** `path.constraints()` if set; else `PathConstraints.fromConfig(kinematics, paths)` with `kinematics` from `withKinematics` (else `new KinematicsConfig()`)
-  and `paths` from `withPathsConfig` (else `PathsConfig.defaults()`). No warning (C1 is removed).
+- **Constraints:** `path.constraints()` if set; else `PathConstraints.fromConfig(drivetrain.getKinematicsConfig(), drivetrain.getPathsConfig())`, read in `initialize()`. No warning (C1 is removed).
 - **Flip:** in `initialize()`, once: the alliance is read with `DriverStation.getAlliance()`; on red the command drives `path.flipped(config)`; empty gives blue with warning A2.
-- **Requirements:** at least one (V24).
+- **Requirements:** the drivetrain (it is a `Subsystem`); a null drivetrain is an NPE (V3), so the V24 case cannot happen.
 - **Failure:** `end` sends zero speeds once (also on success) and prints the reason with `DriverStation.reportWarning` (9.12.3). There is no `holdEndCommand()`; schedule
   your own hold command after the path.
 - **Output:** never negates omega, never discretizes.
@@ -3997,7 +3997,7 @@ rest were merged or dropped. The types and wording are those of the code, except
 | V11 | `withVelocity(v)` with v < 0 | `Point.withVelocity` | IAE | `withVelocity({v}): the speed must be 0 or more (m/s). withVelocity(0) is the same as stop(). To limit the speed at a point use a positive number, for example withVelocity(1.0).` |
 | V13 | `stop(d)` with d < 0 | `Point.stop` | IAE | `stop({d}): the wait time must be 0 or more (seconds). Use stop() to stop without waiting, or stop(1.5) to wait 1.5 seconds.` |
 | V16 | a config value out of range: a `PathConstraints` field, a `PathsConfig` angular limit or jerk, or a `PathFollowerConfig` number not finite or not > 0 | the record constructors (one shared helper, `PathConstraints.requirePositive`) | IAE | `{Record}.{field} must be a finite number above 0 ({unit}), but it is {v}. Start from {Record factory} and change one value, for example {example}.` Example: `PathConstraints.vMax must be a finite number above 0 (m/s), but it is -1.0. Start from PathConstraints.fromConfig(config) and change one value, for example PathConstraints.fromConfig(config).withVMax(3.0).` The factory is `PathConstraints.fromConfig(config)`, `PathsConfig.defaults()` or `PathFollowerConfig.defaults()`. Null arguments of `PathConstraints.fromConfig` throw NPE (V3): `PathConstraints.fromConfig: the KinematicsConfig is null; pass your robot's config (for example PathConstraints.fromConfig(new KinematicsConfig()))`. |
-| V24 | no requirement | `FollowPathCommand` constructor | IAE | `FollowPathCommand needs the drivetrain as a requirement, for example new FollowPathCommand(path, swerve::getPose, swerve::getFieldSpeeds, swerve::driveFieldRelative, swerve). Without it, two commands could drive the robot at the same time.` |
+| V24 | no drivetrain (null) | `FollowPathCommand` constructor | NPE | `FollowPathCommand: the drivetrain is null; pass your drivetrain subsystem, which implements PathDrivetrain (for example new FollowPathCommand(swerve, path)).` (same format as V3; replaces the old no-requirement error) |
 | V30 | a point has `stop()`, `stop(d)` or `withVelocity(0)` **and** `withRadius(r)` with r > 0 | `Path` constructor | IAE | `Point {i} has both stop() and withRadius({r}). A stop point is a sharp corner (the robot stops exactly on the point), so it has no arc. Remove withRadius({r}) to stop on the point, or remove stop() to drive through the corner on a round arc.` If the stop and the radius come from two points merged (closer than 1 mm), the text is `Points {i} and {j} are less than 1 mm apart and were merged into one point, but point {a} has stop() and point {b} has withRadius({r}). ...` with the same advice. |
 
 Notes: neighbors closer than 1 mm are merged with warning W3, not rejected; two equal points far apart in the list (a loop back to P_0) are legal.
@@ -4026,13 +4026,13 @@ design (no constraints; a limit above what has an effect) are removed: with no c
 
 | ID | When | Text |
 |---|---|---|
-| A1 | the command ended with a FAILED_* result (from `end`) | `Path "{name}": {result}: {reason}.` Reasons: FAILED_TIMEOUT `did not finish within {t} s ({factor} x the planned time + {margin} s); the robot was blocked, or the limits are above what the drivetrain can do; free the robot, or lower the limits, for example constraints.withVMax(2.0)`; FAILED_START_TOO_FAR `the robot is {d} m from the start point ({x}, {y}) and must start within {startTol} m (startTol); put the robot on the start point, check setStartPose and the alliance flip, or raise the tolerance, for example PathFollowerConfig.defaults().withStartTol(1.0)`; FAILED_POSE `the robot pose was NaN or infinite for more than 1 s; check that the pose supplier (for example swerve::getPose) returns a real pose and that odometry keeps updating` |
+| A1 | the command ended with a FAILED_* result (from `end`) | `Path "{name}": {result}: {reason}.` Reasons: FAILED_TIMEOUT `did not finish within {t} s ({factor} x the planned time + {margin} s); the robot was blocked, or the limits are above what the drivetrain can do; free the robot, or lower the limits, for example constraints.withVMax(2.0)`; FAILED_START_TOO_FAR `the robot is {d} m from the start point ({x}, {y}) and must start within {startTol} m (startTol); put the robot on the start point, check setStartPose and the alliance flip, or raise the tolerance, for example PathFollowerConfig.defaults().withStartTol(1.0)`; FAILED_POSE `the robot pose was NaN or infinite for more than 1 s; check that getPose() returns a real pose and that odometry keeps updating` |
 | A2 | alliance unknown at initialize | `Path "{name}": alliance unknown; driving the blue path. For a red run, connect the Driver Station (or set the alliance in the simulator) before the command starts.` |
-| A3 | the measured-speed supplier gives NaN or infinity (once per run) | `Path "{name}": the measured speed is NaN or infinite; check the speed supplier you passed to FollowPathCommand (for example swerve::getFieldSpeeds) and that the gyro and encoders are connected.` |
+| A3 | `getFieldSpeeds()` gives NaN or infinity (once per run) | `Path "{name}": the measured speed is NaN or infinite; check getFieldSpeeds() of your drivetrain (PathDrivetrain) and that the gyro and encoders are connected.` |
 
 ### 9.13 Examples
 
-All examples use the implemented API. Imports are omitted except in the first. The wiring example (f) is built into `ExampleSwerveWithPose` (`getFieldSpeeds()`, `follow(Path)`, `followCommand(Path)`, `examplePath()`).
+All examples use the implemented API. Imports are omitted except in the first. The wiring example (f) is built into `ExampleSwerveWithPose` (`PathDrivetrain`, `follow(Path)`, `followCommand(Path)`, `examplePath()`).
 
 **(a) Minimal 3-point path**
 
@@ -4112,11 +4112,11 @@ not require the drivetrain. Create the trigger from the same command object that
 
 Based on `ExampleSwerveWithPose.java` (**Fact** for every cited line; the example is not used by the robot):
 
-| Follower input | In the example |
+| PathDrivetrain method | In the example |
 |---|---|
-| `Supplier<Pose2d>` | `getPose()`, blue-alliance origin |
-| `Consumer<ChassisSpeeds>` | `driveFieldRelative(ChassisSpeeds wanted)`: desaturate, limiter, `drive`, remembers `lastFieldSpeeds` |
-| `Supplier<ChassisSpeeds>` (measured, field-relative) | `getFieldSpeeds()` (added for Path; `periodic()` now calls it) |
+| `getPose()` | blue-alliance origin |
+| `driveFieldRelative(ChassisSpeeds)` | `driveFieldRelative(ChassisSpeeds wanted)`: desaturate, limiter, `drive`, remembers `lastFieldSpeeds` |
+| `getFieldSpeeds()` | `getFieldSpeeds()` (added for Path; `periodic()` now calls it) |
 | Limiter re-sync when the path starts | `periodic()` does it when the last loop did not use `driveFieldRelative` |
 | Start pose for the auto | `setStartPose(Pose2d)` |
 
@@ -4134,14 +4134,14 @@ In `ExampleSwerveWithPose` (the code is the reference):
 
 ```java
 private final PathFollowerConfig followerConfig = PathFollowerConfig.defaults();   // ROTATE flip, field 16.54 x 8.07
-// pathsConfig = PathsConfig.defaults() (omega, alpha, jerk placeholders)
+// ExampleSwerveWithPose implements PathDrivetrain; pathsConfig = PathsConfig.defaults() (omega, alpha, jerk placeholders)
 
 public FollowPathCommand followCommand(Path path) {
-    return new FollowPathCommand(
-            path.withConstraints(PathConstraints.fromConfig(kinematicsConfig, pathsConfig)),
-            this::getPose, this::getFieldSpeeds, this::driveFieldRelative, this)
-        .withConfig(followerConfig);
+    return new FollowPathCommand(this, path).withConfig(followerConfig);
 }
+
+@Override public KinematicsConfig getKinematicsConfig() { return kinematicsConfig; }
+@Override public PathsConfig getPathsConfig() { return pathsConfig; }
 
 public Command follow(Path path) {
     return Commands.defer(() -> {
@@ -4152,7 +4152,7 @@ public Command follow(Path path) {
 }
 ```
 
-Notes: the pose supplier must return the **blue-origin** pose also on red (RobotPose.java:267 documents `getEstimatedPose` that way).
+Notes: `getPose()` must return the **blue-origin** pose also on red (RobotPose.java:267 documents `getEstimatedPose` that way).
 `driveFieldRelative` is the only place where omega is turned to clockwise-positive (`drive`, :287-297); the follower does not negate it.
 `Commands.defer` reads the alliance when autonomous starts, because it can change before (**Inference**). `driveFieldRelative` includes the
 acceleration limiter, which the follower expects (section 7.14).
@@ -4483,7 +4483,7 @@ Simulation scenarios (WPILib simulation or a Python model like section 8.15).
 | API-16 | 170 deg corner, legs 4 m | W1 and a stop |
 | API-17 | `new PathConstraints(4, 7.2, 7.2, 0, 2*Math.PI, 4*Math.PI, j)` | IAE V16 naming `aLat` |
 | API-18 | `PathConstraints.fromConfig(new KinematicsConfig())` | (4.05, 7.2, 7.2, 7.2, 2·pi, 4·pi, 50) |
-| API-19 | `new FollowPathCommand(path, pose, speeds, out)` with no subsystem | IAE V24 |
+| API-19 | `new FollowPathCommand(null, path)` | NPE V24 |
 | API-20 | event command requiring the follower's subsystem | IAE V20 |
 | API-21 | `PathFollowerConfig.defaults().withKN(0)`; `.withField(16.54, -1)` | IAE V16 naming `kN`; naming `fieldWidth` |
 | API-22 | `path.flipped(cfg) == path.flipped(cfg)`; `path.flipped(cfg.withFlip(FlipMode.NONE)) == path` | true (memo); true; lengths and event s equal to the blue path |

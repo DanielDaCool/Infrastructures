@@ -5,7 +5,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.function.DoubleSupplier;
-import java.util.function.Supplier;
 
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Translation2d;
@@ -15,8 +14,6 @@ import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.DriverStation.Alliance;
 import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.wpilibj2.command.Command;
-import edu.wpi.first.wpilibj2.command.Subsystem;
-import frc.robot.Kinematics.KinematicsConfig;
 import frc.robot.Path.PathGeometry.PathSample;
 
 /**
@@ -97,15 +94,11 @@ public class FollowPathCommand extends Command {
     private static final double S_TOL = 1e-9;
 
     private static final String POSE_REASON = "the robot pose was NaN or infinite for more than 1 s; check"
-            + " that the pose supplier (for example swerve::getPose) returns a real pose and that odometry keeps updating";
+            + " that getPose() returns a real pose and that odometry keeps updating";
 
     // ---------------------------------------------------------------- configuration
     private final Path path;
-    private final Supplier<Pose2d> pose;
-    private final Supplier<ChassisSpeeds> measuredFieldSpeeds;
-    private final Consumer<ChassisSpeeds> output;
-    private KinematicsConfig kinematics;
-    private PathsConfig pathsConfig;
+    private final PathDrivetrain drivetrain;
     private PathFollowerConfig userConfig; // null: PathFollowerConfig.defaults(), resolved in initialize
     private Consumer<Result> onFinish;
     private DoubleSupplier clock = Timer::getFPGATimestamp;
@@ -157,44 +150,16 @@ public class FollowPathCommand extends Command {
     private double vMeasAbs;
 
     /**
-     * @param path                the path (blue frame); flipped at start on the red alliance
-     * @param pose                blue-origin field pose
-     * @param measuredFieldSpeeds field-relative measured speeds, omega CCW
-     * @param output              receives the field-relative command, omega CCW
-     * @param requirements        the drivetrain (at least one, V24)
+     * @param drivetrain the drivetrain: supplies the pose and speeds, receives the commands, is the
+     *                   command's requirement and gives the robot limits used when the path has none
+     * @param path       the path (blue frame); flipped at start on the red alliance
      */
-    public FollowPathCommand(Path path,
-                             Supplier<Pose2d> pose,
-                             Supplier<ChassisSpeeds> measuredFieldSpeeds,
-                             Consumer<ChassisSpeeds> output,
-                             Subsystem... requirements) {
+    public FollowPathCommand(PathDrivetrain drivetrain, Path path) {
+        this.drivetrain = Objects.requireNonNull(drivetrain, Point.nullMessage("FollowPathCommand", "the drivetrain",
+                "your drivetrain subsystem, which implements PathDrivetrain (for example new FollowPathCommand(swerve, path))"));
         this.path = Objects.requireNonNull(path, Point.nullMessage("FollowPathCommand", "the path", "a Path (for example new Path(new Point(1, 2), new Point(3, 4)))"));
-        this.pose = Objects.requireNonNull(pose, Point.nullMessage("FollowPathCommand", "the pose supplier", "a supplier of the robot pose (for example swerve::getPose)"));
-        this.measuredFieldSpeeds = Objects.requireNonNull(measuredFieldSpeeds,
-                Point.nullMessage("FollowPathCommand", "the measured speed supplier", "a supplier of the measured field speeds (for example swerve::getFieldSpeeds)"));
-        this.output = Objects.requireNonNull(output, Point.nullMessage("FollowPathCommand", "the output", "a consumer for the speed command (for example swerve::driveFieldRelative)"));
-        if (requirements == null || requirements.length == 0) {
-            throw new IllegalArgumentException("FollowPathCommand needs the drivetrain as a requirement, for example"
-                    + " new FollowPathCommand(path, swerve::getPose, swerve::getFieldSpeeds, swerve::driveFieldRelative,"
-                    + " swerve). Without it, two commands could drive the robot at the same time.");
-        }
-        for (int i = 0; i < requirements.length; i++) {
-            Objects.requireNonNull(requirements[i], Point.nullMessage("FollowPathCommand", "requirement " + i, "the drivetrain subsystem (for example swerve)"));
-        }
-        addRequirements(requirements);
+        addRequirements(drivetrain);
         setName("FollowPath(" + path.name() + ")");
-    }
-
-    /** @return this; the robot limits used when the path has no constraints of its own */
-    public FollowPathCommand withKinematics(KinematicsConfig config) {
-        this.kinematics = Objects.requireNonNull(config, Point.nullMessage("withKinematics", "the config", "your KinematicsConfig (for example new KinematicsConfig())"));
-        return this;
-    }
-
-    /** @return this; omega, alpha and jerk limits used when the path has no constraints of its own */
-    public FollowPathCommand withPathsConfig(PathsConfig config) {
-        this.pathsConfig = Objects.requireNonNull(config, Point.nullMessage("withPathsConfig", "the config", "a PathsConfig (for example PathsConfig.defaults())"));
-        return this;
     }
 
     /** @return this; gains, tolerances, timeout, flip (default {@code PathFollowerConfig.defaults()}) */
@@ -244,8 +209,8 @@ public class FollowPathCommand extends Command {
         table = active.geometry();
         length = table.length();
 
-        Pose2d p = pose.get();
-        ChassisSpeeds vm = speedsOrZero(measuredFieldSpeeds.get());
+        Pose2d p = drivetrain.getPose();
+        ChassisSpeeds vm = speedsOrZero(drivetrain.getFieldSpeeds());
         if (!poseValid(p)) {
             fail(Result.FAILED_POSE, POSE_REASON);
             return;
@@ -260,9 +225,8 @@ public class FollowPathCommand extends Command {
             return;
         }
 
-        PathsConfig paths = pathsConfig != null ? pathsConfig : PathsConfig.defaults();
         constraints = active.constraints().orElseGet(() ->
-                PathConstraints.fromConfig(kinematics != null ? kinematics : new KinematicsConfig(), paths));
+                PathConstraints.fromConfig(drivetrain.getKinematicsConfig(), drivetrain.getPathsConfig()));
         heading = SpeedProfile.Heading.build(active, p.getRotation().getRadians());
         double v0 = alongT0(vm);
         profile = SpeedProfile.build(active, heading, constraints, v0, config.kP(), config.posTol());
@@ -306,7 +270,7 @@ public class FollowPathCommand extends Command {
         if (profile == null || result != Result.RUNNING) {
             return;
         }
-        output.accept(update(pose.get(), measuredFieldSpeeds.get(), clock.getAsDouble()));
+        drivetrain.driveFieldRelative(update(drivetrain.getPose(), drivetrain.getFieldSpeeds(), clock.getAsDouble()));
     }
 
     /** The finish and timeout test (8.7.2, 8.7.3). */
@@ -338,7 +302,7 @@ public class FollowPathCommand extends Command {
 
     @Override
     public void end(boolean interrupted) {
-        output.accept(new ChassisSpeeds()); // zero once (8.7.4)
+        drivetrain.driveFieldRelative(new ChassisSpeeds()); // zero once (8.7.4)
         if (interrupted && result == Result.RUNNING) {
             result = Result.INTERRUPTED;
         }
@@ -624,8 +588,8 @@ public class FollowPathCommand extends Command {
         }
         if (!speedWarned) {
             speedWarned = true;
-            warn(prefix() + "the measured speed is NaN or infinite; check the speed supplier you passed to"
-                    + " FollowPathCommand (for example swerve::getFieldSpeeds) and that the gyro and encoders are connected.");
+            warn(prefix() + "the measured speed is NaN or infinite; check getFieldSpeeds() of your drivetrain (PathDrivetrain)"
+                    + " and that the gyro and encoders are connected.");
         }
         return new ChassisSpeeds();
     }

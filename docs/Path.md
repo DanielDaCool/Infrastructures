@@ -58,7 +58,7 @@ source, for example [RobotPose](RobotPose.md).
 ## Installation
 
 1. Copy `Infrastructures/src/main/java/frc/robot/Path` into your robot project, keeping the same package path.
-2. Make sure your drivetrain uses the Kinematics module, and add `getFieldSpeeds()` (see below).
+2. Make sure your drivetrain uses the Kinematics module, and make it implement `PathDrivetrain` (see below).
 
 ## Quick start
 
@@ -68,34 +68,39 @@ source, for example [RobotPose](RobotPose.md).
 Path path = new Path(new Point(1, 2), new Point(3, 4), new Point(5, 2));   // also: Path.of(List<Point>)
 ```
 
-**2. Add `getFieldSpeeds()` to your drivetrain.** The follower needs the real speed of the robot. It is
-already in `ExampleSwerveWithPose`, together with `follow(Path)` and `followCommand(Path)` (steps 3 and 4):
+**2. Implement `PathDrivetrain` on your drivetrain.** The follower needs the pose, the real speed of the robot and a way
+to drive it. It is already done in `ExampleSwerveWithPose`, together with `follow(Path)` and `followCommand(Path)` (steps 3 and 4):
 
 ```java
-public ChassisSpeeds getFieldSpeeds() {
-    ChassisSpeeds measured = kinematics.toChassisSpeeds(getModuleStates(), getGyroRate());
-    return ChassisSpeeds.fromRobotRelativeSpeeds(measured, heading());
+public class Swerve extends SubsystemBase implements PathDrivetrain {
+    @Override public Pose2d getPose() { ... }                 // blue-origin pose, also on the red alliance
+    @Override public ChassisSpeeds getFieldSpeeds() {         // measured, field-relative, omega CCW
+        ChassisSpeeds measured = kinematics.toChassisSpeeds(getModuleStates(), getGyroRate());
+        return ChassisSpeeds.fromRobotRelativeSpeeds(measured, heading());
+    }
+    @Override public void driveFieldRelative(ChassisSpeeds speeds) { ... }   // omega CCW; keep your acceleration limiter here
+
+    // optional: the limits used when a path has no constraints (defaults: new KinematicsConfig(), PathsConfig.defaults())
+    @Override public KinematicsConfig getKinematicsConfig() { return kinematicsConfig; }
+    @Override public PathsConfig getPathsConfig() { return pathsConfig; }
 }
 ```
 
-**3. Write a method that makes the command.** A command can be used in only one composition, so make a new one each
-time autonomous starts:
+**3. Make the command.** A command can be used in only one composition, so make a new one each time autonomous starts:
 
 ```java
-KinematicsConfig kinematicsConfig = ...;      // the same one you give DemaciaKinematics
-PathsConfig pathsConfig = PathsConfig.defaults();   // omega, alpha and jerk limits (placeholders)
-PathFollowerConfig followerConfig = PathFollowerConfig.defaults();   // gains, tolerances, red-alliance flip (ROTATE)
+Path path = new Path(
+    new Point(1, 2),
+    new Point(3, 4).withAngle(Rotation2d.fromDegrees(90)),
+    new Point(5, 2));
 
-FollowPathCommand followCommand(Path path) {
-    return new FollowPathCommand(path.withConstraints(PathConstraints.fromConfig(kinematicsConfig, pathsConfig)),
-            swerve::getPose, swerve::getFieldSpeeds, swerve::driveFieldRelative, swerve)
-        .withConfig(followerConfig);
-}
+FollowPathCommand follow = new FollowPathCommand(swerve, path);   // requires swerve
+// optional: .withConfig(PathFollowerConfig.defaults().withFlip(FlipMode.MIRROR))
 ```
 
-`swerve::driveFieldRelative` is the method that already has the acceleration limiter. The pose must be the
-blue-origin pose also on the red alliance. Instead of `path.withConstraints(...)` you can call
-`.withKinematics(kinematicsConfig)` and `.withPathsConfig(pathsConfig)` on the command.
+The command takes the pose, speeds and output from the drivetrain, and the robot limits from
+`getKinematicsConfig()` / `getPathsConfig()` when the path has no constraints of its own. The pose must be the
+blue-origin pose also on the red alliance. A `null` drivetrain or path throws a `NullPointerException` that says what to pass.
 
 **4. Use it in autonomous.** Set the start pose from the path for the current alliance (on red the command drives the
 flipped path, so the start pose must be flipped too):
@@ -106,11 +111,11 @@ return Commands.defer(() -> {
     Pose2d start = new Pose2d(active.startPoint(),
         active.startHeading().orElse(swerve.getPose().getRotation()));
     return Commands.runOnce(() -> swerve.setStartPose(start))
-        .andThen(followCommand(path));                 // a new command every time; it flips the path itself
+        .andThen(new FollowPathCommand(swerve, path));                 // a new command every time; it flips the path itself
 }, Set.of(swerve));
 ```
 
-`ExampleSwerveWithPose.follow(Path)` does exactly this (its `isRedAlliance()` reads `DriverStation.getAlliance()`).
+`ExampleSwerveWithPose.follow(Path)` does exactly this (with `followCommand(path)` = `new FollowPathCommand(this, path).withConfig(followerConfig)`) (its `isRedAlliance()` reads `DriverStation.getAlliance()`).
 
 > [!IMPORTANT]
 > - Set every option **before** you schedule the command. A change takes effect only the next time it starts.
@@ -186,8 +191,8 @@ not have: `maxAngularVelocity`, `maxAngularAccel` and `maxJerk` (placeholders 2 
 them). `fromConfig(kinematicsConfig)` uses `PathsConfig.defaults()`. The jerk limit makes the speed change smoothly; it costs a few percent of time.
 
 Change one for one path: `path.withConstraints(PathConstraints.fromConfig(c, pathsConfig).withVMax(2.0))`.
-If a path has no constraints, the command uses `withKinematics(...)` / `withPathsConfig(...)`, and a default
-`KinematicsConfig` / `PathsConfig.defaults()` for what is missing.
+If a path has no constraints, the command uses `drivetrain.getKinematicsConfig()` and `drivetrain.getPathsConfig()` (defaults: `new KinematicsConfig()` /
+`PathsConfig.defaults()`), read when the command starts.
 
 ## Alliance, progress, logging
 
@@ -270,24 +275,25 @@ Warnings and failures go to the Driver Station (`DriverStation.reportWarning`). 
 | Robot weaves around the path | `kN` too high for the lag (tuning steps 2 and 3) |
 | Robot ends a little short or late | `kP` low, or the finish tolerance is tight; see `eN` and `s` |
 | Warning: `Path "name": alliance unknown; driving the blue path. For a red run, connect the Driver Station (or set the alliance in the simulator) before the command starts.` | The alliance was not known when the command started |
-| Warning: `Path "name": the measured speed is NaN or infinite; check the speed supplier you passed to FollowPathCommand (for example swerve::getFieldSpeeds) and that the gyro and encoders are connected.` | The measured-speed supplier returned NaN or infinity |
+| Warning: `Path "name": the measured speed is NaN or infinite; check getFieldSpeeds() of your drivetrain (PathDrivetrain) and that the gyro and encoders are connected.` | `getFieldSpeeds()` returned NaN or infinity |
 | `FAILED_TIMEOUT` | The robot was blocked, or the limits are above what the drivetrain can do. The message says: `free the robot, or lower the limits, for example constraints.withVMax(2.0)` |
 | `FAILED_START_TOO_FAR` | The robot was more than 0.5 m from the first point: wrong alliance flip, wrong path, or the start pose was not set. The message says: `put the robot on the start point, check setStartPose and the alliance flip, or raise the tolerance, for example PathFollowerConfig.defaults().withStartTol(1.0)` |
-| `FAILED_POSE` | The pose was NaN or infinite for more than 1 s (or at the start); check the pose supplier |
+| `FAILED_POSE` | The pose was NaN or infinite for more than 1 s (or at the start); check `getPose()` |
 | Robot spins the wrong way | The drivetrain flips omega for `toSwerveModuleStates` once; do not flip it again |
-| Red alliance drives a mirrored path | Wrong `FlipMode` for this field, or a pose supplier in red-origin coordinates |
+| Red alliance drives a mirrored path | Wrong `FlipMode` for this field, or a `getPose()` in red-origin coordinates |
 | A progress trigger never fires | The robot never reached that fraction, or the trigger watches an old command object (make the trigger from the same command you schedule) |
 | Robot stops at every straight-line point | A point has `.stop()`; points exactly on a line are not stops otherwise |
 | Robot starts slowly | The limiter and the module steering (up to 0.13 s); this is expected |
 
 ## Project structure
 
-All paths are relative to `Infrastructures/src/main/java/frc/robot/Path` (`frc.robot.Path`). Eight files.
+All paths are relative to `Infrastructures/src/main/java/frc/robot/Path` (`frc.robot.Path`). Nine files.
 
 | File | Description |
 |---|---|
 | `Point.java`, `Path.java` | The points and the path (geometry is built in the constructor; `warnings()`, `flipped(...)`) |
 | `PathConstraints.java` | The seven limits and `fromConfig` |
+| `PathDrivetrain.java` | The interface your drivetrain implements (`getPose`, `getFieldSpeeds`, `driveFieldRelative`, optional configs) |
 | `FollowPathCommand.java` | The command, `FollowPathCommand.Result`, `progress()`, Sendable keys |
 | `PathsConfig.java`, `PathFollowerConfig.java` | Robot settings, and follower settings (gains, tolerances, timeout, flip, field size, `FlipMode`), with defaults |
 | `PathGeometry.java`, `SpeedProfile.java` | Internal (corner geometry, heading and speed profiles); not for use in robot code |

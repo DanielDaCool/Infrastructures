@@ -32,8 +32,8 @@ import frc.robot.Kinematics.KinematicsConfig;
 import frc.robot.Kinematics.SwerveAccelerationLimiter;
 import frc.robot.Path.FollowPathCommand;
 import frc.robot.Path.Path;
-import frc.robot.Path.PathConstraints;
 import frc.robot.Path.PathFollowerConfig;
+import frc.robot.Path.PathDrivetrain;
 import frc.robot.Path.PathsConfig;
 import frc.robot.Path.Point;
 import frc.robot.RobotPose.RobotPose;
@@ -71,7 +71,7 @@ import frc.robot.RobotPose.Vision.visionConfigs.QuestConfig;
  * modules all use the same index. A different order makes the robot fight itself when it turns
  * (the pose won't show it while driving straight).
  */
-public class ExampleSwerveWithPose extends SubsystemBase {
+public class ExampleSwerveWithPose extends SubsystemBase implements PathDrivetrain {
     /** The cameras (same as the RobotPose README). Measure the offsets on your robot. */
     public static final class VisionConstants {
         // Limelight hostname: "limelight-front". Robot center (on the floor) to lens [m, rad]: x forward, y left, z up
@@ -275,6 +275,7 @@ public class ExampleSwerveWithPose extends SubsystemBase {
     }
 
     /** The fused field pose (blue-alliance origin), as of the last {@code RobotPose.periodic()}. */
+    @Override
     public Pose2d getPose() {
         return RobotPose.getInstance().getEstimatedPose();
     }
@@ -315,6 +316,7 @@ public class ExampleSwerveWithPose extends SubsystemBase {
      *
      * @param wanted field-relative speeds (blue-alliance origin) [m/s, rad/s], omega CCW positive
      */
+    @Override
     public void driveFieldRelative(ChassisSpeeds wanted) {
         Rotation2d heading = heading();
         // desaturate before the limit, or the robot spins at full speed and drives much slower
@@ -344,6 +346,7 @@ public class ExampleSwerveWithPose extends SubsystemBase {
      *
      * @return measured speeds, blue-alliance origin [m/s, rad/s], omega CCW positive
      */
+    @Override
     public ChassisSpeeds getFieldSpeeds() {
         ChassisSpeeds measured = kinematics.toChassisSpeeds(getModuleStates(), getGyroRate());
         return ChassisSpeeds.fromRobotRelativeSpeeds(measured, heading());
@@ -388,10 +391,17 @@ public class ExampleSwerveWithPose extends SubsystemBase {
      * @return a new command that requires this chassis
      */
     public FollowPathCommand followCommand(Path path) {
-        return new FollowPathCommand(
-                path.withConstraints(PathConstraints.fromConfig(kinematicsConfig, pathsConfig)),
-                this::getPose, this::getFieldSpeeds, this::driveFieldRelative, this)
-                .withConfig(followerConfig);
+        return new FollowPathCommand(this, path).withConfig(followerConfig);
+    }
+
+    @Override
+    public KinematicsConfig getKinematicsConfig() {
+        return kinematicsConfig;
+    }
+
+    @Override
+    public PathsConfig getPathsConfig() {
+        return pathsConfig;
     }
 
     /**
