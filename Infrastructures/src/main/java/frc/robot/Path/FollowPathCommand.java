@@ -15,7 +15,6 @@ import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.DriverStation.Alliance;
 import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.wpilibj2.command.Command;
-import edu.wpi.first.wpilibj2.command.FunctionalCommand;
 import edu.wpi.first.wpilibj2.command.Subsystem;
 import frc.robot.Kinematics.KinematicsConfig;
 import frc.robot.Path.PathGeometry.PathSample;
@@ -105,7 +104,6 @@ public class FollowPathCommand extends Command {
     private final Supplier<Pose2d> pose;
     private final Supplier<ChassisSpeeds> measuredFieldSpeeds;
     private final Consumer<ChassisSpeeds> output;
-    private final Subsystem[] requirements;
     private KinematicsConfig kinematics;
     private PathsConfig pathsConfig;
     private PathFollowerConfig userConfig; // null: PathFollowerConfig.defaults(), resolved in initialize
@@ -128,7 +126,6 @@ public class FollowPathCommand extends Command {
     private Result result = Result.RUNNING;
     private String failReason = "";
     private boolean speedWarned;
-    private String lastWarning = "";
 
     // progress
     private double sStar;
@@ -184,8 +181,7 @@ public class FollowPathCommand extends Command {
         for (int i = 0; i < requirements.length; i++) {
             Objects.requireNonNull(requirements[i], Point.nullMessage("FollowPathCommand", "requirement " + i, "the drivetrain subsystem (for example swerve)"));
         }
-        this.requirements = requirements.clone();
-        addRequirements(this.requirements);
+        addRequirements(requirements);
         setName("FollowPath(" + path.name() + ")");
     }
 
@@ -236,6 +232,7 @@ public class FollowPathCommand extends Command {
         speedWarned = false;
         state = State.TRACK;
         sStar = 0.0;
+        sHi = 0.0;
         config = userConfig != null ? userConfig : PathFollowerConfig.defaults();
 
         Optional<Alliance> alliance = DriverStation.getAlliance(); // read once (8.10)
@@ -333,7 +330,7 @@ public class FollowPathCommand extends Command {
         if (state == State.CAPTURE_END && !Double.isNaN(tFin) && now - tFin >= profile.dwellAt(length)) {
             result = Result.OK;
             state = State.DONE;
-            sStar = length;
+            sHi = length;
             return true;
         }
         return false;
@@ -358,35 +355,17 @@ public class FollowPathCommand extends Command {
         return result;
     }
 
-    /** @return progress along the path, s* / L, from 0 at the start to 1 at the finish */
-    public double progress() {
-        return profile == null ? 0.0 : Math.max(0.0, Math.min(1.0, sStar / length));
-    }
-
-    /** @return distance along the path s* [m] (the closest path point to the robot) */
-    public double distanceTraveled() {
-        return sStar;
-    }
-
     /**
-     * A fresh command holding P_end with the CAPTURE_END law until interrupted (8.7.4), for
-     * {@code follow.andThen(follow.holdEndCommand())}. It needs a run that got past the start check;
-     * otherwise (FAILED_START_TOO_FAR, FAILED_POSE at start) it sends zero speeds.
-     *
-     * @return the hold command, requiring the same subsystems
+     * @return progress along the path from 0 at the start to 1 at the finish: the highest s* reached
+     *     divided by L. It never decreases during a run, so a trigger on it fires once per run.
      */
-    public Command holdEndCommand() {
-        return new FunctionalCommand(
-                () -> {
-                    ChassisSpeeds vm = speedsOrZero(measuredFieldSpeeds.get());
-                    vLimPrev = Math.hypot(vm.vxMetersPerSecond, vm.vyMetersPerSecond);
-                    omegaPrev = vm.omegaRadiansPerSecond;
-                    tPrev = Double.NaN;
-                },
-                () -> output.accept(profile != null ? holdEnd(pose.get(), clock.getAsDouble()) : new ChassisSpeeds()),
-                interrupted -> output.accept(new ChassisSpeeds()),
-                () -> false,
-                requirements);
+    public double progress() {
+        return profile == null ? 0.0 : Math.min(1.0, sHi / length);
+    }
+
+    /** @return the highest distance along the path s* reached in this run [m]; never decreases during a run */
+    public double distanceTraveled() {
+        return sHi;
     }
 
     /** Adds the read-only keys state, segment, s, eN, vRef, vMeas, eThetaDeg (8.13) to the Command keys. */
@@ -394,7 +373,7 @@ public class FollowPathCommand extends Command {
     public void initSendable(SendableBuilder builder) {
         super.initSendable(builder);
         builder.addStringProperty("state", () -> result.isFailure() || result == Result.INTERRUPTED ? result.name()
-                : state.name(), null);
+                : profile == null ? "IDLE" : state.name(), null);
         builder.addIntegerProperty("segment", () -> table == null ? 0 : table.segmentIndexAt(sStar), null);
         builder.addDoubleProperty("s", () -> sStar, null);
         builder.addDoubleProperty("eN", () -> eN, null);
@@ -479,7 +458,7 @@ public class FollowPathCommand extends Command {
                 boolean inTol = p.getDistance(pEnd) < config.posTol()
                         && Math.abs(PathGeometry.wrap(thetaEnd - theta)) < config.angTolRad();
                 tIn = inTol ? tIn + dt : 0.0;
-                if (tIn >= config.tSettle() && Double.isNaN(tFin)) {
+                if (tIn >= PathFollowerConfig.T_SETTLE && Double.isNaN(tFin)) {
                     tFin = nowSec;
                 }
                 break;
@@ -507,7 +486,7 @@ public class FollowPathCommand extends Command {
         double vt;
         if (state == State.TRACK) {
             PathSample at = sample(sStar);
-            double lead = sStar + vtPrev * config.tauLag();
+            double lead = sStar + vtPrev * PathFollowerConfig.TAU_LAG;
             double sV = Math.min(lead, sGoal - dH);
             double c = clamp(-config.kN() * eN, -C_MAX, C_MAX);
             double budget = Math.sqrt(Math.max(0.0, constraints.vMax() * constraints.vMax() - c * c));
@@ -612,22 +591,11 @@ public class FollowPathCommand extends Command {
     /** Feedback, clamps and rate limit of 8.5.2; sets eTheta and omega_prev. @return omega [rad/s] */
     private double headingLaw(double ref, double ff, double theta, double dt) {
         eTheta = PathGeometry.wrap(ref - theta);
-        double fb = sqrtLaw(eTheta, constraints.alphaMax(), config.kTheta());
+        double fb = sqrtLaw(eTheta, constraints.alphaMax(), PathFollowerConfig.K_THETA);
         double raw = clamp(ff + fb, -constraints.omegaMax(), constraints.omegaMax());
         double band = constraints.alphaMax() * dt;
         omegaPrev = clamp(raw, omegaPrev - band, omegaPrev + band);
         return omegaPrev;
-    }
-
-    /** The CAPTURE_END law on P_end with heading theta_end, used by holdEndCommand (8.7.4); invalid pose gives 0. */
-    private ChassisSpeeds holdEnd(Pose2d pose, double nowSec) {
-        double dt = Double.isNaN(tPrev) ? DT_NOM : clamp(nowSec - tPrev, DT_MIN, DT_MAX);
-        tPrev = nowSec;
-        if (!poseValid(pose)) {
-            return new ChassisSpeeds();
-        }
-        double[] v = captureLaw(pose.getTranslation(), pEnd, dt);
-        return new ChassisSpeeds(v[0], v[1], headingLaw(thetaEnd, 0.0, pose.getRotation().getRadians(), dt));
     }
 
     /**
@@ -678,7 +646,6 @@ public class FollowPathCommand extends Command {
     }
 
     private void warn(String text) {
-        lastWarning = text;
         DriverStation.reportWarning(text, false);
     }
 
@@ -710,10 +677,5 @@ public class FollowPathCommand extends Command {
     /** @return t_timeout = factor profileTime + margin [s] (8.7.3) */
     double timeout() {
         return timeout;
-    }
-
-    /** @return the text of the last Driver Station warning this command printed */
-    String lastWarning() {
-        return lastWarning;
     }
 }

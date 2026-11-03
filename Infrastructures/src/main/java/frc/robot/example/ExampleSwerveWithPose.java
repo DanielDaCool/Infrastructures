@@ -374,7 +374,7 @@ public class ExampleSwerveWithPose extends SubsystemBase {
      */
     public Command follow(Path path) {
         return Commands.defer(() -> {
-            Path active = path.forCurrentAlliance(followerConfig); // blue: the path itself; red: the flipped path
+            Path active = isRedAlliance() ? path.flipped(followerConfig) : path; // red: the flipped path (start pose)
             Pose2d start = new Pose2d(active.startPoint(), active.startHeading().orElse(getPose().getRotation()));
             return Commands.runOnce(() -> setStartPose(start)).andThen(followCommand(path));
         }, Set.of(this));

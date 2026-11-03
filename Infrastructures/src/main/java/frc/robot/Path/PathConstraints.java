@@ -57,6 +57,9 @@ public record PathConstraints(double vMax, double aAcc, double aDec, double aLat
 
     /**
      * Derives the limits from the Kinematics config at {@link #PROFILE_MARGIN} (section 9.5).
+     * The plan speeds up with a constant aAcc. On a torque-limited drivetrain (for example the
+     * SwerveAccelerationLimiter's {@code 10 (1 - v / freeSpeed)}) the robot trails the plan above
+     * about 1.5 m/s; if that matters, lower aAcc with {@link #withAAcc}.
      *
      * @param config robot limits
      * @param paths  the settings Kinematics does not have

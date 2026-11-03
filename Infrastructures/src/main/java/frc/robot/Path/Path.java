@@ -12,7 +12,6 @@ import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Translation2d;
 import edu.wpi.first.wpilibj.DriverStation;
-import edu.wpi.first.wpilibj.DriverStation.Alliance;
 import frc.robot.Path.PathFollowerConfig.FlipMode;
 
 /**
@@ -30,7 +29,6 @@ public final class Path {
     private final PathConstraints constraints;   // null = resolved when the command starts
     private final String name;
     private final List<String> warnings;
-    private final Path blue;                      // the blue source of a flipped copy; null on a blue path
 
     /**
      * Builds the geometry. Throws on bad input (V1, V3, V6, V30), warns for repairs.
@@ -58,7 +56,6 @@ public final class Path {
         this.geometry = PathGeometry.build(points, name, w);
         this.warnings = Collections.unmodifiableList(w);
         this.constraints = constraints;
-        this.blue = null;
         for (String text : warnings) {
             DriverStation.reportWarning(text, false);
         }
@@ -66,26 +63,18 @@ public final class Path {
 
     /** Copy constructor: shares the geometry. */
     private Path(List<Point> points, PathGeometry geometry, PathConstraints constraints, String name,
-                 List<String> warnings, Path blue) {
+                 List<String> warnings) {
         this.points = points;
         this.geometry = geometry;
         this.constraints = constraints;
         this.name = name;
         this.warnings = warnings;
-        this.blue = blue;
     }
 
     /** @return a path through the points */
     public static Path of(List<Point> points) {
         Objects.requireNonNull(points, Point.nullMessage("Path.of", "the points list", "a list of Points (for example List.of(new Point(1, 2), new Point(3, 4)))"));
         return new Path(points.toArray(new Point[0]));
-    }
-
-    /** @return a path through the points with per-path constraints */
-    public static Path of(PathConstraints constraints, List<Point> points) {
-        Objects.requireNonNull(constraints, Point.nullMessage("Path.of", "the constraints", "a PathConstraints (for example PathConstraints.fromConfig(config))"));
-        Objects.requireNonNull(points, Point.nullMessage("Path.of", "the points list", "a list of Points (for example List.of(new Point(1, 2), new Point(3, 4)))"));
-        return new Path(constraints, points.toArray(new Point[0]));
     }
 
     /**
@@ -96,20 +85,17 @@ public final class Path {
      */
     public Path withName(String name) {
         Objects.requireNonNull(name, Point.nullMessage("withName", "the name", "a text (for example withName(\"drive to reef\"))"));
-        return new Path(points, geometry, constraints, name, warnings,
-                blue == null ? null : blue.withName(name));
+        return new Path(points, geometry, constraints, name, warnings);
     }
 
     /** @return a copy with per-path constraints */
     public Path withConstraints(PathConstraints constraints) {
         Objects.requireNonNull(constraints, Point.nullMessage("withConstraints", "the constraints", "a PathConstraints (for example PathConstraints.fromConfig(config))"));
-        return new Path(points, geometry, constraints, name, warnings,
-                blue == null ? null : blue.withConstraints(constraints));
+        return new Path(points, geometry, constraints, name, warnings);
     }
 
     /**
-     * Mode NONE returns this. A flipped copy is always flipped from its blue source, so flipping
-     * twice does not turn it back.
+     * Mode NONE returns this. Pass the blue path: flipping a flipped path turns it back.
      *
      * @param mode        NONE, MIRROR or ROTATE
      * @param fieldLength field length [m]
@@ -121,9 +107,6 @@ public final class Path {
         if (mode == FlipMode.NONE) {
             return this;
         }
-        if (blue != null) {
-            return blue.flipped(mode, fieldLength, fieldWidth);
-        }
         List<Point> flippedPoints = new ArrayList<>(points.size());
         for (Point p : points) {
             Translation2d pos = PathGeometry.flip(p.position(), mode, fieldLength, fieldWidth);
@@ -131,31 +114,13 @@ public final class Path {
             flippedPoints.add(p.withPositionAndAngle(pos.getX(), pos.getY(), angle));
         }
         return new Path(Collections.unmodifiableList(flippedPoints),
-                geometry.flipped(mode, fieldLength, fieldWidth), constraints, name, warnings, this);
+                geometry.flipped(mode, fieldLength, fieldWidth), constraints, name, warnings);
     }
 
     /** @return {@code flipped(config.flipMode(), config.fieldLength(), config.fieldWidth())} */
     public Path flipped(PathFollowerConfig config) {
         Objects.requireNonNull(config, Point.nullMessage("flipped", "the config", "a PathFollowerConfig (for example PathFollowerConfig.defaults())"));
         return flipped(config.flipMode(), config.fieldLength(), config.fieldWidth());
-    }
-
-    /**
-     * @return red: {@code flipped(config)}; blue or unknown: the blue path (the blue source of a
-     *     flipped copy)
-     */
-    public Path forCurrentAlliance(PathFollowerConfig config) {
-        Objects.requireNonNull(config, Point.nullMessage("forCurrentAlliance", "the config", "a PathFollowerConfig (for example PathFollowerConfig.defaults())"));
-        Optional<Alliance> alliance = DriverStation.getAlliance();
-        if (alliance.isPresent() && alliance.get() == Alliance.Red) {
-            return flipped(config);
-        }
-        return blue != null ? blue : this;
-    }
-
-    /** @return true if this path is a flipped copy */
-    public boolean isFlipped() {
-        return blue != null;
     }
 
     /** @return the name, default "path" + a counter */
@@ -245,12 +210,7 @@ public final class Path {
         return Collections.unmodifiableList(poses);
     }
 
-    /** Internal: the sample at s clamped to [0, L]; T is the right limit at a STOP. */
-    PathGeometry.PathSample sampleAt(double s) {
-        return geometry.evaluate(s);
-    }
-
-    /** Internal: the built geometry of this path (flipped if {@link #isFlipped()}). */
+    /** Internal: the built geometry of this path (flipped for a flipped path). */
     PathGeometry geometry() {
         return geometry;
     }

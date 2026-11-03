@@ -3,7 +3,6 @@ package frc.robot.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.OptionalDouble;
 
 import edu.wpi.first.math.geometry.Rotation2d;
 
@@ -34,33 +33,12 @@ final class SpeedProfile {
     enum Kind { LINE, ARC }
 
     /**
-     * A junction ahead: a place where the speed must be at most vBack, with the braking
-     * acceleration usable before it (7.6, 7.13.4).
-     *
-     * @param s        position [m]
-     * @param vBack    backward-pass speed at the junction [m/s]
-     * @param decel    D_j: braking limit of the span before it [m/s^2]
-     * @param arcEntry true if the junction needs a = 0 (arc entry or hand-over point)
-     */
-    record Junction(double s, double vBack, double decel, boolean arcEntry) {
-    }
-
-    /**
      * Speed and acceleration commanded by the law (7.13.2).
      *
      * @param v speed [m/s]
      * @param a acceleration [m/s^2]
      */
     record State(double v, double a) {
-    }
-
-    /**
-     * Result of an offline run (7.13.6).
-     *
-     * @param time     planned time including the hand-over tail, without dwells [s]
-     * @param guardHit true if the run hit the guard {@code 10 spanTime + PROFILE_TIME_GUARD} (a bug)
-     */
-    record OfflineResult(double time, boolean guardHit) {
     }
 
     // ================================================================ heading profile (6)
@@ -105,11 +83,6 @@ final class SpeedProfile {
          * @return the profile
          */
         static Heading anchors(double[] pointS, double[] pointAngle, double theta0) {
-            if (!Double.isFinite(theta0)) {
-                throw new IllegalArgumentException("SpeedProfile.Heading: the measured start heading must be a finite"
-                        + " number (radians), but it is " + theta0 + ". Check that the pose supplier returns a real"
-                        + " rotation, for example swerve::getPose.");
-            }
             List<double[]> anchors = new ArrayList<>();
             for (int i = 0; i < pointS.length; i++) {
                 if (!Double.isNaN(pointAngle[i])) {
@@ -221,7 +194,6 @@ final class SpeedProfile {
     private double startDwell; // stop(d) on P_0: delays the start (8.6); set by build(Path, ...)
     private final double spanTime;
     private double profileTimeCache = Double.NaN;
-    private boolean profileGuardHit;
 
     // speed law: constraint list of the current step, preallocated (junctions ahead plus the hand-over point)
     private final double[] consS;
@@ -252,8 +224,7 @@ final class SpeedProfile {
         double[] vel = new double[n];
         for (int i = 0; i < n; i++) {
             wpS[i] = path.sAtPoint(i);
-            OptionalDouble mv = points.get(i).maxVelocity();
-            vel[i] = mv.isPresent() ? mv.getAsDouble() : Double.NaN;
+            vel[i] = points.get(i).maxVelocity().orElse(Double.NaN);
         }
         SpeedProfile profile = new SpeedProfile(path.geometry().segments(), wpS, vel, points.get(n - 1).dwellSeconds(),
                 heading, constraints, v0, kP, posTol);
@@ -265,26 +236,6 @@ final class SpeedProfile {
         return profile;
     }
 
-    /**
-     * Core builder from plain geometry data (7.17); tests call it with hand-built entries.
-     *
-     * @param segments      LINE / ARC / STOP entries in order
-     * @param waypointS     s of each user point, by user index
-     * @param pointVelocity withVelocity per user point (NaN = none), same length as waypointS
-     * @param endDwell      dwell at the last point [s]
-     * @param heading       heading profile
-     * @param constraints   resolved constraints
-     * @param v0            start speed (finite; negative is clamped to 0)
-     * @param kP            goal-capture gain (hand-over speed v_h = kP d_h, 8.3.7)
-     * @param posTol        position tolerance for the hand-over tail (7.13.6)
-     * @return the profile
-     */
-    static SpeedProfile build(List<PathGeometry.Segment> segments, double[] waypointS, double[] pointVelocity,
-                              double endDwell, Heading heading, PathConstraints constraints, double v0, double kP,
-                              double posTol) {
-        return new SpeedProfile(segments, waypointS, pointVelocity, endDwell, heading, constraints, v0, kP, posTol);
-    }
-
     /** @return the hand-over distance d_h = min(D_H_MAX, jerkMax dt_nom / kP^2) (8.3.7) */
     static double handOverDistance(double jerkMax, double kP) {
         return Math.min(FollowPathCommand.D_H_MAX, jerkMax * FollowPathCommand.DT_NOM / (kP * kP));
@@ -293,16 +244,6 @@ final class SpeedProfile {
     private SpeedProfile(List<PathGeometry.Segment> segments, double[] waypointS, double[] pointVelocity,
                          double endDwell, Heading heading, PathConstraints constraints, double v0, double kP,
                          double posTol) {
-        if (!Double.isFinite(v0) || !Double.isFinite(endDwell)) {
-            throw new IllegalArgumentException("SpeedProfile: the start speed (" + v0 + " m/s) and the end wait ("
-                    + endDwell + " s) must be finite numbers. Check that the pose and speed suppliers never return NaN"
-                    + " or infinity.");
-        }
-        if (!(kP > 0.0) || !Double.isFinite(kP) || !(posTol > 0.0) || !Double.isFinite(posTol)) {
-            throw new IllegalArgumentException("SpeedProfile: kP is " + kP + " and posTol is " + posTol + " m; both must be"
-                    + " finite numbers above 0. Fix them in the PathFollowerConfig, for example"
-                    + " PathFollowerConfig.defaults().withKP(3.0).withPosTol(0.03).");
-        }
         this.c = constraints;
         this.v0 = Math.max(0.0, v0);
         this.kP = kP;
@@ -574,6 +515,11 @@ final class SpeedProfile {
     private double spanTimeOf(int k, double vin, double vout) {
         double l = len[k];
         if (aA[k] <= 0.0 && aD[k] <= 0.0) {
+            if (!(vin > 0.0)) {
+                throw new IllegalStateException("SpeedProfile: the constant-speed arc span " + k + " would be entered at"
+                        + " speed 0, so the robot could never cross it (an internal error, please report it with the"
+                        + " path points).");
+            }
             return l / vin;
         }
         double vc = cap[k];
@@ -698,15 +644,6 @@ final class SpeedProfile {
         return n;
     }
 
-    /** @return the junction constraints used by the last step (7.13.9 {@code cons}), for tests */
-    List<Junction> lastConstraints() {
-        List<Junction> out = new ArrayList<>(consCount);
-        for (int i = 0; i < consCount; i++) {
-            out.add(new Junction(consS[i], consVt[i], consD[i], consEntry[i]));
-        }
-        return out;
-    }
-
     /**
      * Distance needed to go from (v, a) to speed vt with jerk jerkMax and braking limit D (7.13.3).
      * Allocation-free; runs every loop.
@@ -752,16 +689,16 @@ final class SpeedProfile {
      * Offline run with ideal tracking ({@code s += v dt}, tau_lag = 0) until the hand-over (at
      * {@code d_go <= d_h}, or at rest within {@code d_h + 2 STOP_DIST_MARGIN}, 8.3.7e), plus the
      * hand-over tail {@code max(0, ln(d_h/posTol)/kP)} (7.10.5, 7.13.6). Guarded at
-     * {@code 10 spanTime + PROFILE_TIME_GUARD} of simulated time; then the guard time is returned.
+     * {@code 10 spanTime + PROFILE_TIME_GUARD} of simulated time (a bug); then the guard time is returned.
      *
      * @param v0     start speed [m/s]
      * @param sFrom  start s
      * @param sGoal  end s (a stop or L)
      * @param dt     step [s]
-     * @return the time and the guard flag
+     * @return the time [s]
      */
-    OfflineResult offlineRun(double v0, double sFrom, double sGoal, double dt) {
-        double guard = 10.0 * spanTime + PROFILE_TIME_GUARD;
+    double offlineRun(double v0, double sFrom, double sGoal, double dt) {
+        double guard = 10.0 * (Double.isFinite(spanTime) ? spanTime : 0.0) + PROFILE_TIME_GUARD;
         double s = sFrom;
         State st = new State(Math.max(0.0, v0), 0.0);
         double t = 0.0;
@@ -772,13 +709,13 @@ final class SpeedProfile {
             st = next;
             t += dt;
             if (t > guard) {
-                return new OfflineResult(guard, true);
+                return guard;
             }
         }
         if (handOver > posTol) {
             t += Math.log(handOver / posTol) / kP; // hand-over tail per goal
         }
-        return new OfflineResult(t, false);
+        return t;
     }
 
     // ================================================================ queries
@@ -787,23 +724,13 @@ final class SpeedProfile {
     double profileTime() {
         if (Double.isNaN(profileTimeCache)) {
             double t = startDwell; // stop(d) on P_0 waits before the start (8.6)
-            boolean hit = false;
             for (int p = 0; p < subFirst.length; p++) {
                 double s1 = js[subLast[p]];
-                OfflineResult r = offlineRun(p == 0 ? v0 : 0.0, js[subFirst[p]], s1, FollowPathCommand.DT_NOM);
-                t += r.time() + dwellAt(s1);
-                hit |= r.guardHit();
+                t += offlineRun(p == 0 ? v0 : 0.0, js[subFirst[p]], s1, FollowPathCommand.DT_NOM) + dwellAt(s1);
             }
-            profileGuardHit = hit;
             profileTimeCache = t;
         }
         return profileTimeCache;
-    }
-
-    /** @return true if the offline run of {@link #profileTime()} hit its guard (a bug; the guard time is used) */
-    boolean profileGuardHit() {
-        profileTime();
-        return profileGuardHit;
     }
 
     /** @return the span containing s (7.13.10 step 1) */
@@ -815,38 +742,14 @@ final class SpeedProfile {
         return Math.max(0, Math.min(len.length - 1, i));
     }
 
-    /**
-     * @return backward-pass speed limit at s, {@code min(vCap, sqrt(vB[k+1]^2 + 2 aD (l - q)))} (7.13.10). At a
-     *     junction it reads the later span: at a stop that is the restart envelope of the next sub-profile.
-     */
-    double vBack(double s) {
-        return vBackIn(spanAt(s), s);
-    }
-
     /** @return vBack with s clamped into the sub-profile that ends at sGoal (at a stop the approaching robot reads 0) */
     double vBack(double s, double sGoal) {
         return vBackIn(spanInSub(s, sGoal), s);
     }
 
-    /** @return full profile speed at s, for logging (7.13.10 step 4); later span at a junction */
-    double vProf(double s) {
-        return vProfIn(spanAt(s), s);
-    }
-
-    /** @return vProf with s clamped into the sub-profile that ends at sGoal */
-    double vProf(double s, double sGoal) {
-        return vProfIn(spanInSub(s, sGoal), s);
-    }
-
     private double vBackIn(int k, double s) {
         double q = Math.max(0.0, Math.min(len[k], s - sStart[k]));
         return Math.min(cap[k], Math.sqrt(vB[k + 1] * vB[k + 1] + 2.0 * aD[k] * (len[k] - q)));
-    }
-
-    private double vProfIn(int k, double s) {
-        double q = Math.max(0.0, Math.min(len[k], s - sStart[k]));
-        double up = upSpeed(k, vF[k], q);
-        return Math.min(cap[k], Math.min(up, Math.sqrt(vF[k + 1] * vF[k + 1] + 2.0 * aD[k] * (len[k] - q))));
     }
 
     /** @return the span at s, clamped into the sub-profile that ends at the junction nearest sGoal */
@@ -923,103 +826,13 @@ final class SpeedProfile {
         return 0.0;
     }
 
-    /** @return closed-form motion time of the span profile, the no-jerk lower bound without dwells (7.12) */
-    double spanTime() {
-        return spanTime;
-    }
-
     /** @return path length L */
     double length() {
         return length;
     }
 
-    /** @return the resolved constraints */
-    PathConstraints constraints() {
-        return c;
-    }
-
-    /** @return goal-capture gain k_p of the profile (8.3.7) */
-    double kP() {
-        return kP;
-    }
-
     /** @return hand-over distance d_h used by the profile (8.3.7) */
     double handOver() {
         return handOver;
-    }
-
-    /** @return number of spans (7.3) */
-    int spanCount() {
-        return len.length;
-    }
-
-    /** @return s at the start of span k */
-    double spanStart(int k) {
-        return sStart[k];
-    }
-
-    /** @return length of span k */
-    double spanLength(int k) {
-        return len[k];
-    }
-
-    /** @return kind of span k */
-    Kind spanKind(int k) {
-        return kind[k];
-    }
-
-    /** @return cap of span k */
-    double spanCap(int k) {
-        return cap[k];
-    }
-
-    /** @return speed-up limit of span k */
-    double spanAccel(int k) {
-        return aA[k];
-    }
-
-    /** @return slow-down limit of span k */
-    double spanDecel(int k) {
-        return aD[k];
-    }
-
-    /** @return curvature of span k */
-    double spanKappa(int k) {
-        return kappa[k];
-    }
-
-    /** @return theta' of span k */
-    double spanDTheta(int k) {
-        return dtheta[k];
-    }
-
-    /** @return s of junction j */
-    double junctionS(int j) {
-        return js[j];
-    }
-
-    /** @return junction cap J[j] (7.4) */
-    double junctionCap(int j) {
-        return jCap[j];
-    }
-
-    /** @return vB[j]; 0 at a stop (the end of the sub-profile before it) */
-    double junctionVB(int j) {
-        return vB[j];
-    }
-
-    /** @return vF[j] */
-    double junctionVF(int j) {
-        return vF[j];
-    }
-
-    /** @return number of sub-profiles */
-    int subProfileCount() {
-        return subFirst.length;
-    }
-
-    /** @return vB at the first junction of sub-profile p (its restart envelope, 7.10.2) */
-    double subProfileStartVB(int p) {
-        return subStartVB[p];
     }
 }

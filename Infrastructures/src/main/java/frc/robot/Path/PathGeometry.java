@@ -55,8 +55,6 @@ final class PathGeometry {
     static final double PROJECTION_TIE = 1e-12;
     /** A change within this of pi turns CCW (section 10, half-turn tie). */
     static final double HALF_TURN_TIE = 1e-9;
-    /** A STOP closer than this to 0 or L is not reported by {@link #stopS()} [m]. */
-    private static final double STOP_END_TOLERANCE = 1e-9;
 
     /**
      * One entry of the table (5.9.1). Only the fields of its type are meaningful.
@@ -178,11 +176,6 @@ final class PathGeometry {
         return waypointS[i];
     }
 
-    /** @return number of user points */
-    int waypointCount() {
-        return waypointS.length;
-    }
-
     /** @return index of the entry that contains s, later entry at a boundary, never zero-length (5.9.3) */
     int segmentIndexAt(double s) {
         int k = largestStartAtOrBefore(clampS(s));
@@ -206,12 +199,6 @@ final class PathGeometry {
             k--;
         }
         return evaluateOn(k, sc);
-    }
-
-    /** @return s of every STOP entry (user or automatic), ascending, excluding s = 0 and L (7.10, 8.6) */
-    double[] stopS() {
-        return segments.stream().filter(g -> g.type() == Segment.Type.STOP && g.sStart() > STOP_END_TOLERANCE
-                && g.sStart() < length - STOP_END_TOLERANCE).mapToDouble(Segment::sStart).toArray();
     }
 
     /** @return the sample of entry k at s (s clamped to the entry) */
