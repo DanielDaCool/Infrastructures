@@ -1,9 +1,7 @@
 package frc.robot.example;
 
 import java.util.ArrayList;
-import java.util.IdentityHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -125,8 +123,6 @@ public class ExampleSwerveWithPose extends SubsystemBase {
     private final KinematicsConfig kinematicsConfig;
     private final PathsConfig pathsConfig;
     private final PathFollowerConfig followerConfig = PathFollowerConfig.defaults(); // gains, tolerances, red flip (ROTATE)
-    /** Each path gets this robot's constraints once, the first time it is followed (not on every call). */
-    private final Map<Path, Path> constrainedPaths = new IdentityHashMap<>();
     private final Pigeon2 pigeon;
     private final StatusSignal<Angle> yaw; // main thread copy (refreshed here, not by the thread) [deg]
     private final StatusSignal<AngularVelocity> yawRate; // [deg/s]
@@ -154,7 +150,7 @@ public class ExampleSwerveWithPose extends SubsystemBase {
         this.modules = modules;
         this.moduleLocations = moduleLocations;
         this.kinematicsConfig = kinematicsConfig;
-        this.pathsConfig = PathsConfig.fromModules(moduleLocations); // module radius; the other values are placeholders
+        this.pathsConfig = PathsConfig.defaults(); // omega, alpha and jerk limits: placeholders, measure on the robot
         this.kinematics = new DemaciaKinematics(kinematicsConfig, moduleLocations);
         this.limiter = new SwerveAccelerationLimiter(kinematicsConfig);
         this.pigeon = pigeon;
@@ -367,23 +363,35 @@ public class ExampleSwerveWithPose extends SubsystemBase {
      * (flipped too) first. Call it again for every autonomous run: a command can be used in one
      * composition only, e.g. {@code chassis.follow(examplePath())}. Pass the blue path; the command flips it.
      *
-     * @param path the path, written for the blue alliance (this robot's constraints are applied once per Path object)
+     * <p>To run a mechanism part way along the path, keep the command and use its progress (0 to 1):
+     * <pre>{@code
+     * FollowPathCommand follow = chassis.followCommand(examplePath());
+     * new Trigger(() -> follow.progress() > 0.7).onTrue(intake.runCommand());
+     * }</pre>
+     *
+     * @param path the path, written for the blue alliance
      * @return a new command that requires this chassis
      */
     public Command follow(Path path) {
-        Path constrained = constrainedPaths.computeIfAbsent(path,
-                p -> p.withConstraints(PathConstraints.fromConfig(kinematicsConfig, pathsConfig)));
         return Commands.defer(() -> {
             Path active = path.forCurrentAlliance(followerConfig); // blue: the path itself; red: the flipped path
             Pose2d start = new Pose2d(active.startPoint(), active.startHeading().orElse(getPose().getRotation()));
-            FollowPathCommand follow = new FollowPathCommand(
-                    constrained,
-                    this::getPose, this::getFieldSpeeds, this::driveFieldRelative, this)
-                    .withKinematics(kinematicsConfig)
-                    .withPathsConfig(pathsConfig)
-                    .withConfig(followerConfig); // the command flips the path itself
-            return Commands.runOnce(() -> setStartPose(start)).andThen(follow);
+            return Commands.runOnce(() -> setStartPose(start)).andThen(followCommand(path));
         }, Set.of(this));
+    }
+
+    /**
+     * The follower alone (no start pose reset), with this robot's constraints. The command flips the
+     * path itself on red.
+     *
+     * @param path the path, written for the blue alliance
+     * @return a new command that requires this chassis
+     */
+    public FollowPathCommand followCommand(Path path) {
+        return new FollowPathCommand(
+                path.withConstraints(PathConstraints.fromConfig(kinematicsConfig, pathsConfig)),
+                this::getPose, this::getFieldSpeeds, this::driveFieldRelative, this)
+                .withConfig(followerConfig);
     }
 
     /**

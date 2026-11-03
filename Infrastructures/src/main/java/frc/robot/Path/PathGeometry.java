@@ -3,6 +3,7 @@ package frc.robot.Path;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
@@ -10,12 +11,15 @@ import java.util.StringJoiner;
 
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Translation2d;
+import frc.robot.Path.PathFollowerConfig.FlipMode;
 
 /**
- * Builds the {@link SegmentTable} from the user's points: merging, PASS markers, corner circles,
- * radius rule and shrink loop, tangents, sweeps (design doc sections 5.3 to 5.8, 5.15).
+ * The built geometry of a path: LINE / ARC / STOP entries in order, with arc-length evaluation,
+ * windowed projection and the alliance flip (design doc sections 5.3 to 5.15). {@link #build}
+ * turns the user's points into the table: merging, PASS markers, corner circles, radius rule and
+ * shrink loop, tangents, sweeps. Immutable after construction.
  */
-final class GeometryBuilder {
+final class PathGeometry {
 
     /** Smallest arc radius [m] (5.7.3). */
     static final double R_MIN = 0.05;
@@ -45,9 +49,392 @@ final class GeometryBuilder {
     static final double RADIUS_DIVISOR_END = 2.0;
     /** Radius divisor k for a shared leg (5.7.2). */
     static final double RADIUS_DIVISOR_SHARED = 4.0;
+    /** Robot at an arc center: every arc point is equally near (section 10, EPS_CENTER). */
+    static final double EPS_CENTER = 1e-9;
+    /** Projection tie distance (section 10, 5.10.4). */
+    static final double PROJECTION_TIE = 1e-12;
+    /** A change within this of pi turns CCW (section 10, half-turn tie). */
+    static final double HALF_TURN_TIE = 1e-9;
+    /** A STOP closer than this to 0 or L is not reported by {@link #stopS()} [m]. */
+    private static final double STOP_END_TOLERANCE = 1e-9;
+
+    /**
+     * One entry of the table (5.9.1). Only the fields of its type are meaningful.
+     *
+     * @param type        LINE, ARC or STOP
+     * @param sStart      s at the start of this entry [m]
+     * @param length      length [m]; 0 for STOP
+     * @param a           LINE start point, or the STOP point
+     * @param t           unit direction T (LINE), or T_out (STOP)
+     * @param center      ARC center C
+     * @param r           ARC radius
+     * @param phi0        ARC start angle on the circle [rad]
+     * @param dphi        ARC signed sweep [rad]
+     * @param sWp         s of the waypoint on this arc (STOP: sStart)
+     * @param tIn         STOP direction of arrival T_in
+     * @param cornerIndex STOP user index (for merged points, the kept one); -1 otherwise
+     * @param userStop    true if the user wrote stop(); false for an automatic stop corner
+     * @param dwell       STOP dwell [s]
+     */
+    record Segment(Type type, double sStart, double length, Translation2d a, Translation2d t, Translation2d center,
+                   double r, double phi0, double dphi, double sWp, Translation2d tIn, int cornerIndex,
+                   boolean userStop, double dwell) {
+
+        /** Entry type. */
+        enum Type { LINE, ARC, STOP }
+
+        /** @return a LINE from a with unit direction t */
+        static Segment line(double sStart, double length, Translation2d a, Translation2d t) {
+            return new Segment(Type.LINE, sStart, length, a, t, null, 0, 0, 0, 0, null, -1, false, 0);
+        }
+
+        /** @return an ARC about center with radius r, start angle phi0 and signed sweep dphi */
+        static Segment arc(double sStart, Translation2d center, double r, double phi0, double dphi, double sWp) {
+            return new Segment(Type.ARC, sStart, r * Math.abs(dphi), null, null, center, r, phi0, dphi, sWp,
+                    null, -1, false, 0);
+        }
+
+        /** @return a zero-length STOP at point p arriving along tIn and leaving along tOut */
+        static Segment stop(double sStart, Translation2d p, Translation2d tIn, Translation2d tOut,
+                            int cornerIndex, boolean userStop, double dwell) {
+            return new Segment(Type.STOP, sStart, 0, p, tOut, null, 0, 0, 0, sStart, tIn, cornerIndex,
+                    userStop, dwell);
+        }
+
+        /** @return sign(dphi): +1 left, -1 right */
+        double sigma() {
+            return Math.signum(dphi);
+        }
+
+        /** @return s at the end of this entry */
+        double sEnd() {
+            return sStart + length;
+        }
+    }
+
+    /**
+     * Read-only geometry sample at arc length s (9.11).
+     *
+     * @param s         arc length [m]
+     * @param position  point on the path
+     * @param tangent   direction of travel
+     * @param curvature signed curvature [1/m], positive for a left turn
+     */
+    record PathSample(double s, Translation2d position, Rotation2d tangent, double curvature) {
+    }
+
+    /**
+     * Result of a projection.
+     *
+     * @param s  s* [m]
+     * @param eN signed cross-track error, + = left of the path [m]
+     */
+    record Projection(double s, double eN) {
+    }
+
+    private final List<Segment> segments;
+    private final double[] sStarts;
+    private final double[] waypointS;
+    private final double length;
+
+    /**
+     * @param segments  entries in order, line, corner, line, ... (section 5.9.1)
+     * @param waypointS s of each point the user wrote, by user index (merged points map to the kept one)
+     */
+    PathGeometry(List<Segment> segments, double[] waypointS) {
+        this.segments = List.copyOf(segments);
+        this.waypointS = waypointS.clone();
+        this.sStarts = new double[segments.size()];
+        for (int k = 0; k < segments.size(); k++) {
+            sStarts[k] = segments.get(k).sStart();
+        }
+        this.length = segments.get(segments.size() - 1).sEnd();
+    }
+
+    // ================================================================ queries (5.9)
+
+    /** @return total length L [m] */
+    double length() {
+        return length;
+    }
+
+    /** @return number of entries m */
+    int size() {
+        return segments.size();
+    }
+
+    /** @return entry k */
+    Segment segment(int k) {
+        return segments.get(k);
+    }
+
+    /** @return the entries in order */
+    List<Segment> segments() {
+        return segments;
+    }
+
+    /** @return s of the point the user wrote at index i (5.9.4) */
+    double waypointS(int i) {
+        return waypointS[i];
+    }
+
+    /** @return number of user points */
+    int waypointCount() {
+        return waypointS.length;
+    }
+
+    /** @return index of the entry that contains s, later entry at a boundary, never zero-length (5.9.3) */
+    int segmentIndexAt(double s) {
+        int k = largestStartAtOrBefore(clampS(s));
+        while (k > 0 && segments.get(k).length() == 0) {
+            k--;
+        }
+        return k;
+    }
+
+    /** @return the sample at s clamped to [0, L]; T is the right limit at a STOP (5.9.2, 5.9.3) */
+    PathSample evaluate(double s) {
+        double sc = clampS(s);
+        return evaluateOn(segmentIndexAt(sc), sc);
+    }
+
+    /** @return the sample at s using the largest positive-length entry with sStart &lt; s: T of the leg arrived on */
+    PathSample evaluateLeft(double s) {
+        double sc = clampS(s);
+        int k = segments.size() - 1;
+        while (k > 0 && (segments.get(k).length() == 0 || sStarts[k] >= sc)) {
+            k--;
+        }
+        return evaluateOn(k, sc);
+    }
+
+    /** @return s of every STOP entry (user or automatic), ascending, excluding s = 0 and L (7.10, 8.6) */
+    double[] stopS() {
+        return segments.stream().filter(g -> g.type() == Segment.Type.STOP && g.sStart() > STOP_END_TOLERANCE
+                && g.sStart() < length - STOP_END_TOLERANCE).mapToDouble(Segment::sStart).toArray();
+    }
+
+    /** @return the sample of entry k at s (s clamped to the entry) */
+    private PathSample evaluateOn(int k, double s) {
+        Segment seg = segments.get(k);
+        double q = Math.max(0.0, Math.min(seg.length(), s - seg.sStart()));
+        if (seg.type() == Segment.Type.ARC) {
+            double phi = seg.phi0() + seg.sigma() * q / seg.r();
+            Translation2d x = new Translation2d(seg.center().getX() + seg.r() * Math.cos(phi),
+                    seg.center().getY() + seg.r() * Math.sin(phi));
+            return new PathSample(s, x, new Rotation2d(-seg.sigma() * Math.sin(phi), seg.sigma() * Math.cos(phi)),
+                    seg.sigma() / seg.r());
+        }
+        Translation2d x = seg.type() == Segment.Type.LINE
+                ? new Translation2d(seg.a().getX() + q * seg.t().getX(), seg.a().getY() + q * seg.t().getY())
+                : seg.a();
+        return new PathSample(s, x, new Rotation2d(seg.t().getX(), seg.t().getY()), 0.0);
+    }
+
+    /** @return s clamped to [0, L]; NaN becomes 0 */
+    private double clampS(double s) {
+        return Double.isNaN(s) ? 0.0 : Math.max(0.0, Math.min(length, s));
+    }
+
+    /** @return the largest index with sStart &lt;= s (binary search; 0 if none) */
+    private int largestStartAtOrBefore(double s) {
+        int i = Arrays.binarySearch(sStarts, s);
+        if (i >= 0) {
+            while (i + 1 < sStarts.length && sStarts[i + 1] <= s) {
+                i++;
+            }
+            return i;
+        }
+        return Math.max(0, -i - 2);
+    }
+
+    // ================================================================ projection (5.10, 8.2.3)
+
+    /**
+     * Nearest path point with s in [sMin, sMax]; ties keep the s closest to sPrev (5.10.4).
+     * Never throws (run time): a NaN sPrev is read as 0, and a NaN window edge is replaced by
+     * sPrev, so a NaN window degenerates to the single point s = sPrev.
+     *
+     * @param p     robot position
+     * @param sMin  window start
+     * @param sMax  window end
+     * @param sPrev previous s*
+     * @return s* and e_n
+     */
+    Projection project(Translation2d p, double sMin, double sMax, double sPrev) {
+        if (Double.isNaN(sPrev)) {
+            sPrev = 0.0;
+        }
+        double hi = clampS(Double.isNaN(sMax) ? sPrev : sMax);
+        double lo = Math.min(hi, clampS(Double.isNaN(sMin) ? sPrev : sMin));
+        double bestS = Double.NaN;
+        double bestDist = Double.POSITIVE_INFINITY;
+        for (int k = segmentIndexAt(lo); k < segments.size(); k++) {
+            Segment seg = segments.get(k);
+            if (seg.sStart() > hi) {
+                break;
+            }
+            if (seg.sEnd() < lo) {
+                continue;
+            }
+            double sk = Math.max(lo, Math.min(hi, projectOnSegment(k, p, sPrev)));
+            double dist = p.getDistance(evaluate(sk).position());
+            if (Double.isNaN(bestS) || dist < bestDist - PROJECTION_TIE) {
+                bestS = sk;
+                bestDist = dist;
+            } else if (Math.abs(dist - bestDist) <= PROJECTION_TIE && Math.abs(sk - sPrev) < Math.abs(bestS - sPrev)) {
+                bestS = sk;
+                bestDist = Math.min(dist, bestDist);
+            }
+        }
+        if (Double.isNaN(bestS)) {
+            bestS = lo;
+        }
+        PathSample sample = evaluate(bestS);
+        double eN = -(p.getX() - sample.position().getX()) * sample.tangent().getSin()
+                + (p.getY() - sample.position().getY()) * sample.tangent().getCos();
+        return new Projection(bestS, eN);
+    }
+
+    /**
+     * Projection onto one entry, unclamped to the window (5.10.1 to 5.10.3).
+     *
+     * @param k     entry index
+     * @param p     robot position
+     * @param sPrev previous s* (used when p is at an arc center)
+     * @return s on entry k
+     */
+    double projectOnSegment(int k, Translation2d p, double sPrev) {
+        Segment seg = segments.get(k);
+        double q;
+        if (seg.type() == Segment.Type.LINE) {
+            q = (p.getX() - seg.a().getX()) * seg.t().getX() + (p.getY() - seg.a().getY()) * seg.t().getY();
+        } else if (seg.type() == Segment.Type.ARC) {
+            double vx = p.getX() - seg.center().getX();
+            double vy = p.getY() - seg.center().getY();
+            if (Math.hypot(vx, vy) < EPS_CENTER) {
+                q = sPrev - seg.sStart();
+            } else {
+                double sweep = Math.abs(seg.dphi());
+                double beta = mod2pi(seg.sigma() * (Math.atan2(vy, vx) - seg.phi0()));
+                q = beta <= sweep ? seg.r() * beta : (beta - sweep < 2.0 * Math.PI - beta ? seg.length() : 0.0);
+            }
+        } else {
+            return seg.sStart();
+        }
+        return seg.sStart() + Math.max(0.0, Math.min(seg.length(), q));
+    }
+
+    // ================================================================ flip (5.13)
+
+    /**
+     * s values, L and waypoint s do not change; MIRROR flips the sign of sigma, kappa and dphi.
+     *
+     * @return the flipped table (this for NONE)
+     */
+    PathGeometry flipped(FlipMode mode, double fieldLength, double fieldWidth) {
+        if (mode == FlipMode.NONE) {
+            return this;
+        }
+        List<Segment> out = new ArrayList<>(segments.size());
+        for (Segment seg : segments) {
+            Translation2d a = seg.a() == null ? null : flip(seg.a(), mode, fieldLength, fieldWidth);
+            switch (seg.type()) {
+                case LINE -> out.add(Segment.line(seg.sStart(), seg.length(), a, flipDirection(seg.t(), mode)));
+                case ARC -> out.add(Segment.arc(seg.sStart(), flip(seg.center(), mode, fieldLength, fieldWidth),
+                        seg.r(), wrap(mode == FlipMode.MIRROR ? Math.PI - seg.phi0() : seg.phi0() + Math.PI),
+                        mode == FlipMode.MIRROR ? -seg.dphi() : seg.dphi(), seg.sWp()));
+                default -> out.add(Segment.stop(seg.sStart(), a, flipDirection(seg.tIn(), mode),
+                        flipDirection(seg.t(), mode), seg.cornerIndex(), seg.userStop(), seg.dwell()));
+            }
+        }
+        return new PathGeometry(out, waypointS);
+    }
+
+    /** @return a flipped position */
+    static Translation2d flip(Translation2d t, FlipMode mode, double fieldLength, double fieldWidth) {
+        return switch (mode) {
+            case MIRROR -> new Translation2d(fieldLength - t.getX(), t.getY());
+            case ROTATE -> new Translation2d(fieldLength - t.getX(), fieldWidth - t.getY());
+            default -> t;
+        };
+    }
+
+    /** @return a flipped heading or direction angle */
+    static Rotation2d flip(Rotation2d r, FlipMode mode) {
+        return switch (mode) {
+            case MIRROR -> new Rotation2d(-r.getCos(), r.getSin());
+            case ROTATE -> new Rotation2d(-r.getCos(), -r.getSin());
+            default -> r;
+        };
+    }
+
+    /** @return a flipped unit direction vector (MIRROR: (-x, y); ROTATE: -T) */
+    private static Translation2d flipDirection(Translation2d t, FlipMode mode) {
+        return switch (mode) {
+            case MIRROR -> new Translation2d(-t.getX(), t.getY());
+            case ROTATE -> new Translation2d(-t.getX(), -t.getY());
+            default -> t;
+        };
+    }
+
+    // ================================================================ math helpers (3, 6.3)
+
+    /** @return angle wrapped to (-pi, pi] */
+    static double wrap(double angle) {
+        double a = mod2pi(angle + Math.PI) - Math.PI;
+        return a <= -Math.PI ? a + 2.0 * Math.PI : a;
+    }
+
+    /** @return angle wrapped to [0, 2pi) */
+    static double mod2pi(double angle) {
+        double twoPi = 2.0 * Math.PI;
+        double a = angle % twoPi;
+        if (a < 0) {
+            a += twoPi;
+        }
+        return a >= twoPi ? 0.0 : a;   // a tiny negative angle rounds to 2pi after the add
+    }
+
+    /** @return z component of a x b */
+    static double cross(double ax, double ay, double bx, double by) {
+        return ax * by - ay * bx;
+    }
+
+    /** @return sqrt(max(0, x)) */
+    static double vsqrt(double x) {
+        return Math.sqrt(Math.max(0.0, x));
+    }
+
+    /** @return the short way around (6.3): wrapped to (-pi, pi]; within HALF_TURN_TIE of a half turn is +pi (CCW) */
+    static double shortTurn(double d) {
+        double w = wrap(d);
+        return Math.abs(w) > Math.PI - HALF_TURN_TIE ? Math.PI : w;
+    }
+
+    /** @return v rounded to 4 decimals, without trailing zeros */
+    static String fmt(double v) {
+        if (!Double.isFinite(v)) {
+            return Double.toString(v);
+        }
+        return BigDecimal.valueOf(v).setScale(4, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString();
+    }
+
+    // ================================================================ builder (5.3 to 5.8, 5.15)
 
     /** Feasibility conditions of section 5.7.1. */
     private enum Check { F1, F2, F3 }
+
+    /** Collects build warnings as {@code Path "name", point i: text}, without duplicates (9.12.2). */
+    private record Warnings(String pathName, List<String> out) {
+        void add(int pointIndex, String text) {
+            String message = "Path \"" + pathName + "\"" + (pointIndex >= 0 ? ", point " + pointIndex : "") + ": "
+                    + text;
+            if (!out.contains(message)) {
+                out.add(message);
+            }
+        }
+    }
 
     /** One point after merging duplicates; attributes merged, later value wins (5.8.2). */
     private static final class Node {
@@ -95,7 +482,7 @@ final class GeometryBuilder {
         final double[] arcPhi0;
         final double[] arcDphi;
         final double[] arcWin;
-        final List<Set<Check>> failed;
+        final List<Set<Check>> failed = new ArrayList<>();
 
         Construction(int n) {
             lineExists = new boolean[n - 1];
@@ -107,38 +494,32 @@ final class GeometryBuilder {
             arcPhi0 = new double[n];
             arcDphi = new double[n];
             arcWin = new double[n];
-            failed = new ArrayList<>();
             for (int i = 0; i < n; i++) {
                 failed.add(EnumSet.noneOf(Check.class));
             }
         }
 
         boolean anyFailed() {
-            for (Set<Check> f : failed) {
-                if (!f.isEmpty()) {
-                    return true;
-                }
-            }
-            return false;
+            return failed.stream().anyMatch(f -> !f.isEmpty());
         }
     }
 
-    private GeometryBuilder() {
+    /** Same as {@link #build(List, String, List, int)} with the normal shrink-pass guard. */
+    static PathGeometry build(List<Point> points, String pathName, List<String> warnings) {
+        return build(points, pathName, warnings, MAX_ITER);
     }
 
     /**
-     * Runs the whole construction (section 5.15). Throws V1, V6, V30; reports W1 to W5 to warnings.
+     * Runs the whole construction (section 5.15). Throws V1, V6, V30; adds W1 to W5 to warnings.
      *
      * @param points   the user's points, validated non-null
+     * @param pathName the name used in the warning prefix
      * @param warnings receives build warnings
+     * @param maxIter  shrink-pass guard (tests force the fallback)
      * @return the table; {@code waypointS} is indexed by the user's point index
      */
-    static SegmentTable build(List<Point> points, PathWarnings warnings) {
-        return build(points, warnings, MAX_ITER);
-    }
-
-    /** Same as {@link #build(List, PathWarnings)} with another shrink-pass guard (tests force the fallback). */
-    static SegmentTable build(List<Point> points, PathWarnings warnings, int maxIter) {
+    static PathGeometry build(List<Point> points, String pathName, List<String> warnings, int maxIter) {
+        Warnings w = new Warnings(pathName, warnings);
         int userCount = points.size();
         if (userCount < 2) {
             throw new IllegalArgumentException("Path needs at least 2 points (a start and an end), but you gave "
@@ -160,7 +541,7 @@ final class GeometryBuilder {
                 Node kept = merged.get(merged.size() - 1);
                 double d = Math.hypot(p.x() - kept.x, p.y() - kept.y);
                 if (d < EPS_DUP) {
-                    mergeInto(kept, u, p, d, warnings);
+                    mergeInto(kept, u, p, d, w);
                     userToMerged[u] = merged.size() - 1;
                     continue;
                 }
@@ -179,7 +560,7 @@ final class GeometryBuilder {
                         : mergedStopWithRadius(node.speedFrom, node.radiusFrom, node.radius);
             }
         }
-        warnEndpoints(merged.get(0), merged.get(merged.size() - 1), warnings);
+        warnEndpoints(merged.get(0), merged.get(merged.size() - 1), w);
 
         // 5.8.3: set straight middle points aside as PASS markers
         List<Integer> geo = new ArrayList<>();
@@ -207,7 +588,7 @@ final class GeometryBuilder {
         for (int m : passMarkers) {
             Node node = merged.get(m);
             if (node.hasRadius()) {
-                warnings.add(node.userIndex, "withRadius(" + fmt(node.radius) + ") is ignored here: only a point "
+                w.add(node.userIndex, "withRadius(" + fmt(node.radius) + ") is ignored here: only a point "
                         + "where the path turns has a corner radius. Remove withRadius from this point.");
             }
         }
@@ -240,7 +621,7 @@ final class GeometryBuilder {
             double inY = (py[i] - py[i - 1]) / legLength[i - 1];
             double outX = (px[i + 1] - px[i]) / legLength[i];
             double outY = (py[i + 1] - py[i]) / legLength[i];
-            double cr = PathMath.cross(inX, inY, outX, outY);
+            double cr = cross(inX, inY, outX, outY);
             tau[i] = Math.atan2(Math.abs(cr), inX * outX + inY * outY);
             rawSigma[i] = Math.signum(cr);
             double sx = -inX + outX;
@@ -276,7 +657,7 @@ final class GeometryBuilder {
                 } else {
                     r[i] = 0;
                     if (node.radius > 0) {
-                        warnings.add(node.userIndex, stopText("withRadius(" + fmt(node.radius) + ") is below "
+                        w.add(node.userIndex, stopText("withRadius(" + fmt(node.radius) + ") is below "
                                 + fmt(R_MIN) + " m"));
                     }
                 }
@@ -287,11 +668,11 @@ final class GeometryBuilder {
                 }
                 if (tau[i] > TAU_STOP) {
                     r[i] = 0;
-                    warnings.add(node.userIndex, stopText("the path turns " + fmt(Math.toDegrees(tau[i]))
+                    w.add(node.userIndex, stopText("the path turns " + fmt(Math.toDegrees(tau[i]))
                             + " degrees here, more than " + fmt(Math.toDegrees(TAU_STOP)) + " degrees"));
                 } else if (auto < R_MIN) {
                     r[i] = 0;
-                    warnings.add(node.userIndex, stopText("the legs are too short: the largest radius that fits is "
+                    w.add(node.userIndex, stopText("the legs are too short: the largest radius that fits is "
                             + fmt(auto) + " m, less than " + fmt(R_MIN) + " m"));
                 } else {
                     r[i] = auto;
@@ -342,7 +723,7 @@ final class GeometryBuilder {
         for (int i = 1; i < n - 1; i++) {
             if (fallbackZeroed[i]) {
                 String why = shrinkReasons.get(i).isEmpty() ? "" : ", because " + checkList(shrinkReasons.get(i));
-                warnings.add(nodes[i].userIndex, stopText("no radius fitted within " + maxIter
+                w.add(nodes[i].userIndex, stopText("no radius fitted within " + maxIter
                         + " shrink passes, so every corner arc was removed" + why));
                 continue;
             }
@@ -351,10 +732,10 @@ final class GeometryBuilder {
             }
             String why = checkList(shrinkReasons.get(i));
             if (r[i] == 0) {
-                warnings.add(nodes[i].userIndex, stopText("radius " + fmt(r0[i]) + " m was shrunk below "
+                w.add(nodes[i].userIndex, stopText("radius " + fmt(r0[i]) + " m was shrunk below "
                         + fmt(R_MIN) + " m to fit, because " + why));
             } else {
-                warnings.add(nodes[i].userIndex, "radius " + fmt(r0[i]) + " m does not fit and was shrunk to "
+                w.add(nodes[i].userIndex, "radius " + fmt(r0[i]) + " m does not fit and was shrunk to "
                         + fmt(r[i]) + " m because " + why + ". Move the points farther apart, or give a smaller"
                         + " radius, for example withRadius(" + fmt(r[i]) + ").");
             }
@@ -364,18 +745,15 @@ final class GeometryBuilder {
         List<Segment> segments = new ArrayList<>();
         double[] geoS = new double[n];
         double s = 0;
-        geoS[0] = 0;
         for (int j = 0; j < n - 1; j++) {
             if (j > 0) {
                 int i = j;
                 if (r[i] > 0) {
-                    double cx = px[i] + r[i] * bx[i];
-                    double cy = py[i] + r[i] * by[i];
-                    Segment arc = Segment.arc(s, new Translation2d(cx, cy), r[i], c.arcPhi0[i], c.arcDphi[i],
-                            s + r[i] * c.arcWin[i]);
+                    Segment arc = Segment.arc(s, new Translation2d(px[i] + r[i] * bx[i], py[i] + r[i] * by[i]), r[i],
+                            c.arcPhi0[i], c.arcDphi[i], s + r[i] * c.arcWin[i]);
                     segments.add(arc);
-                    geoS[i] = arc.sWp;
-                    s += arc.length;
+                    geoS[i] = arc.sWp();
+                    s += arc.length();
                 } else {
                     segments.add(Segment.stop(s, new Translation2d(px[i], py[i]),
                             new Translation2d(c.tx[j - 1], c.ty[j - 1]), new Translation2d(c.tx[j], c.ty[j]),
@@ -393,13 +771,12 @@ final class GeometryBuilder {
         // 5.9.4: s of every merged point; PASS markers by projection between their kept neighbors
         double[] mergedS = new double[merged.size()];
         int[] geoOfMerged = new int[merged.size()];
-        java.util.Arrays.fill(geoOfMerged, -1);
+        Arrays.fill(geoOfMerged, -1);
         for (int g = 0; g < n; g++) {
             mergedS[geo.get(g)] = geoS[g];
             geoOfMerged[geo.get(g)] = g;
         }
-        SegmentTable provisional = new SegmentTable(segments, new double[userCount]);
-        Projector projector = new Projector(provisional);
+        PathGeometry provisional = new PathGeometry(segments, new double[userCount]);
         for (int m = 0; m < merged.size(); m++) {
             if (geoOfMerged[m] >= 0) {
                 continue;
@@ -414,23 +791,21 @@ final class GeometryBuilder {
             }
             Node node = merged.get(m);
             Translation2d p = new Translation2d(node.x, node.y);
-            double sA = mergedS[prev];
-            double sB = mergedS[next];
-            double sPass = projector.project(p, sA, sB, sA).s();
+            double sPass = provisional.project(p, mergedS[prev], mergedS[next], mergedS[prev]).s();
             mergedS[m] = sPass;
             double miss = p.getDistance(provisional.evaluate(sPass).position());
             if (miss > PASS_TOL) {
-                warnings.add(node.userIndex, "this point is on a straight line between its neighbors, so it is "
+                w.add(node.userIndex, "this point is on a straight line between its neighbors, so it is "
                         + "only a pass marker, and the path misses it by " + fmt(miss) + " m (the line next to a "
                         + "round corner is turned outward). Add .stop() to drive exactly through it, or remove the "
-                        + "point and use an event at a fraction instead.");
+                        + "point and use the command's progress() in a Trigger instead.");
             }
         }
         double[] waypointS = new double[userCount];
         for (int u = 0; u < userCount; u++) {
             waypointS[u] = mergedS[userToMerged[u]];
         }
-        return new SegmentTable(segments, waypointS);
+        return new PathGeometry(segments, waypointS);
     }
 
     /** One construction pass: tangent lines (5.4), arc sweeps (5.5), checks F1 to F3 (5.7.1). */
@@ -462,12 +837,10 @@ final class GeometryBuilder {
             double lam = Math.sqrt((dc - h) * (dc + h));
             double ux = dx / dc;
             double uy = dy / dc;
-            double upx = -uy;
-            double upy = ux;
-            double nx = (h * ux + lam * upx) / dc;
-            double ny = (h * uy + lam * upy) / dc;
-            double tx = (lam * ux - h * upx) / dc;
-            double ty = (lam * uy - h * upy) / dc;
+            double nx = (h * ux - lam * uy) / dc;
+            double ny = (h * uy + lam * ux) / dc;
+            double tx = (lam * ux + h * uy) / dc;
+            double ty = (lam * uy - h * ux) / dc;
             c.lineExists[j] = true;
             c.lambda[j] = lam;
             c.tx[j] = tx;
@@ -478,8 +851,7 @@ final class GeometryBuilder {
             qey[j] = cy[j + 1] - es[j + 1] * er[j + 1] * ny;
             double legX = (px[j + 1] - px[j]) / legLength[j];
             double legY = (py[j + 1] - py[j]) / legLength[j];
-            double deviation = Math.atan2(Math.abs(PathMath.cross(tx, ty, legX, legY)), tx * legX + ty * legY);
-            if (deviation > EPS_DEV) {
+            if (Math.atan2(Math.abs(cross(tx, ty, legX, legY)), tx * legX + ty * legY) > EPS_DEV) {
                 markCorners(c, j, n, er, Check.F2);
             }
         }
@@ -490,11 +862,11 @@ final class GeometryBuilder {
             double phiIn = Math.atan2(qey[i - 1] - cy[i], qex[i - 1] - cx[i]);
             double phiP = Math.atan2(py[i] - cy[i], px[i] - cx[i]);
             double phiOut = Math.atan2(c.qsy[i] - cy[i], c.qsx[i] - cx[i]);
-            double wIn = PathMath.mod2pi(sigma[i] * (phiP - phiIn));
+            double wIn = mod2pi(sigma[i] * (phiP - phiIn));
             if (wIn > 2.0 * Math.PI - EPS_WRAP) {
                 wIn = 0;
             }
-            double wOut = PathMath.mod2pi(sigma[i] * (phiOut - phiP));
+            double wOut = mod2pi(sigma[i] * (phiOut - phiP));
             if (wOut > 2.0 * Math.PI - EPS_WRAP) {
                 wOut = 0;
             }
@@ -536,11 +908,11 @@ final class GeometryBuilder {
         double inY = by - ay;
         double outX = cx - bx;
         double outY = cy - by;
-        return Math.atan2(Math.abs(PathMath.cross(inX, inY, outX, outY)), inX * outX + inY * outY);
+        return Math.atan2(Math.abs(cross(inX, inY, outX, outY)), inX * outX + inY * outY);
     }
 
     /** Merges user point p (index u) into kept, later attribute wins; warning W3 (5.8.2). */
-    private static void mergeInto(Node kept, int u, Point p, double d, PathWarnings warnings) {
+    private static void mergeInto(Node kept, int u, Point p, double d, Warnings w) {
         StringBuilder text = new StringBuilder("points " + kept.userIndex + " and " + u + " are only "
                 + fmt(d * 1000.0) + " mm apart. Point " + u + " was merged into point " + kept.userIndex
                 + ". Remove one of them from your list, for example delete point " + u + ".");
@@ -551,8 +923,7 @@ final class GeometryBuilder {
             }
             kept.angle = p.angle().get();
         }
-        boolean pSpeed = p.isStop() || p.maxVelocity().isPresent();
-        if (pSpeed) {
+        if (p.isStop() || p.maxVelocity().isPresent()) {
             if (kept.hasSpeed()) {
                 text.append(both("a speed setting", speedText(kept.stop, kept.dwell, kept.maxVelocity),
                         speedText(p.isStop(), p.dwellSeconds(), p.maxVelocity().orElse(Double.NaN))));
@@ -569,7 +940,7 @@ final class GeometryBuilder {
             kept.radiusFrom = u;
             kept.radius = p.radius().getAsDouble();
         }
-        warnings.add(kept.userIndex, text.toString());
+        w.add(kept.userIndex, text.toString());
     }
 
     /** @return the W3 extra text for an attribute both points set */
@@ -586,29 +957,29 @@ final class GeometryBuilder {
     }
 
     /** Warning W4 for settings on the first and last point that have no effect (9.12.2). */
-    private static void warnEndpoints(Node first, Node last, PathWarnings warnings) {
+    private static void warnEndpoints(Node first, Node last, Warnings w) {
+        String noRadius = ") is ignored here: only a point where the path turns has a corner radius. Remove"
+                + " withRadius from this point.";
         if (first.stop) {
             if (first.dwell > 0) {
-                warnings.add(first.userIndex, "stop(" + fmt(first.dwell) + ") on the first point does not change "
+                w.add(first.userIndex, "stop(" + fmt(first.dwell) + ") on the first point does not change "
                         + "the path; the robot waits " + fmt(first.dwell) + " s before it starts. Remove the wait unless you want it.");
             } else {
-                warnings.add(first.userIndex, "stop() is ignored here: the robot starts with its measured speed. Remove stop() from this point.");
+                w.add(first.userIndex, "stop() is ignored here: the robot starts with its measured speed. Remove stop() from this point.");
             }
         } else if (!Double.isNaN(first.maxVelocity)) {
-            warnings.add(first.userIndex, "withVelocity(" + fmt(first.maxVelocity) + ") is ignored here: the robot "
+            w.add(first.userIndex, "withVelocity(" + fmt(first.maxVelocity) + ") is ignored here: the robot "
                     + "starts with its measured speed. Remove withVelocity from this point.");
         }
         if (first.hasRadius()) {
-            warnings.add(first.userIndex, "withRadius(" + fmt(first.radius) + ") is ignored here: only a point where "
-                    + "the path turns has a corner radius. Remove withRadius from this point.");
+            w.add(first.userIndex, "withRadius(" + fmt(first.radius) + noRadius);
         }
         if (!Double.isNaN(last.maxVelocity)) {
-            warnings.add(last.userIndex, "withVelocity(" + fmt(last.maxVelocity) + ") is ignored here: the robot "
+            w.add(last.userIndex, "withVelocity(" + fmt(last.maxVelocity) + ") is ignored here: the robot "
                     + "always ends at speed 0 in this version. Remove withVelocity from the last point.");
         }
         if (last.hasRadius()) {
-            warnings.add(last.userIndex, "withRadius(" + fmt(last.radius) + ") is ignored here: only a point where "
-                    + "the path turns has a corner radius. Remove withRadius from this point.");
+            w.add(last.userIndex, "withRadius(" + fmt(last.radius) + noRadius);
         }
     }
 
@@ -619,7 +990,7 @@ final class GeometryBuilder {
                 + "withRadius(0.3). To stop on purpose, use stop() or withRadius(0).";
     }
 
-    /** @return "F1, F2" style list */
+    /** @return "a and b" list of the failed checks */
     private static String checkList(Set<Check> checks) {
         StringJoiner joiner = new StringJoiner(" and ");
         for (Check check : checks) {
@@ -647,13 +1018,5 @@ final class GeometryBuilder {
                 + "stop point is a sharp corner (the robot stops exactly on the point), so it has no arc. Remove "
                 + "withRadius(" + radius + ") from point " + radiusIndex + " to stop on the point, or remove stop() "
                 + "from point " + stopIndex + " to drive through the corner on a round arc.");
-    }
-
-    /** @return v rounded to 4 decimals, without trailing zeros */
-    static String fmt(double v) {
-        if (!Double.isFinite(v)) {
-            return Double.toString(v);
-        }
-        return BigDecimal.valueOf(v).setScale(4, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString();
     }
 }

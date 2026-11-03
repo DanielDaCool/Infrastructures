@@ -2,9 +2,6 @@ package frc.robot.Path;
 
 import java.util.Objects;
 
-import edu.wpi.first.apriltag.AprilTagFieldLayout;
-import edu.wpi.first.apriltag.AprilTagFields;
-
 /**
  * Follower gains, tolerances, timeout and alliance flip (design doc sections 9.6, 10).
  * Immutable; each {@code withX} returns a new record.
@@ -20,8 +17,8 @@ import edu.wpi.first.apriltag.AprilTagFields;
  * @param timeoutFactor t_timeout = timeoutFactor * profileTime + timeoutMargin (8.7.3)
  * @param timeoutMargin [s]
  * @param flipMode      NONE / MIRROR / ROTATE (5.13, 9.9)
- * @param fieldLength   FL [m]
- * @param fieldWidth    FW [m]
+ * @param fieldLength   FL [m], default {@link #FIELD_LENGTH}
+ * @param fieldWidth    FW [m], default {@link #FIELD_WIDTH}
  */
 public record PathFollowerConfig(
         double kN,
@@ -58,10 +55,20 @@ public record PathFollowerConfig(
     static final double DEFAULT_TIMEOUT_FACTOR = 1.5;
     /** Default timeout margin [s] (section 10, decision 10). */
     static final double DEFAULT_TIMEOUT_MARGIN = 1.0;
-    /** Placeholder field length [m], used only if the default AprilTag layout cannot be loaded (section 10). */
-    static final double FALLBACK_FIELD_LENGTH = 16.54;
-    /** Placeholder field width [m], used only if the default AprilTag layout cannot be loaded (section 10). */
-    static final double FALLBACK_FIELD_WIDTH = 8.07;
+    /** Default field length [m]; change it with {@link #withField} for another field. */
+    public static final double FIELD_LENGTH = 16.54;
+    /** Default field width [m]; change it with {@link #withField} for another field. */
+    public static final double FIELD_WIDTH = 8.07;
+
+    /** How a blue path is turned into a red one (sections 5.13, 9.9). */
+    public enum FlipMode {
+        /** No flip; the team writes separate red paths. */
+        NONE,
+        /** Mirror about x = fieldLength / 2. */
+        MIRROR,
+        /** Rotate 180 degrees about the field center. */
+        ROTATE
+    }
 
     public PathFollowerConfig {
         requirePositive("kN", kN, "1/s", "withKN(3.0)");
@@ -81,46 +88,20 @@ public record PathFollowerConfig(
     }
 
     private static void requirePositive(String name, double value, String unit, String change) {
-        ConfigCheck.requirePositive("PathFollowerConfig", name, value, unit, "PathFollowerConfig.defaults()",
+        PathConstraints.requirePositive("PathFollowerConfig", name, value, unit, "PathFollowerConfig.defaults()",
                 "PathFollowerConfig.defaults()." + change);
     }
 
     /**
      * Section 10 values (k_n 3, k_theta 4, k_p 3, tau_lag 0.05, pos_tol 0.03, ang_tol 2 deg,
-     * t_settle 0.1, startTol 0.5, timeout 1.5 / 1.0, ROTATE); field size from the default
-     * AprilTag layout (loaded once; the placeholder 16.54 x 8.07 m if it cannot be loaded).
+     * t_settle 0.1, startTol 0.5, timeout 1.5 / 1.0, ROTATE, field 16.54 x 8.07 m).
      *
      * @return the defaults
      */
     public static PathFollowerConfig defaults() {
         return new PathFollowerConfig(DEFAULT_KN, DEFAULT_KTHETA, DEFAULT_KP, DEFAULT_TAU_LAG, DEFAULT_POS_TOL,
                 DEFAULT_ANG_TOL, DEFAULT_SETTLE, DEFAULT_START_TOL, DEFAULT_TIMEOUT_FACTOR, DEFAULT_TIMEOUT_MARGIN,
-                FlipMode.ROTATE, DefaultField.LENGTH, DefaultField.WIDTH);
-    }
-
-    /** Field size of {@code AprilTagFieldLayout.loadField(kDefaultField)}, read once (as RobotPose.java:94). */
-    private static final class DefaultField {
-        static final double LENGTH;
-        static final double WIDTH;
-
-        static {
-            double length = FALLBACK_FIELD_LENGTH;
-            double width = FALLBACK_FIELD_WIDTH;
-            try {
-                AprilTagFieldLayout layout = AprilTagFieldLayout.loadField(AprilTagFields.kDefaultField);
-                if (layout.getFieldLength() > 0.0 && layout.getFieldWidth() > 0.0) {
-                    length = layout.getFieldLength();
-                    width = layout.getFieldWidth();
-                }
-            } catch (RuntimeException e) {
-                // keep the placeholder pair (section 10)
-            }
-            LENGTH = length;
-            WIDTH = width;
-        }
-
-        private DefaultField() {
-        }
+                FlipMode.ROTATE, FIELD_LENGTH, FIELD_WIDTH);
     }
 
     /** @return a copy with kN changed */

@@ -1,12 +1,8 @@
 package frc.robot.Path;
 
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.OptionalDouble;
 import java.util.function.Consumer;
 import java.util.function.DoubleSupplier;
 import java.util.function.Supplier;
@@ -14,7 +10,7 @@ import java.util.function.Supplier;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Translation2d;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
-import edu.wpi.first.wpilibj.Alert.AlertType;
+import edu.wpi.first.util.sendable.SendableBuilder;
 import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.DriverStation.Alliance;
 import edu.wpi.first.wpilibj.Timer;
@@ -22,41 +18,149 @@ import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.FunctionalCommand;
 import edu.wpi.first.wpilibj2.command.Subsystem;
 import frc.robot.Kinematics.KinematicsConfig;
+import frc.robot.Path.PathGeometry.PathSample;
 
 /**
- * Drives a {@link Path} (design doc section 9.10). A command, not a value: the {@code withX}
+ * Drives a {@link Path} (design doc sections 8, 9.10). A command, not a value: the {@code withX}
  * methods configure this object before it is scheduled and return it.
  *
  * <p>Each loop it sends one field-relative {@link ChassisSpeeds} (blue frame, omega CCW) to the
  * output; it never negates omega, never discretizes and never limits translation (8.11). On a
- * failure it ends and sends zero speeds once (8.7.4).
+ * failure it ends, sends zero speeds once and prints the reason to the Driver Station (8.7.4).
+ *
+ * <p>To act part way along the path, use {@link #progress()} in a trigger, for example
+ * {@code new Trigger(() -> follow.progress() > 0.7).onTrue(intake.runCommand())}. The command is
+ * also a {@code Sendable}: {@code SmartDashboard.putData("Path", follow)} (or any logger that takes
+ * a Sendable) shows state, segment, s, eN, vRef, vMeas and eThetaDeg.
  */
 public class FollowPathCommand extends Command {
 
+    /** Why the command ended (9.10). */
+    public enum Result {
+        /** Still running (or not started). */
+        RUNNING,
+        /** Position and angle in tolerance for t_settle. */
+        OK,
+        /** t_timeout passed; zero speed sent once. */
+        FAILED_TIMEOUT,
+        /** More than startTol from P0 at start. */
+        FAILED_START_TOO_FAR,
+        /** Pose NaN or infinite for more than 1 s (or at the start). */
+        FAILED_POSE,
+        /** Cancelled by the scheduler or the driver. */
+        INTERRUPTED;
+
+        /** @return true if this is {@link #OK} */
+        public boolean isSuccess() {
+            return this == OK;
+        }
+
+        /** @return true for the FAILED_* results */
+        public boolean isFailure() {
+            return this == FAILED_TIMEOUT || this == FAILED_START_TOO_FAR || this == FAILED_POSE;
+        }
+    }
+
+    /** Follower states (8.14). */
+    enum State { TRACK, CAPTURE_STOP, ROTATE, DWELL, CAPTURE_END, DONE }
+
+    /** Nominal loop period [s] (8.2.2). */
+    static final double DT_NOM = 0.02;
+    /** Loop period clamp [s] (8.2.2). */
+    static final double DT_MIN = 0.005;
+    /** Loop period clamp [s] (8.2.2). */
+    static final double DT_MAX = 0.10;
+    /** Largest hand-over distance d_h [m] (8.3.7); d_h = min(this, jerkMax*DT_NOM/kP^2). */
+    static final double D_H_MAX = 0.05;
+    /** Correction clamp c_max [m/s] (8.3.8). */
+    static final double C_MAX = 1.0;
+    /** Minimum lookahead of the projection window [m] (8.2.3). */
+    static final double AHEAD_MIN = 0.15;
+    /** Window lookahead in loops (8.2.3). */
+    static final int K_AHEAD = 3;
+    /** Maximum lookahead of the projection window [m] (8.2.3). */
+    static final double AHEAD_MAX = 0.50;
+    /** Window look-back eps_back [m] (8.2.4). */
+    static final double EPS_BACK = 0.03;
+    /** Minimum arc window beyond the arc start, {@code max(this, (pi/2) r_j)} [m] (8.2.3). */
+    static final double ARC_WINDOW_MIN = 0.05;
+    /** Stop speed [m/s] (7.10.3, 8.6). */
+    static final double STOP_SPEED = 0.1;
+    /** Stop ROTATE entry and exit angle, 3 deg [rad] (6.7, 8.6). */
+    static final double STOP_ANG_TOL = Math.toRadians(3.0);
+    /** Path shorter than this starts in CAPTURE_END [m] (8.12). */
+    static final double L_SHORT = 0.10;
+    /** An invalid pose repeats the last command for this long, then sends zero [s] (8.12). */
+    static final double T_STALE = 0.10;
+    /** Invalid pose longer than this gives FAILED_POSE [s] (8.12). */
+    static final double POSE_INVALID_LIMIT = 1.0;
+    /** s within this of a goal counts as at the goal (left limits) [m]. */
+    private static final double S_TOL = 1e-9;
+
+    private static final String POSE_REASON = "the robot pose was NaN or infinite for more than 1 s; check"
+            + " that the pose supplier (for example swerve::getPose) returns a real pose and that odometry keeps updating";
+
+    // ---------------------------------------------------------------- configuration
     private final Path path;
     private final Supplier<Pose2d> pose;
     private final Supplier<ChassisSpeeds> measuredFieldSpeeds;
     private final Consumer<ChassisSpeeds> output;
     private final Subsystem[] requirements;
-    private final PathTelemetry telemetry = new PathTelemetry();
-    private final Map<String, AlertType> activeAlerts = new LinkedHashMap<>();
-
     private KinematicsConfig kinematics;
     private PathsConfig pathsConfig;
-    private PathFollowerConfig config; // null: PathFollowerConfig.defaults(), resolved in initialize
-    private Consumer<FollowResult> onFinish;
+    private PathFollowerConfig userConfig; // null: PathFollowerConfig.defaults(), resolved in initialize
+    private Consumer<Result> onFinish;
     private DoubleSupplier clock = Timer::getFPGATimestamp;
 
-    private PathFollowerConfig runConfig;
-    private boolean published;
-    private Tracker tracker;
-    private Path active;
-    private FollowResult result = FollowResult.RUNNING;
+    // ---------------------------------------------------------------- run
+    private PathFollowerConfig config;
+    private PathConstraints constraints;
+    private PathGeometry table;
+    private SpeedProfile profile;          // null until a run got past the start checks
+    private SpeedProfile.Heading heading;
+    private double length;
+    private double dH;
+    private double vH;
+    private double thetaEnd;
+    private Translation2d pEnd;
+    private double timeout;
+    private State state = State.TRACK;
+    private Result result = Result.RUNNING;
     private String failReason = "";
-    private boolean speedAlertRaised;
+    private boolean speedWarned;
+    private String lastWarning = "";
+
+    // progress
+    private double sStar;
+    private double sHi;
+    private double sPrev;
+    private double sSubStart;
+    private double sGoal;
+    private double sStop = Double.NaN;
+
+    // control state
+    private SpeedProfile.State lawState = new SpeedProfile.State(0.0, 0.0);
+    private double vtPrev;
+    private double vLimPrev;
+    private double omegaPrev;
+
+    // timers [s]
+    private double tStart;
+    private double tPrev = Double.NaN;
+    private double tIn;
+    private double tFin = Double.NaN;
+    private double tDwellStart = Double.NaN;
+    private double invalidSince = Double.NaN;
+    private ChassisSpeeds lastCommand = new ChassisSpeeds();
+
+    // per-loop values (telemetry, tests)
+    private double eN;
+    private double dGo;
+    private double eTheta;
+    private double vMeasAbs;
 
     /**
-     * @param path                the path (blue frame)
+     * @param path                the path (blue frame); flipped at start on the red alliance
      * @param pose                blue-origin field pose
      * @param measuredFieldSpeeds field-relative measured speeds, omega CCW
      * @param output              receives the field-relative command, omega CCW
@@ -82,17 +186,16 @@ public class FollowPathCommand extends Command {
         }
         this.requirements = requirements.clone();
         addRequirements(this.requirements);
-        EventSchedule.checkRequirements(path.events(), getRequirements());
         setName("FollowPath(" + path.name() + ")");
     }
 
-    /** @return this; motor curve, wheel cap, limit warning C2 */
+    /** @return this; the robot limits used when the path has no constraints of its own */
     public FollowPathCommand withKinematics(KinematicsConfig config) {
         this.kinematics = Objects.requireNonNull(config, Point.nullMessage("withKinematics", "the config", "your KinematicsConfig (for example new KinematicsConfig())"));
         return this;
     }
 
-    /** @return this; R_mod for the wheel-speed cap (moduleRadius 0 = unknown) */
+    /** @return this; omega, alpha and jerk limits used when the path has no constraints of its own */
     public FollowPathCommand withPathsConfig(PathsConfig config) {
         this.pathsConfig = Objects.requireNonNull(config, Point.nullMessage("withPathsConfig", "the config", "a PathsConfig (for example PathsConfig.defaults())"));
         return this;
@@ -100,13 +203,13 @@ public class FollowPathCommand extends Command {
 
     /** @return this; gains, tolerances, timeout, flip (default {@code PathFollowerConfig.defaults()}) */
     public FollowPathCommand withConfig(PathFollowerConfig config) {
-        this.config = Objects.requireNonNull(config, Point.nullMessage("withConfig", "the config", "a PathFollowerConfig (for example PathFollowerConfig.defaults())"));
+        this.userConfig = Objects.requireNonNull(config, Point.nullMessage("withConfig", "the config", "a PathFollowerConfig (for example PathFollowerConfig.defaults())"));
         return this;
     }
 
     /** @return this; called once with the result when the command ends */
-    public FollowPathCommand withOnFinish(Consumer<FollowResult> callback) {
-        this.onFinish = Objects.requireNonNull(callback, Point.nullMessage("withOnFinish", "the callback", "a callback that takes the FollowResult (for example result -> System.out.println(result))"));
+    public FollowPathCommand withOnFinish(Consumer<Result> callback) {
+        this.onFinish = Objects.requireNonNull(callback, Point.nullMessage("withOnFinish", "the callback", "a callback that takes the Result (for example result -> System.out.println(result))"));
         return this;
     }
 
@@ -117,97 +220,120 @@ public class FollowPathCommand extends Command {
         return this;
     }
 
+    // ================================================================ command
+
     /**
-     * Starts a run (8.14): reads the alliance once and picks the active path, checks the start,
-     * builds the heading and speed profiles. Unlike a run in progress, which allows an invalid pose for
-     * up to 1 s, a single invalid pose here ends the command at once with FAILED_POSE (8.14).
+     * Starts a run (8.14): reads the alliance once and flips the path on red, checks the start,
+     * builds the heading and speed profiles. A single invalid pose here ends the command at once
+     * with FAILED_POSE.
      */
     @Override
     public void initialize() {
-        for (Map.Entry<String, AlertType> e : activeAlerts.entrySet()) {
-            PathWarnings.runtimeAlert(e.getKey(), e.getValue(), false); // A1 to A3 cleared at the next initialize
-        }
-        activeAlerts.clear();
-        if (!published) {
-            PathLogger.get().putData("Path/" + path.name(), telemetry);
-            published = true;
-        }
-        tracker = null;
-        result = FollowResult.RUNNING;
-        failReason = "";
-        speedAlertRaised = false;
         double now = clock.getAsDouble();
-        PathFollowerConfig config = runConfig = this.config != null ? this.config : PathFollowerConfig.defaults();
+        profile = null;
+        result = Result.RUNNING;
+        failReason = "";
+        speedWarned = false;
+        state = State.TRACK;
+        sStar = 0.0;
+        config = userConfig != null ? userConfig : PathFollowerConfig.defaults();
 
         Optional<Alliance> alliance = DriverStation.getAlliance(); // read once (8.10)
         if (alliance.isEmpty()) {
-            raise(prefix() + "alliance unknown; driving the blue path. For a red run, connect the Driver Station"
-                    + " (or set the alliance in the simulator) before the command starts.", AlertType.kWarning);
+            warn(prefix() + "alliance unknown; driving the blue path. For a red run, connect the Driver Station"
+                    + " (or set the alliance in the simulator) before the command starts.");
         }
-        active = alliance.isPresent() && alliance.get() == Alliance.Red ? path.flipped(config) : path;
+        Path active = alliance.isPresent() && alliance.get() == Alliance.Red ? path.flipped(config) : path;
+        table = active.geometry();
+        length = table.length();
 
         Pose2d p = pose.get();
-        ChassisSpeeds vm = measuredFieldSpeeds.get();
-        if (!Tracker.poseValid(p)) {
-            fail(FollowResult.FAILED_POSE, POSE_REASON);
+        ChassisSpeeds vm = speedsOrZero(measuredFieldSpeeds.get());
+        if (!poseValid(p)) {
+            fail(Result.FAILED_POSE, POSE_REASON);
             return;
         }
-        checkSpeed(vm);
         Translation2d p0 = active.startPoint();
         double d0 = p.getTranslation().getDistance(p0);
         if (d0 > config.startTol()) {
-            fail(FollowResult.FAILED_START_TOO_FAR, String.format(Locale.US,
+            fail(Result.FAILED_START_TOO_FAR, String.format(Locale.US,
                     "the robot is %.2f m from the start point (%.2f, %.2f) and must start within %.2f m (startTol);"
                             + " put the robot on the start point, check setStartPose and the alliance flip, or raise the"
                             + " tolerance, for example PathFollowerConfig.defaults().withStartTol(1.0)", d0, p0.getX(), p0.getY(), config.startTol()));
             return;
         }
 
-        PathConstraints constraints = resolveConstraints();
-        HeadingProfile heading = HeadingProfile.build(active, p.getRotation().getRadians());
-        double v0 = Tracker.startSpeed(active, vm);
-        double moduleRadius = pathsConfig != null ? pathsConfig.moduleRadius() : 0.0;
-        SpeedProfile profile = SpeedProfile.build(active, heading, constraints, kinematics, moduleRadius, v0,
-                config.kP(), config.posTol());
-        if (profile.profileGuardHit()) {
-            PathWarnings.startWarning(prefix() + "the speed plan did not reach the end of the path, so the timeout uses a"
-                    + " safe default time (an internal error, please report it with the path points).");
+        PathsConfig paths = pathsConfig != null ? pathsConfig : PathsConfig.defaults();
+        constraints = active.constraints().orElseGet(() ->
+                PathConstraints.fromConfig(kinematics != null ? kinematics : new KinematicsConfig(), paths));
+        heading = SpeedProfile.Heading.build(active, p.getRotation().getRadians());
+        double v0 = alongT0(vm);
+        profile = SpeedProfile.build(active, heading, constraints, v0, config.kP(), config.posTol());
+        dH = profile.handOver();
+        vH = config.kP() * dH;
+        thetaEnd = heading.endHeading();
+        pEnd = table.evaluate(length).position();
+        timeout = config.timeoutFactor() * profile.profileTime() + config.timeoutMargin();
+
+        // reset the run (8.14): s = 0, (v_cmd, a_cmd) = (v0, 0)
+        tStart = now;
+        tPrev = Double.NaN;
+        sHi = 0.0;
+        sPrev = 0.0;
+        sSubStart = 0.0;
+        sStop = Double.NaN;
+        sGoal = profile.nextStopS(0.0);
+        lawState = new SpeedProfile.State(v0, 0.0);
+        vtPrev = v0;
+        vLimPrev = v0;
+        omegaPrev = vm.omegaRadiansPerSecond;
+        tIn = 0.0;
+        tFin = Double.NaN;
+        tDwellStart = Double.NaN;
+        invalidSince = Double.NaN;
+        lastCommand = new ChassisSpeeds();
+        state = length < L_SHORT ? State.CAPTURE_END : State.TRACK;
+        if (profile.dwellAt(0.0) > 0.0) { // stop(d) on P_0: hold P_0 for d before the start (8.6)
+            sStop = 0.0;
+            tDwellStart = now;
+            state = State.DWELL;
         }
-        SpeedLaw law = new SpeedLaw(profile);
-        EventSchedule schedule = new EventSchedule(active.events(), active.table().stopS());
-        tracker = new Tracker(active, profile, heading, law, schedule, config, constraints);
-        tracker.start(p, vm, now);
-        telemetry.setState(tracker.state().name());
+        eN = 0.0;
+        dGo = sGoal;
+        eTheta = 0.0;
+        vMeasAbs = Math.hypot(vm.vxMetersPerSecond, vm.vyMetersPerSecond);
     }
 
     @Override
     public void execute() {
-        if (tracker == null) {
+        if (profile == null || result != Result.RUNNING) {
             return;
         }
-        double now = clock.getAsDouble();
-        Pose2d p = pose.get();
-        ChassisSpeeds vm = measuredFieldSpeeds.get();
-        checkSpeed(vm);
-        ChassisSpeeds cmd = tracker.update(p, vm, now);
-        output.accept(cmd);
-        FollowResult r = tracker.result();
-        String state = r.isFailure() ? r.name() : tracker.state().name();
-        telemetry.update(state, tracker.segment(), tracker.s(), tracker.eN(), tracker.vRef(),
-                Tracker.speedValid(vm) ? Math.hypot(vm.vxMetersPerSecond, vm.vyMetersPerSecond) : Double.NaN,
-                tracker.eThetaDeg());
+        output.accept(update(pose.get(), measuredFieldSpeeds.get(), clock.getAsDouble()));
     }
 
+    /** The finish and timeout test (8.7.2, 8.7.3). */
     @Override
     public boolean isFinished() {
-        if (result != FollowResult.RUNNING) {
+        if (result != Result.RUNNING) {
             return true;
         }
-        if (tracker == null) {
+        if (profile == null) {
             return false;
         }
-        if (tracker.isFinished(clock.getAsDouble())) {
-            result = tracker.result();
+        double now = clock.getAsDouble();
+        if (now - tStart >= timeout) {
+            result = Result.FAILED_TIMEOUT;
+            failReason = String.format(Locale.US, "did not finish within %.2f s (%s x the planned time + %s s); the"
+                    + " robot was blocked, or the limits are above what the drivetrain can do; free the robot, or lower"
+                    + " the limits, for example constraints.withVMax(2.0)", timeout,
+                    trim(config.timeoutFactor()), trim(config.timeoutMargin()));
+            return true;
+        }
+        if (state == State.CAPTURE_END && !Double.isNaN(tFin) && now - tFin >= profile.dwellAt(length)) {
+            result = Result.OK;
+            state = State.DONE;
+            sStar = length;
             return true;
         }
         return false;
@@ -216,32 +342,30 @@ public class FollowPathCommand extends Command {
     @Override
     public void end(boolean interrupted) {
         output.accept(new ChassisSpeeds()); // zero once (8.7.4)
-        if (result == FollowResult.RUNNING && tracker != null) {
-            result = tracker.result();
-        }
-        if (interrupted && result == FollowResult.RUNNING) {
-            result = FollowResult.INTERRUPTED;
-        }
-        if (result == FollowResult.FAILED_TIMEOUT) {
-            failReason = String.format(Locale.US, "did not finish within %.2f s (%s x the planned time + %s s); the"
-                    + " robot was blocked, or the limits are above what the drivetrain can do; free the robot, or lower"
-                    + " the limits, for example constraints.withVMax(2.0)", tracker.timeout(),
-                    trim(runConfig.timeoutFactor()), trim(runConfig.timeoutMargin()));
-        } else if (result == FollowResult.FAILED_POSE && failReason.isEmpty()) {
-            failReason = POSE_REASON;
+        if (interrupted && result == Result.RUNNING) {
+            result = Result.INTERRUPTED;
         }
         if (result.isFailure()) {
-            raise(prefix() + result.name() + ": " + failReason + ".", AlertType.kError);
+            warn(prefix() + result.name() + ": " + failReason + ".");
         }
-        telemetry.setState(result == FollowResult.OK ? Tracker.State.DONE.name() : result.name());
         if (onFinish != null) {
             onFinish.accept(result);
         }
     }
 
     /** @return why the command ended, RUNNING until then */
-    public FollowResult getResult() {
+    public Result getResult() {
         return result;
+    }
+
+    /** @return progress along the path, s* / L, from 0 at the start to 1 at the finish */
+    public double progress() {
+        return profile == null ? 0.0 : Math.max(0.0, Math.min(1.0, sStar / length));
+    }
+
+    /** @return distance along the path s* [m] (the closest path point to the robot) */
+    public double distanceTraveled() {
+        return sStar;
     }
 
     /**
@@ -254,107 +378,342 @@ public class FollowPathCommand extends Command {
     public Command holdEndCommand() {
         return new FunctionalCommand(
                 () -> {
-                    if (tracker != null) {
-                        tracker.startHold(measuredFieldSpeeds.get());
-                    }
+                    ChassisSpeeds vm = speedsOrZero(measuredFieldSpeeds.get());
+                    vLimPrev = Math.hypot(vm.vxMetersPerSecond, vm.vyMetersPerSecond);
+                    omegaPrev = vm.omegaRadiansPerSecond;
+                    tPrev = Double.NaN;
                 },
-                () -> output.accept(tracker != null
-                        ? tracker.holdEnd(pose.get(), measuredFieldSpeeds.get(), clock.getAsDouble())
-                        : new ChassisSpeeds()),
+                () -> output.accept(profile != null ? holdEnd(pose.get(), clock.getAsDouble()) : new ChassisSpeeds()),
                 interrupted -> output.accept(new ChassisSpeeds()),
                 () -> false,
                 requirements);
     }
 
-    /** Internal (tests): the tracker of the current run, or null before initialize or after a start failure. */
-    Tracker tracker() {
-        return tracker;
+    /** Adds the read-only keys state, segment, s, eN, vRef, vMeas, eThetaDeg (8.13) to the Command keys. */
+    @Override
+    public void initSendable(SendableBuilder builder) {
+        super.initSendable(builder);
+        builder.addStringProperty("state", () -> result.isFailure() || result == Result.INTERRUPTED ? result.name()
+                : state.name(), null);
+        builder.addIntegerProperty("segment", () -> table == null ? 0 : table.segmentIndexAt(sStar), null);
+        builder.addDoubleProperty("s", () -> sStar, null);
+        builder.addDoubleProperty("eN", () -> eN, null);
+        builder.addDoubleProperty("vRef", () -> vtPrev, null);
+        builder.addDoubleProperty("vMeas", () -> vMeasAbs, null);
+        builder.addDoubleProperty("eThetaDeg", () -> Math.toDegrees(eTheta), null);
     }
 
-    /** Internal (tests): the telemetry Sendable. */
-    PathTelemetry telemetry() {
-        return telemetry;
+    // ================================================================ tracker (8.2 to 8.7)
+
+    /**
+     * One loop (8.14): projection, state transitions, translation and heading laws.
+     *
+     * @param pose     measured pose, blue-origin
+     * @param measured measured field speeds; NaN or infinite counts as 0
+     * @param nowSec   time [s]
+     * @return the field-relative command, omega CCW
+     */
+    private ChassisSpeeds update(Pose2d pose, ChassisSpeeds measured, double nowSec) {
+        double dt = Double.isNaN(tPrev) ? DT_NOM : clamp(nowSec - tPrev, DT_MIN, DT_MAX);
+        tPrev = nowSec;
+        if (state == State.DONE) {
+            return new ChassisSpeeds();
+        }
+        ChassisSpeeds vm = speedsOrZero(measured);
+        vMeasAbs = Math.hypot(vm.vxMetersPerSecond, vm.vyMetersPerSecond);
+
+        // 8.12: invalid pose: repeat the last command briefly, then zero, then FAILED_POSE
+        if (!poseValid(pose)) {
+            if (Double.isNaN(invalidSince)) {
+                invalidSince = nowSec;
+            }
+            double bad = nowSec - invalidSince;
+            if (bad > POSE_INVALID_LIMIT) {
+                fail(Result.FAILED_POSE, POSE_REASON);
+                return new ChassisSpeeds();
+            }
+            return bad < T_STALE ? lastCommand : new ChassisSpeeds();
+        }
+        invalidSince = Double.NaN;
+        Translation2d p = pose.getTranslation();
+        double theta = pose.getRotation().getRadians();
+
+        // 8.2.3, 8.2.4: windowed projection (ROTATE and DWELL hold s* = s_c)
+        if (state == State.TRACK || state == State.CAPTURE_STOP || state == State.CAPTURE_END) {
+            double ahead = clamp(K_AHEAD * Math.max(vtPrev, vMeasAbs) * dt, AHEAD_MIN, AHEAD_MAX);
+            double sMin = Math.max(sSubStart, sHi - EPS_BACK);
+            double sMax = Math.max(sMin, windowMax(ahead));
+            sStar = table.project(p, sMin, sMax, sPrev).s();
+            sHi = Math.max(sHi, sStar);
+            sPrev = sStar;
+        }
+        geometry(p);
+
+        // 8.6, 8.7: state machine; ROTATE and DWELL are tested in the loop they are entered, so a zero dwell costs no loop
+        switch (state) {
+            case TRACK:
+                if (dGo <= dH || (lawState.v() == 0.0 && dGo <= dH + 2.0 * SpeedProfile.STOP_DIST_MARGIN)) {
+                    vLimPrev = vtPrev;
+                    tIn = 0.0;
+                    state = sGoal >= length - S_TOL ? State.CAPTURE_END : State.CAPTURE_STOP;
+                }
+                break;
+            case CAPTURE_STOP:
+                if (Math.abs(dGo) <= config.posTol() && vMeasAbs <= STOP_SPEED) {
+                    sStop = sGoal;
+                    sStar = sStop;
+                    sHi = sStop;
+                    sPrev = sStop;
+                    sSubStart = sStop;
+                    sGoal = profile.nextStopS(sStop);
+                    if (Math.abs(PathGeometry.wrap(heading.theta(sStop) - theta)) > STOP_ANG_TOL) {
+                        state = State.ROTATE;
+                    } else {
+                        tDwellStart = nowSec;
+                        state = State.DWELL;
+                    }
+                    geometry(p);
+                }
+                break;
+            case CAPTURE_END: {
+                boolean inTol = p.getDistance(pEnd) < config.posTol()
+                        && Math.abs(PathGeometry.wrap(thetaEnd - theta)) < config.angTolRad();
+                tIn = inTol ? tIn + dt : 0.0;
+                if (tIn >= config.tSettle() && Double.isNaN(tFin)) {
+                    tFin = nowSec;
+                }
+                break;
+            }
+            default:
+                break;
+        }
+        if (state == State.ROTATE && Math.abs(PathGeometry.wrap(heading.theta(sStop) - theta)) <= STOP_ANG_TOL) {
+            tDwellStart = nowSec;
+            state = State.DWELL;
+        }
+        if (state == State.DWELL && nowSec - tDwellStart >= profile.dwellAt(sStop)) {
+            PathSample out = table.evaluate(sStop);
+            double v = Math.max(0.0, vm.vxMetersPerSecond * out.tangent().getCos()
+                    + vm.vyMetersPerSecond * out.tangent().getSin());
+            lawState = new SpeedProfile.State(v, 0.0);
+            vtPrev = v;
+            state = length < L_SHORT ? State.CAPTURE_END : State.TRACK;
+            geometry(p);
+        }
+
+        // 8.3, 8.4: translation
+        double vx;
+        double vy;
+        double vt;
+        if (state == State.TRACK) {
+            PathSample at = sample(sStar);
+            double lead = sStar + vtPrev * config.tauLag();
+            double sV = Math.min(lead, sGoal - dH);
+            double c = clamp(-config.kN() * eN, -C_MAX, C_MAX);
+            double budget = Math.sqrt(Math.max(0.0, constraints.vMax() * constraints.vMax() - c * c));
+            lawState = profile.step(lawState, sV, sGoal, Math.min(profile.capAt(sV), budget), dt);
+            if (lawState.v() > budget) { // 8.3.9: a jump of c cuts v_t at once and resets the law
+                lawState = new SpeedProfile.State(budget, Math.min(lawState.a(), 0.0));
+            }
+            vt = lawState.v();
+            PathSample look = sample(Math.min(lead, sGoal));
+            vx = vt * look.tangent().getCos() - c * at.tangent().getSin();
+            vy = vt * look.tangent().getSin() + c * at.tangent().getCos();
+        } else {
+            Translation2d goal = switch (state) {
+                case CAPTURE_STOP -> table.evaluateLeft(sGoal).position();
+                case ROTATE, DWELL -> table.evaluateLeft(sStop).position();
+                default -> pEnd;
+            };
+            double[] v = captureLaw(p, goal, dt);
+            vx = v[0];
+            vy = v[1];
+            vt = Math.hypot(vx, vy);
+        }
+        vtPrev = vt;
+
+        // 8.5: heading
+        double ref = switch (state) {
+            case TRACK -> heading.theta(sStar);
+            case CAPTURE_STOP -> heading.theta(sGoal);
+            case ROTATE, DWELL -> heading.theta(sStop);
+            default -> thetaEnd;
+        };
+        double ff = state == State.TRACK ? heading.dTheta(sStar) * vt : 0.0;
+        lastCommand = new ChassisSpeeds(vx, vy, headingLaw(ref, ff, theta, dt));
+        return lastCommand;
     }
 
-    // ---------------------------------------------------------------- helpers
+    /** @return sMax of the window before the floor (8.2.3) */
+    private double windowMax(double ahead) {
+        double sMax = Math.min(sPrev + ahead, sGoal);
+        int kCur = table.segmentIndexAt(sPrev);
+        int kNext = kCur;
+        for (int k = kCur + 1; k < table.size(); k++) {
+            if (table.segment(k).length() > 0.0) {
+                kNext = k;
+                break;
+            }
+        }
+        sMax = Math.min(sMax, table.segment(kNext).sEnd());
+        for (int k = kCur; k < table.size(); k++) {
+            PathGeometry.Segment seg = table.segment(k);
+            if (seg.sStart() > sMax) {
+                break;
+            }
+            if (seg.type() == PathGeometry.Segment.Type.ARC && seg.sEnd() >= sPrev) {
+                sMax = Math.min(sMax, Math.max(seg.sStart(), sPrev) + Math.max(ARC_WINDOW_MIN, 0.5 * Math.PI * seg.r()));
+            }
+        }
+        return sMax;
+    }
 
-    private static final String POSE_REASON = "the robot pose was NaN, infinite or frozen for more than 1 s; check"
-            + " that the pose supplier (for example swerve::getPose) returns a real pose and that odometry keeps updating";
+    /** @return the sample at s; the left limit (leg arrived on) at the current goal (8.1) */
+    private PathSample sample(double s) {
+        return s >= sGoal - S_TOL ? table.evaluateLeft(s) : table.evaluate(s);
+    }
+
+    /** Updates e_n and d_go at s* (8.2.3, 8.3.7). */
+    private void geometry(Translation2d p) {
+        PathSample at = sample(sStar);
+        double tx = at.tangent().getCos();
+        double ty = at.tangent().getSin();
+        double dx = p.getX() - at.position().getX();
+        double dy = p.getY() - at.position().getY();
+        eN = -dx * ty + dy * tx;
+        if (state == State.TRACK) {
+            dGo = (sGoal - sStar) - (dx * tx + dy * ty);
+        } else {
+            // the 2D states: d_go = (P_goal - p) . T_in (8.6), equal to the formula above on the last line
+            PathSample g = table.evaluateLeft(sGoal);
+            dGo = (g.position().getX() - p.getX()) * g.tangent().getCos()
+                    + (g.position().getY() - p.getY()) * g.tangent().getSin();
+        }
+    }
+
+    /** The 2D goal law of CAPTURE (8.3.7e); updates v_lim_prev. @return {vx, vy} */
+    private double[] captureLaw(Translation2d p, Translation2d goal, double dt) {
+        double dx = goal.getX() - p.getX();
+        double dy = goal.getY() - p.getY();
+        double vRaw = config.kP() * Math.hypot(dx, dy);
+        double aAccEff = profile.accelLimit(Math.min(sStar, length));
+        if (!(aAccEff > 0.0)) {
+            aAccEff = constraints.aAcc();
+        }
+        double vLim = Math.min(Math.min(sqrtLaw(Math.hypot(dx, dy), constraints.aDec(), config.kP()), vH),
+                vLimPrev + aAccEff * dt);
+        double scale = vRaw > vLim && vRaw > 0.0 ? vLim / vRaw : 1.0;
+        double vx = config.kP() * dx * scale;
+        double vy = config.kP() * dy * scale;
+        vLimPrev = Math.hypot(vx, vy);
+        return new double[] {vx, vy};
+    }
+
+    /** Feedback, clamps and rate limit of 8.5.2; sets eTheta and omega_prev. @return omega [rad/s] */
+    private double headingLaw(double ref, double ff, double theta, double dt) {
+        eTheta = PathGeometry.wrap(ref - theta);
+        double fb = sqrtLaw(eTheta, constraints.alphaMax(), config.kTheta());
+        double raw = clamp(ff + fb, -constraints.omegaMax(), constraints.omegaMax());
+        double band = constraints.alphaMax() * dt;
+        omegaPrev = clamp(raw, omegaPrev - band, omegaPrev + band);
+        return omegaPrev;
+    }
+
+    /** The CAPTURE_END law on P_end with heading theta_end, used by holdEndCommand (8.7.4); invalid pose gives 0. */
+    private ChassisSpeeds holdEnd(Pose2d pose, double nowSec) {
+        double dt = Double.isNaN(tPrev) ? DT_NOM : clamp(nowSec - tPrev, DT_MIN, DT_MAX);
+        tPrev = nowSec;
+        if (!poseValid(pose)) {
+            return new ChassisSpeeds();
+        }
+        double[] v = captureLaw(pose.getTranslation(), pEnd, dt);
+        return new ChassisSpeeds(v[0], v[1], headingLaw(thetaEnd, 0.0, pose.getRotation().getRadians(), dt));
+    }
+
+    /**
+     * The sqrt goal law vsqrt(d; a, k) of 8.3.7: linear {@code k d} for abs(d) &lt;= a/k^2, else
+     * {@code sqrt(2 a (abs(d) - a/(2 k^2)))}, with the sign of d.
+     */
+    static double sqrtLaw(double d, double a, double k) {
+        double ad = Math.abs(d);
+        double v = ad <= a / (k * k) ? k * ad : Math.sqrt(2.0 * a * (ad - a / (2.0 * k * k)));
+        return Math.signum(d) * v;
+    }
+
+    // ================================================================ helpers
+
+    /** @return v0 = max(0, V_meas . T(0)) (7.6.4) */
+    private double alongT0(ChassisSpeeds vm) {
+        PathSample s0 = table.evaluate(0.0);
+        return Math.max(0.0, vm.vxMetersPerSecond * s0.tangent().getCos() + vm.vyMetersPerSecond * s0.tangent().getSin());
+    }
+
+    /** @return the speeds, or zero (with a warning once per run) if null, NaN or infinite (8.12) */
+    private ChassisSpeeds speedsOrZero(ChassisSpeeds v) {
+        if (v != null && Double.isFinite(v.vxMetersPerSecond) && Double.isFinite(v.vyMetersPerSecond)
+                && Double.isFinite(v.omegaRadiansPerSecond)) {
+            return v;
+        }
+        if (!speedWarned) {
+            speedWarned = true;
+            warn(prefix() + "the measured speed is NaN or infinite; check the speed supplier you passed to"
+                    + " FollowPathCommand (for example swerve::getFieldSpeeds) and that the gyro and encoders are connected.");
+        }
+        return new ChassisSpeeds();
+    }
+
+    /** @return true if the pose is not null and x, y and theta are finite */
+    private static boolean poseValid(Pose2d pose) {
+        return pose != null && Double.isFinite(pose.getX()) && Double.isFinite(pose.getY())
+                && Double.isFinite(pose.getRotation().getRadians());
+    }
 
     private String prefix() {
         return "Path \"" + path.name() + "\": ";
     }
 
-    private void fail(FollowResult r, String reason) {
+    private void fail(Result r, String reason) {
         result = r;
         failReason = reason;
-        telemetry.setState(r.name());
     }
 
-    private void raise(String text, AlertType type) {
-        PathWarnings.runtimeAlert(text, type, true);
-        activeAlerts.put(text, type);
+    private void warn(String text) {
+        lastWarning = text;
+        DriverStation.reportWarning(text, false);
     }
 
-    /** Raises A3 once per run if the measured speed is not a number (8.12). */
-    private void checkSpeed(ChassisSpeeds vm) {
-        if (!speedAlertRaised && !Tracker.speedValid(vm)) {
-            speedAlertRaised = true;
-            raise(prefix() + "the measured speed is NaN or infinite; check the speed supplier you passed to"
-                    + " FollowPathCommand (for example swerve::getFieldSpeeds) and that the gyro and encoders are connected.", AlertType.kWarning);
-        }
-    }
-
-    /** Constraints rule of 9.10, with warnings C1 and C2 (9.12.3). */
-    private PathConstraints resolveConstraints() {
-        PathsConfig paths = pathsConfig != null ? pathsConfig : PathsConfig.defaults();
-        PathConstraints c;
-        if (active.constraints().isPresent()) {
-            c = active.constraints().get();
-        } else if (kinematics != null) {
-            c = PathConstraints.fromConfig(kinematics, paths);
-        } else {
-            PathWarnings.startWarning(prefix() + "no PathConstraints and no KinematicsConfig: using the defaults of a"
-                    + " new KinematicsConfig() (placeholders), so the limits may not match your robot. Call"
-                    + " path.withConstraints(PathConstraints.fromConfig(yourConfig)) or command.withKinematics(yourConfig).");
-            c = PathConstraints.fromConfig(new KinematicsConfig());
-        }
-        String clip = "the limiter will clip it and the robot will fall behind the profile";
-        String cfg = "the value from the KinematicsConfig";
-        if (kinematics != null) {
-            PathConstraints derived = PathConstraints.fromConfig(kinematics, paths);
-            warnAbove("vMax", c.vMax(), cfg, derived.vMax(), "m/s", clip, "constraints.withVMax(");
-            warnAbove("aAcc", c.aAcc(), cfg, derived.aAcc(), "m/s^2", clip, "constraints.withAAcc(");
-            warnAbove("aDec", c.aDec(), cfg, derived.aDec(), "m/s^2", clip, "constraints.withADec(");
-            warnAbove("aLat", c.aLat(), cfg, derived.aLat(), "m/s^2", clip, "constraints.withALat(");
-            warnAbove("vMax", c.vMax(), "maxAllowedModuleVelocity", kinematics.maxAllowedModuleVelocity, "m/s", clip,
-                    "constraints.withVMax(");
-        }
-        List<Point> points = active.points();
-        for (int i = 0; i < points.size(); i++) {
-            OptionalDouble mv = points.get(i).maxVelocity();
-            if (mv.isPresent()) {
-                warnAbove("point " + i + " withVelocity", mv.getAsDouble(), "vMax", c.vMax(), "m/s", "it has no effect",
-                        "withVelocity(");
-            }
-        }
-        warnAbove("jerkMax", c.jerkMax(), "max(aAcc, aDec)/(5 dt)",
-                PathWarnings.jerkWarningThreshold(c.aAcc(), c.aDec(), Tracker.DT_NOM), "m/s^3",
-                "the jerk limit has no effect at 50 Hz, and the robot can enter an arc still braking",
-                "constraints.withJerkMax(");
-        return c;
-    }
-
-    private void warnAbove(String what, double v, String limit, double lim, String unit, String effect,
-                           String setter) {
-        if (v > lim + 1e-9) {
-            PathWarnings.startWarning(prefix() + what + " " + trim(v) + " " + unit + " is above " + limit + " ("
-                    + trim(lim) + " " + unit + "); " + effect + ". Lower it to " + trim(lim) + " " + unit
-                    + " or less, for example " + setter + trim(lim) + ").");
-        }
+    private static double clamp(double x, double lo, double hi) {
+        return Math.max(lo, Math.min(hi, x));
     }
 
     private static String trim(double v) {
         return String.format(Locale.US, "%.3f", v).replaceAll("0+$", "").replaceAll("\\.$", "");
+    }
+
+    // ---------------------------------------------------------------- internal (tests)
+
+    /** @return the current follower state */
+    State state() {
+        return state;
+    }
+
+    /** @return cross-track error e_n [m] */
+    double eN() {
+        return eN;
+    }
+
+    /** @return heading error in degrees */
+    double eThetaDeg() {
+        return Math.toDegrees(eTheta);
+    }
+
+    /** @return t_timeout = factor profileTime + margin [s] (8.7.3) */
+    double timeout() {
+        return timeout;
+    }
+
+    /** @return the text of the last Driver Station warning this command printed */
+    String lastWarning() {
+        return lastWarning;
     }
 }

@@ -21,22 +21,42 @@ public record PathConstraints(double vMax, double aAcc, double aDec, double aLat
     public static final double PROFILE_MARGIN = 0.9;
 
     public PathConstraints {
-        requirePositive("vMax", vMax, "m/s", "withVMax(3.0)");
-        requirePositive("aAcc", aAcc, "m/s^2", "withAAcc(4.0)");
-        requirePositive("aDec", aDec, "m/s^2", "withADec(4.0)");
-        requirePositive("aLat", aLat, "m/s^2", "withALat(4.0)");
-        requirePositive("omegaMax", omegaMax, "rad/s", "withOmegaMax(6.0)");
-        requirePositive("alphaMax", alphaMax, "rad/s^2", "withAlphaMax(12.0)");
-        requirePositive("jerkMax", jerkMax, "m/s^3", "withJerkMax(50.0)");
+        check("vMax", vMax, "m/s", "withVMax(3.0)");
+        check("aAcc", aAcc, "m/s^2", "withAAcc(4.0)");
+        check("aDec", aDec, "m/s^2", "withADec(4.0)");
+        check("aLat", aLat, "m/s^2", "withALat(4.0)");
+        check("omegaMax", omegaMax, "rad/s", "withOmegaMax(6.0)");
+        check("alphaMax", alphaMax, "rad/s^2", "withAlphaMax(12.0)");
+        check("jerkMax", jerkMax, "m/s^3", "withJerkMax(50.0)");
     }
 
-    private static void requirePositive(String name, double value, String unit, String change) {
-        ConfigCheck.requirePositive("PathConstraints", name, value, unit, "PathConstraints.fromConfig(config)",
+    private static void check(String name, double value, String unit, String change) {
+        requirePositive("PathConstraints", name, value, unit, "PathConstraints.fromConfig(config)",
                 "PathConstraints.fromConfig(config)." + change);
     }
 
     /**
-     * Derives the limits from the Kinematics config (section 9.5).
+     * Shared range check of the config records (section 9.12, V16): throws unless value is a finite
+     * number above 0.
+     *
+     * @param record  record name, for example "PathConstraints"
+     * @param field   field name, for example "vMax"
+     * @param value   the value to check
+     * @param unit    its unit, for example "m/s"
+     * @param factory the factory to start from, for example "PathConstraints.fromConfig(config)"
+     * @param example a complete example call, for example "PathConstraints.fromConfig(config).withVMax(3.0)"
+     */
+    static void requirePositive(String record, String field, double value, String unit, String factory,
+                                String example) {
+        if (!Double.isFinite(value) || value <= 0.0) {
+            throw new IllegalArgumentException(record + "." + field + " must be a finite number above 0 (" + unit
+                    + "), but it is " + value + ". Start from " + factory + " and change one value, for example "
+                    + example + ".");
+        }
+    }
+
+    /**
+     * Derives the limits from the Kinematics config at {@link #PROFILE_MARGIN} (section 9.5).
      *
      * @param config robot limits
      * @param paths  the settings Kinematics does not have
@@ -53,7 +73,7 @@ public record PathConstraints(double vMax, double aAcc, double aDec, double aLat
         }
         double tilt = Math.min(config.maxTiltAccelFront, config.maxTiltAccelSide);
         double brake = Math.min(config.maxSkidAccel, tilt);
-        double vMax = PROFILE_MARGIN * Math.min(config.maxAllowedModuleVelocity, config.freeSpeed);
+        double vMax = PROFILE_MARGIN * config.maxAllowedModuleVelocity;
         double aAcc = PROFILE_MARGIN * Math.min(config.maxForwardAccel, brake);
         double aDec = PROFILE_MARGIN * brake;
         return new PathConstraints(vMax, aAcc, aDec, aDec,
