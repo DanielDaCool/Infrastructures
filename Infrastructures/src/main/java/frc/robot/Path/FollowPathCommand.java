@@ -534,10 +534,7 @@ public class FollowPathCommand extends Command {
         double dx = goal.getX() - p.getX();
         double dy = goal.getY() - p.getY();
         double vRaw = config.kP() * Math.hypot(dx, dy);
-        double aAccEff = profile.accelLimit(Math.min(sStar, length));
-        if (!(aAccEff > 0.0)) {
-            aAccEff = constraints.aAcc();
-        }
+        double aAccEff = constraints.aAcc();
         double vLim = Math.min(Math.min(sqrtLaw(Math.hypot(dx, dy), constraints.aDec(), config.kP()), vH),
                 vLimPrev + aAccEff * dt);
         double scale = vRaw > vLim && vRaw > 0.0 ? vLim / vRaw : 1.0;

@@ -1,6 +1,6 @@
 # Path – design and details (for mentors and developers)
 
-**Status: implemented; unit-tested in simulation (JUnit, not committed); not yet run on a robot. Numbers marked (script) were computed with Python re-implementations; in v1 the Java `profileTime` is the closed form of section 7.12 plus the hand-over tail. Line numbers cited for `ExampleSwerveWithPose.java` are from the file before `getFieldSpeeds()` and `follow(Path)` were added.**
+**Status: implemented; unit-tested in simulation (JUnit, not committed); not yet run on a robot. Numbers marked (script) were computed with Python re-implementations; in v1 the Java `profileTime` is a simulation of the per-loop speed law at build plus the hand-over tail (see the v1 scope). Line numbers cited for `ExampleSwerveWithPose.java` are from the file before `getFieldSpeeds()` and `follow(Path)` were added.**
 
 The student guide is [Path.md](Path.md). This page has everything behind it: how a list of points
 becomes a path, how the heading and the speed are chosen along it, how the follow command drives
@@ -37,7 +37,27 @@ no room-to-brake cap vJerk (the plain backward pass already leaves the braking r
 passes (section 7.7) + dwells + the hand-over tail `max(0, ln(d_h/pos_tol)/k_p)` per goal. `PathConstraints` has no `jerkMax` and
 `PathsConfig` has no `maxJerk` (it keeps `maxAngularVelocity` and `maxAngularAccel`). Section 7.13 is kept as v2 reference.
 
-Reference numbers in v1 (EX limits, Java): shared example profileTime 3.2723 + 0.1703 = **3.4426 s**, timeout 6.16 s, simulated run (lag
+**Speed profile simplified to a per-loop limit list** (user decision, 2026-11-03; replaces the span passes, the closed form and an
+interim 2 cm sampled grid). `SpeedProfile` builds a short list of limits `Limit(sStart, sEnd, vCap)`: every arc with `sqrt(aLat·r)`
+(a `withVelocity` on its corner caps the whole arc), every heading piece between anchors with `theta' != 0` with `omegaMax/abs(theta')`,
+and a point limit for a `withVelocity` point that is not on an arc; vMax applies everywhere, and each stop and the end are goals.
+Each loop (like the 2025 `getVelocity`) the law is `v_cmd = min(ceiling(s_v), cap, v_prev + aAcc·dt)`, where `ceiling` is the
+smallest of vMax, every limit containing s_v, `sqrt(vCap^2 + 2·aDec·(sStart - s_v))` of every limit ahead of s_v and before
+s_goal, and the hand-over envelope `sqrt(v_h^2 + 2·aDec·(s_goal - d_h - s_v))`; the braking terms use the discrete form, so one
+loop never brakes harder than aDec. When the command rises, the ceiling is also read at `s_v + tau_lag·dv` (the lead moves that
+much more next loop), which keeps the per-loop braking within aDec at the change from speeding up to braking. Speed-up is aAcc
+everywhere (arcs included), so there is no aAccEff, arc floor, heading-limited acceleration, heading-kink cap or per-span brake
+limit, and the CAPTURE law (8.3.7e) uses aAcc. `profileTime` simulates the same law at build with ideal tracking
+(`dt = 0.02 s`, from the measured start speed, `s += (v_prev + v)/2·dt` to each hand-over point, from rest after each stop), plus
+the start dwell, and per goal the dwell and the tail `max(0, ln(d_h/pos_tol)/k_p)`; a run that does not finish within 1000 s
+throws. Sections 7.3, 7.4, 7.6, 7.7 and 7.12 are replaced in v1 by this law and kept as reference. Reference numbers (EX, Java):
+shared example profileTime **3.3703 s** (closed form before: 3.4426 s), simulated run done 3.40 s, final error 0.019 m, no
+overshoot; `P1.stop()` profileTime **4.0606 s** (before: 4.2245 s), done 4.08 s; `P1.stop(1.0)` done 5.10 s, final error 0.018 m,
+no overshoot of the stop or the end; `P1.withVelocity(1.0)` profileTime 5.3503 s. The simulated time is shorter than the closed
+form because the closed form also counted the last 5 cm before each goal at trapezoid speed on top of the tail, and arcs were
+driven at constant speed; it is closer to the simulated runs.
+
+Earlier reference numbers in v1 (closed form, before the simplification above; EX limits, Java): shared example profileTime 3.2723 + 0.1703 = **3.4426 s**, timeout 6.16 s, simulated run (lag
 plant, section 8.15) done at 3.36 s, final error 0.018 m, no overshoot; `P1.stop()` profileTime **4.2245 s**, timeout 7.34 s, done 4.00 s;
 `P1.stop(1.0)` done 5.02 s, final error 0.016 m, no overshoot of the stop or the end; `P1.withVelocity(1.0)` profileTime 5.4279 s.
 
@@ -1654,6 +1674,8 @@ If the config is missing, the motor-curve cap is skipped. If R_mod is 0 or missi
 
 ### 7.3 Spans
 
+**Replaced in v1 by the per-loop limit law (see the v1 scope); kept as reference.**
+
 #### 7.3.1 Span boundaries
 
 A span is an interval of s with no boundary inside it. Collect the boundaries:
@@ -1708,6 +1730,8 @@ L = 5.9769 m. The arc length 2.9155 is split at s(P1) = 2.9885. Edge cases: a sp
 a path with n = 2 and no anchor in the middle is a single span.
 
 ### 7.4 Caps per span and at junctions
+
+**Replaced in v1 by the per-loop limit law (see the v1 scope); kept as reference.**
 
 Spans k = 0..K-1, junctions j = 0..K. Junction j is the start of span j; junction K is L.
 
@@ -1804,6 +1828,8 @@ junction cap is the smaller cap, and the step in a_n can be up to 2·aLat in dir
 remove it.
 
 ### 7.6 Junction passes (backward and forward)
+
+**Replaced in v1 by the per-loop limit law (see the v1 scope); kept as reference.**
 
 #### 7.6.1 Derivation
 
@@ -1915,6 +1941,8 @@ corrects.
 - v0_par < 0 (moving backward along the path): v0 = 0. The limiter brakes the backward motion first.
 
 ### 7.7 Closed form inside a span
+
+**Replaced in v1 by the per-loop limit law (see the v1 scope); kept as reference.**
 
 For span k with entry speed `v_in = vF[k]`, exit speed `v_out = vF[k+1]`, cap `vCap = vCap[k]`, length l and
 `q = s - sStart[k]` in [0, l]:
@@ -2296,6 +2324,8 @@ unknown. Edge case: `omegaMax·R_mod >= vWheelMax` gives v <= 0 for a turn in pl
 when the profile is built: `2·pi·0.3889 = 2.44 < 4.5`, OK.
 
 ### 7.12 Time from the profile
+
+**Replaced in v1 by the per-loop limit law (see the v1 scope); kept as reference.**
 
 Per span, the closed-form phase times (section 7.7); on a motor-curve speed-up, the log formula plus the constant part
 below the knee. Then:
@@ -2867,35 +2897,30 @@ profileTime and timeout of the old jerk law (v2 reference) are in section 7.13.7
 
 ### 7.17 Pseudocode
 
+v1 (the code); the span version it replaced is described in sections 7.3 to 7.12.
+
 ```
-buildProfile(path(flipped), c: PathConstraints, cfg: KinematicsConfig?, R_mod, v0, heading):
-  spans = splitAt({0, L} ∪ segmentStarts ∪ waypointS ∪ stops [∪ FT sub-spans])            # merge < S_EPS
-  for k: kappa[k] = segmentKappa(k); dtheta[k] = heading.slope(k)                       # section 6.4
-  for k: kind[k] = LINE or ARC; every span of an arc whose withVelocity point asks for less than
-         its ARC_VAR cap (min over the arc's spans) becomes ARC_VAR                           # section 7.8
-  for k: (vCap[k], aA[k], aD[k]) = spanLimits(k)
-  for each sub-profile [s_a, s_b] between stops:
-      J[j] = min(vCap[j-1], vCap[j], wpVel(j), headingKinkCap(j));  J[first] uses normal caps;  J[last] = 0
-      vB = J; for j = last-1 .. first: vB[j] = min(vB[j], sqrt(vB[j+1]^2 + 2*aD[j]*l[j]))
-      vF = vB; vF[first] = min(vF[first], subStartSpeed)                           # v0 for the first, 0 after a stop
-      for j = first+1 .. last: vF[j] = min(vF[j], Fup(j-1, vF[j-1], l[j-1]))      # trapezoid or motor ramp; vF[j-1] on a constant arc
-      t_k = spanTime(vF[k], vF[k+1], vCap[k], aA[k], aD[k], l[k])                      # closed form
-  spanTime = sum t_k
-  profileTime = startDwell + spanTime + sum_goals (max(0, ln(d_h/pos_tol)/k_p) + dwell(goal))   # closed form, 7.12
+buildProfile(path(flipped), c: PathConstraints, heading, v0, k_p, pos_tol):
+  limits = []
+  for each ARC entry g:                      limits += (g.sStart, g.sEnd, sqrt(c.aLat * g.r))
+  for each inner point i with withVelocity v: if s_i is inside an arc: that arc's vCap = min(vCap, v)   # whole arc
+                                              else limits += (s_i, s_i, v)                              # point limit
+  for each heading piece [s_a, s_b] with theta' != 0: limits += (s_a, s_b, c.omegaMax / abs(theta'))
+  goals = stops inside (0, L) in order, then L
+  profileTime = startDwell; s = 0; v = max(0, v0)                          # simulate the law, ideal tracking
+  for each goal: while goal - s > d_h: v1 = speed(v, s, s, goal, inf, 0.02); s += (v + v1)/2 * 0.02; v = v1; t += 0.02
+                 profileTime += max(0, ln(d_h/pos_tol)/k_p) + dwell(goal); s = goal; v = 0     # throws after 1000 s
 
-spanLimits(k):
-  cap = c.vMax; aA = c.aAcc; aD = c.aDec
-  if kind[k] == ARC:     cap = min(cap, sqrt(c.aLat/abs(kappa[k]))); aA = aD = 0                     # constant speed (7.8)
-  if kind[k] == ARC_VAR: cap = min(cap, sqrt(RHO*c.aLat/abs(kappa[k]))); aA *= sqrt(1-RHO^2); aD *= sqrt(1-RHO^2)   # 7.8
-  if dtheta != 0: cap = min(cap, c.omegaMax/abs(dtheta)); aA = min(aA, c.alphaMax/abs(dtheta)); aD = min(aD, c.alphaMax/abs(dtheta))
-  if R_mod > 0 and cfg: cap = min(cap, 0.9*cfg.maxAllowedModuleVelocity/(1 + abs(dtheta)*R_mod))
-  if kind[k] == ARC_VAR and cfg: aA = min(aA, 0.9*cfg.maxForwardAccel*(1 - cap/cfg.freeSpeed))   # motor at the cap (7.8)
-  return (cap, aA, aD)                       # LINE: Fup uses min(aA, 0.9*motor curve) in closed form; RHO = ARC_RHO = 0.8
+ceiling(s_v, s_goal, dt):                    # D = c.aDec; disc(vE) = sqrt(vE^2 + (D*dt)^2) - D*dt
+  v = min(c.vMax, disc(sqrt(v_h^2 + 2*D*dt*v_h + 2*D*max(0, s_goal - d_h - s_v))))     # hand-over, lands on v_h = k_p*d_h
+  for each limit: if sStart <= s_v <= sEnd:          v = min(v, vCap)
+                  else if s_v < sStart < s_goal:      v = min(v, disc(sqrt(vCap^2 + 2*D*(sStart - s_v))))
+  return v
 
-runtime (each loop, current sub-profile):  v_cmd = speed(v_cmd, s*, s_v, s_goal, sqrt(vMax^2 - c^2), dt)   # 8.3.7; follower 8.3.1, 8.14
-  speed: vE = min(vBack(s_v), sqrt(v_h^2 + 2*D*dt*v_h + 2*D*(s_goal - d_h - s_v)))  each term in the discrete form sqrt(vE^2 + (D*dt)^2) - D*dt
-         up = v_cmd + aAccEff(s*)*dt;  on a constant arc below vF: up = min(vF, v_cmd + aAcc*dt)
-         return max(0, min(vE, cap, up))
+speed(v_prev, s*, s_v, s_goal, cap, dt):      # each loop; cap = sqrt(vMax^2 - c^2), 8.3.9; s_v = min(s* + v_prev*tau_lag, s_goal - d_h)
+  vp = max(0, v_prev); v = min(cap, ceiling(s_v, s_goal, dt), vp + c.aAcc*dt)
+  if v > vp: v = max(vp, min(v, ceiling(s_v + tau_lag*(v - vp), s_goal, dt)))   # the lead moves tau_lag*dv more next loop
+  return max(0, v)
 ```
 
 Tests: section 13.3.
