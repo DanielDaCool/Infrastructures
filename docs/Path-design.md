@@ -2893,7 +2893,7 @@ spanLimits(k):
   return (cap, aA, aD)                       # LINE: Fup uses min(aA, 0.9*motor curve) in closed form; RHO = ARC_RHO = 0.8
 
 runtime (each loop, current sub-profile):  v_cmd = speed(v_cmd, s*, s_v, s_goal, sqrt(vMax^2 - c^2), dt)   # 8.3.7; follower 8.3.1, 8.14
-  speed: vE = min(vBack(s_v), sqrt(v_h^2 + 2*D*(s_goal - d_h - s_v)))  each term in the discrete form sqrt(vE^2 + (D*dt)^2) - D*dt
+  speed: vE = min(vBack(s_v), sqrt(v_h^2 + 2*D*dt*v_h + 2*D*(s_goal - d_h - s_v)))  each term in the discrete form sqrt(vE^2 + (D*dt)^2) - D*dt
          up = v_cmd + aAccEff(s*)*dt;  on a constant arc below vF: up = min(vF, v_cmd + aAcc*dt)
          return max(0, min(vE, cap, up))
 ```
@@ -3183,7 +3183,7 @@ projection is clamped, and it is used in one place, the distance to go (8.3.7).
 
 **Changed in v1 (jerk limit removed):** (a) is the jerk-free form `v_cmd = min(vBack(s_v), sqrt(v_h^2 + 2·D·(s_goal - d_h - s_v)),
 sqrt(vMax^2 - c^2), v_cmd_prev + aAccEff·dt)` (state v_cmd only; reset to `max(0, V_meas·T_out)` on release from a stop); the goal is
-the envelope that reaches v_h at s_goal - d_h with D the smallest line aD on the way (both braking terms in the discrete form `sqrt(vE^2 + (D·dt)^2) - D·dt`, so the law reaches the hand-over at about 0.10 m/s and CAPTURE ramps it to at most v_h); on a constant arc the law speeds up at aAcc while below the planned arc speed vF; d_h is a
+the envelope that reaches v_h at s_goal - d_h with D the smallest line aD on the way (both braking terms in the discrete form `sqrt(vE^2 + (D·dt)^2) - D·dt`; the hand-over envelope is `vE^2 = v_h^2 + 2·D·dt·v_h + 2·D·(s_goal - d_h - s_v)`, so the law lands exactly on v_h at the hand-over and the CAPTURE step is continuous); on a constant arc the law speeds up at aAcc while below the planned arc speed vF; d_h is a
 fixed 0.05 m; the at-rest hand-over band in (e) is `d_h + 0.01 m`. (b), (c) apart from the d_h formula, (d) and (e) are unchanged.
 From rest the commands are 0.06, 0.12, 0.18 m/s (EX). The text below is the jerk-law version (v2 reference).
 
@@ -4398,7 +4398,7 @@ gaps are intentional.
 | PROF-31 | measured start v0 = 1.5, shared example | 2.9051 s |
 | PROF-33 | hand-over, k_p 3 | d_h = 0.05 m (fixed), v_h = 0.15 m/s; tail `ln(0.05/0.03)/3 = 0.170 s` per goal |
 | PROF-L1 | plain law, ideal tracking: shared example, P1.stop(), P1.withVelocity(1.0), 150 random paths | never above vBack(s_v); per-loop deceleration <= aDec (discrete form `sqrt(vE^2 + (D·dt)^2) - D·dt`); no stall; never past a goal; shared example 3.39 s, profileTime 3.4426 s |
-| PROF-L2 | hand-over envelope, shared example, EX | at s_goal - d_h: `sqrt(0.15^2 + 0.06^2) - 0.06 = 0.1016 m/s`; 1 m before the end: discrete form of `sqrt(0.15^2 + 2·3·0.95)` |
+| PROF-L2 | hand-over envelope, shared example, EX | at s_goal - d_h: exactly v_h = 0.15 m/s (envelope `vE^2 = v_h^2 + 2·D·dt·v_h + 2·D·(s_goal - d_h - s_v)` in the discrete form); ideal run with the lag lead hands over at 0.15 m/s (within 1e-3), deceleration <= aDec |
 | PROF-L3 | correction-budget cut on a constant arc (v_cmd from 0) | speeds up at aAcc to the planned arc speed vF (2.3784 m/s on the shared example) and holds it; never above vF |
 | PROF-L4 | bad input (NaN s, cap or dt; dt = 0) | holds v_prev |
 | PROF-38 | ARC_VAR selection: tight arc with P1.withVelocity(v), v = 0.5, 1.0 and 1.2, EX | 0.5 < ARC_VAR cap 0.9798: both arc spans ARC_VAR, 4.5577 s; 1.0 (between 0.9798 and the curvature cap 1.0954): constant arc at 1.0, 4.4075 s; 1.2: constant arc at its cap 1.0954, 4.3210 s, no warning |

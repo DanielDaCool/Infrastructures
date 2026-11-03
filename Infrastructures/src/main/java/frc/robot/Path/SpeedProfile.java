@@ -487,7 +487,7 @@ final class SpeedProfile {
         double sHand = sGoal - HAND_OVER;
         double vH = kP * HAND_OVER;
         double d = brakeLimit(sV, sHand);
-        double vHand = discrete(Math.sqrt(vH * vH + 2.0 * d * Math.max(0.0, sHand - sV)), d, dt);
+        double vHand = discrete(Math.sqrt(vH * vH + 2.0 * d * dt * vH + 2.0 * d * Math.max(0.0, sHand - sV)), d, dt);
         int kb = spanInSub(sV, sGoal);
         double q = Math.max(0.0, Math.min(len[kb], sV - sStart[kb]));
         double vBk = Math.min(this.cap[kb], discrete(Math.sqrt(vB[kb + 1] * vB[kb + 1] + 2.0 * aD[kb] * (len[kb] - q)),
