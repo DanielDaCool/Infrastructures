@@ -1,6 +1,6 @@
 # Path – design and details (for mentors and developers)
 
-**Status: implemented; unit-tested in simulation (JUnit, not committed); not yet run on a robot. Numbers marked (script) were computed with Python re-implementations; the Java `profileTime` values are slightly lower (see the note in section 7.13.7). Line numbers cited for `ExampleSwerveWithPose.java` are from the file before `getFieldSpeeds()` and `follow(Path)` were added.**
+**Status: implemented; unit-tested in simulation (JUnit, not committed); not yet run on a robot. Numbers marked (script) were computed with Python re-implementations; in v1 the Java `profileTime` is the closed form of section 7.12 plus the hand-over tail. Line numbers cited for `ExampleSwerveWithPose.java` are from the file before `getFieldSpeeds()` and `follow(Path)` were added.**
 
 The student guide is [Path.md](Path.md). This page has everything behind it: how a list of points
 becomes a path, how the heading and the speed are chosen along it, how the follow command drives
@@ -26,7 +26,20 @@ there is less to tune. The package `frc.robot.Path` is **8 files**:
 `Sendable`, `Path.warnings()` lists the build warnings, failures go to `DriverStation.reportWarning`); variable-speed corners (`withVelocity` on a corner caps the whole arc); the motor-curve
 speed-up and the wheel-speed cap (`moduleRadius`, `PathsConfig.fromModules`); the flipped-copy memo, `forCurrentAlliance` and `holdEndCommand()`; AprilTag field loading (the field size is
 `PathFollowerConfig.FIELD_LENGTH` x `FIELD_WIDTH`); the C1 and C2 warnings. `FollowResult` is now `FollowPathCommand.Result`, `FlipMode` is now `PathFollowerConfig.FlipMode`, and
-`kTheta`, `tauLag` and `tSettle` are constants. Reference numbers in v1: shared example 3.53 s, `P1.stop()` 4.30 s, `P1.withVelocity(1.0)` 5.51 s.
+`kTheta`, `tauLag` and `tSettle` are constants.
+
+**Jerk limit removed in v1** (user decision, 2026-11-03). The runtime speed command is the plain trapezoid law of sections 7.6.5 and 8.3.7:
+`v_cmd = min(vBack(s_v), sqrt(v_h^2 + 2·D·(s_goal - d_h - s_v)), sqrt(vMax^2 - c^2), v_prev + aAccEff·dt)`, with the lag lead
+`s_v = min(s* + v_prev·tau_lag, s_goal - d_h)`, `v_h = k_p·d_h`, D the smallest line aD up to the hand-over point, and aAccEff = 0 on a
+constant-speed arc. Braking is limited by aD through vBack (position-based); there are no stopDist cases, no landing rule, no D_brake,
+no room-to-brake cap vJerk (the plain backward pass already leaves the braking room) and no offline simulation. `d_h` is a fixed
+0.05 m (`SpeedProfile.HAND_OVER`); the at-rest hand-over band is `d_h + 0.01 m`. `profileTime` is closed form: the span times of the
+passes (section 7.7) + dwells + the hand-over tail `max(0, ln(d_h/pos_tol)/k_p)` per goal. `PathConstraints` has no `jerkMax` and
+`PathsConfig` has no `maxJerk` (it keeps `maxAngularVelocity` and `maxAngularAccel`). Section 7.13 is kept as v2 reference.
+
+Reference numbers in v1 (EX limits, Java): shared example profileTime 3.2723 + 0.1703 = **3.4426 s**, timeout 6.16 s, simulated run (lag
+plant, section 8.15) done at 3.36 s, final error 0.018 m, no overshoot; `P1.stop()` profileTime **4.2245 s**, timeout 7.34 s, done 4.00 s;
+`P1.stop(1.0)` done 5.02 s, final error 0.016 m, no overshoot of the stop or the end; `P1.withVelocity(1.0)` profileTime 5.4279 s.
 
 **How to read this page:** sections 9 (API), 10 (defaults) and 11 (v1 and v2) match the code. Sections that describe a removed feature are **kept as design reference for v2**; each
 starts with the line "Removed in v1 (simplification); kept as v2 reference." (or a "Changed in v1" note). Numbers in sections 7, 8 and 13 come from the earlier design (with the
@@ -83,8 +96,8 @@ drivetrain's field-relative drive method.
    so the speed changes only on lines; `withVelocity` on a corner caps the whole arc (v1; the variable-speed arc ARC_VAR of section 7.8 is v2). Junction speeds come from one backward and one forward pass. Stops
    split the profile.
 4. **Follower, every 20 ms.** The robot must start within 0.5 m of P0. Project the pose onto the path to get progress s*. Command the speed
-   with a jerk-aware online trapezoid law whose limits come from the profile (each loop it speeds up, holds or brakes so
-   that it can still meet every limit ahead with the jerk and deceleration limits), the direction from the path
+   with the online trapezoid law `min(vBack(s), previous + aAcc·dt)`, whose braking envelope vBack comes from the profile
+   (braking by position with the per-span deceleration), the direction from the path
    tangent a little ahead, a cross-track correction toward the path, and omega from the heading
    profile plus feedback. Near a stop or the end a 2D position law takes over. Output is
    field-relative `ChassisSpeeds`, fed to the drivetrain's limiter and `DemaciaKinematics`.
@@ -103,13 +116,13 @@ drivetrain's field-relative drive method.
 | User stop | `stop()`, `stop(dwell)`, `withVelocity(0)`; removes the corner's arc (section 5.8.7) | At rest an arc buys nothing; swerve changes direction at rest |
 | Heading | Piecewise linear in s between anchors, from the start heading to the first anchor, hold after the last; shortest way (section 6; face-target mode is v2) | Constant heading rate per span, so the speed caps stay exact |
 | Speed profile | Closed-form trapezoid per span, constant speed on every arc (a `withVelocity` point caps the whole arc), junction passes (section 7) | Equals the time-optimal grid profile when every arc is driven at its curvature cap; stays inside the limiter |
-| Runtime speed | Jerk-aware online trapezoid law (brief decision 18): limits from the per-span profile, stopping distance from (v, a), jerkMax default 50 m/s^3 (sections 7.13, 8.3.7) | No stall at the start or after a stop; braking by position; jerk-limited speed with no overshoot in simulation |
+| Runtime speed | Plain online trapezoid law `min(vBack(s_v), v_prev + aAccEff·dt)` with the lag lead and the hand-over envelope (sections 7.6.5, 8.3.7; the jerk-aware law of 7.13 was removed in v1) | No stall at the start or after a stop; braking by position; no overshoot in simulation |
 | Projection | Windowed, monotonic progress, window capped at the next stop (section 8.2.3) | No jumps to another branch of a self-approaching path |
 | Finish | 0.03 m, 2 deg, 0.1 s settle; timeout `1.5·profileTime + 1 s`; zero speed once on failure (section 8.7) | Brief decision; a command that never ends blocks autonomous sequences |
 | Alliance | `FlipMode` NONE / MIRROR / ROTATE in `PathFollowerConfig`, default ROTATE, applied once to the built path (sections 5.13, 8.10) | The 2027 field is unknown |
 | Start | The robot must start within 0.5 m of P0, else `FAILED_START_TOO_FAR`; no mid-path start (section 8.2.5) | Simple, and a wrong flip or a wrong path shows at once |
 | Settings | Three public config records: `PathConstraints`, `PathsConfig`, `PathFollowerConfig`; everything else is an internal constant (sections 9.6, 10) | Few knobs for students; one place for each value |
-| Limits | `PathConstraints(vMax, aAcc, aDec, aLat, omegaMax, alphaMax, jerkMax)`, defaults from `KinematicsConfig` at 90% (section 7.2) | The profile then never fights the acceleration limiter |
+| Limits | `PathConstraints(vMax, aAcc, aDec, aLat, omegaMax, alphaMax)`, defaults from `KinematicsConfig` at 90% (section 7.2) | The profile then never fights the acceleration limiter |
 | Kinematics module | Not changed. Missing settings are proposed (section 12) | No edits to working code |
 | Pose input | `Supplier<Pose2d>` plus `Supplier<ChassisSpeeds>`; no RobotPose dependency | Works with any pose source |
 | Editor | Java API only in v1; a JSON sketch for a future editor (Appendix A) | Room for a later path editor |
@@ -181,10 +194,8 @@ All symbols in this document. ASCII names are used for Greek letters, one spelli
 | R_mod | largest distance from the robot center to a module | m | robot frame |
 | vWheelMax | `KinematicsConfig.maxAllowedModuleVelocity` | m/s | |
 | e_allow | heading lag allowed at a heading kink (HEADING_LAG_ALLOWED) | rad | |
-| jerkMax | tangential jerk limit of the speed command (PathConstraints field, brief decision 18) | m/s^3 | default 50 (placeholder) |
-| v_cmd, a_cmd | state of the speed law: commanded tangential speed and acceleration | m/s, m/s^2 | section 7.13.2 |
-| stopDist(v, a, v_t, jerkMax, D) | shortest distance from (v, a) to speed v_t with a = 0 at the end | m | section 7.13.3 |
-| D_j | deceleration limit used for constraint j of the speed law | m/s^2 | section 7.13.4 |
+| v_cmd | state of the speed law: commanded tangential speed | m/s | sections 7.6.5, 8.3.7 |
+| jerkMax, stopDist, D_j | jerk-aware law only (removed in v1; section 7.13 is the v2 reference) | | |
 | d_h, v_h | hand-over distance before a goal and the speed there, `v_h = k_p·d_h` | m, m/s | section 8.3.7 |
 | t, dt, dt_nom | time, measured loop period, nominal loop period | s | dt_nom = 0.02 s |
 | t_k, t0[k] | time of span k, profile time at the start of span k | s | |
@@ -219,9 +230,9 @@ Constants (EPS_DUP, R_MIN, TAU_STOP, ...) are named in capitals and defined once
 - start at rest, measured start heading theta0 = 0, P1 `withAngle(90 deg)`, P2 without angle.
 
 Key numbers of the shared example (all (script)): r = 1.4142 m, C = (3, 2.5858), L = 5.9769 m,
-s(P1) = 2.9885 m. Pure trapezoid profile without a jerk limit: 3.2723 s; with `P1.stop()`: L = 5.6569 m and
-3.8839 s. Expected v1 run time with the jerk law (jerkMax = 50): 3.54 s, timeout 6.31 s; with `P1.stop()`: 4.32 s,
-timeout 7.48 s.
+s(P1) = 2.9885 m. Trapezoid profile: 3.2723 s; with `P1.stop()`: L = 5.6569 m and
+3.8839 s. v1 profileTime (trapezoid + hand-over tail 0.1703 s per goal): 3.4426 s, timeout 6.16 s; with `P1.stop()`: 4.2245 s,
+timeout 7.34 s.
 
 ## 4. Lessons from existing code
 
@@ -1545,9 +1556,8 @@ speed up, cruise, slow down. Speed-up follows the drivetrain's motor curve up to
 constant. The speeds at the junctions between spans come from one backward pass and one forward pass **over the
 spans**. A stop is a junction speed of 0 and splits the profile into sub-profiles.
 
-**Runtime command** (brief decision 18): the jerk-aware online trapezoid of section 7.13. Every loop it decides between
-speeding up, holding and braking, testing whether it can still reach every upcoming limit with jerk jerkMax and deceleration
-D. Its limits are this profile's junction speeds vB, span caps vCap and decelerations aD.
+**Runtime command** (v1): the plain online trapezoid `min(vBack(s_v), v_prev + aAccEff·dt)` of sections 7.6.5 and 8.3.7.
+Braking is limited by aD through vBack; speed-up is a time ramp. (The jerk-aware law of section 7.13 was removed in v1.)
 
 The profile is built once, in the follow command's `initialize()`, after the flip and the heading profile, because
 it needs the measured start speed and heading. It is a short table, one row per span:
@@ -1566,17 +1576,16 @@ it needs the measured start speed and heading. It is a short table, one row per 
 
 Two speed functions are read from it:
 - **vBack(s)**: built from the backward junction speeds vB only. It is the **braking envelope**; vB and vCap are the speed law's
-  limits. Without a jerk limit the law reduces to `min(vBack, ramp)` (section 7.6.5). vBack(start) > 0, so the robot cannot stall.
+  limits. The v1 law is `min(vBack, ramp)` (section 7.6.5). vBack(start) > 0, so the robot cannot stall.
 - **vProf(s)**: built from the forward-pass junction speeds vF and the measured start speed: the jerk-free lower bound of the
-  time, a(s) and logging. The v1 profileTime (timeout) comes from the offline simulation of the speed law (section 7.13.6).
+  time, a(s) and logging. The v1 profileTime (timeout) is its closed-form time plus the hand-over tail (section 7.12).
 
 The old code had no profile (path-ido: constant 1.5 m/s) or used the straight-line distance (2025); see section 4.
 
 ### 7.2 PathConstraints
 
 ```
-record PathConstraints(double vMax, double aAcc, double aDec, double aLat, double omegaMax, double alphaMax,
-                       double jerkMax)
+record PathConstraints(double vMax, double aAcc, double aDec, double aLat, double omegaMax, double alphaMax)
 ```
 
 | Field | Meaning | Unit | Must be |
@@ -1587,7 +1596,6 @@ record PathConstraints(double vMax, double aAcc, double aDec, double aLat, doubl
 | `aLat` | largest lateral acceleration `v^2·abs(kappa)` | m/s^2 | finite, > 0 |
 | `omegaMax` | largest robot angular velocity abs(omega) | rad/s | finite, > 0 |
 | `alphaMax` | largest robot angular acceleration abs(alpha) | rad/s^2 | finite, > 0 |
-| `jerkMax` | largest tangential jerk of the speed command (section 7.13) | m/s^3 | finite, > 0 |
 
 A field that is not finite or not > 0 throws `IllegalArgumentException` in the constructor (V16). Silently clamping
 would hide a typo.
@@ -1609,7 +1617,6 @@ change commands that follow the profile (section 7.14).
 | `aLat` | same as aDec | **7.2 m/s^2** | same |
 | `omegaMax` | `PathsConfig.maxAngularVelocity` | 2·pi rad/s | placeholder in `PathsConfig.defaults()` |
 | `alphaMax` | `PathsConfig.maxAngularAccel` | 4·pi rad/s^2 | placeholder in `PathsConfig.defaults()` |
-| `jerkMax` | `PathsConfig.maxJerk` | **50 m/s^3** | placeholder in `PathsConfig.defaults()` (section 7.13.7) |
 
 Notes:
 - Both tilt limits are used for every direction, because the path tangent can point along the robot's front or
@@ -1812,8 +1819,6 @@ v_end^2 = v_start^2 + 2*a*l          (exact for constant a)
 ```
 J[j] = junction caps (section 7.4);  vB = copy(J)
 backward:  for j = K-1 down to 0:  vB[j] = min(vB[j], sqrt(vB[j+1]^2 + 2*aD[j]*l[j]))
-                                   if span j is a line that starts at a constant-arc exit, or the first span of an ARC_VAR arc:
-                                       vB[j] = min(vB[j], vJerk(j))                                                (section 7.8)
 forward:   vF = copy(vB);  vF[0] = min(vF[0], v0)
            for j = 1 .. K:         vF[j] = min(vF[j], F_{j-1}(vF[j-1], l[j-1]))
 ```
@@ -1865,8 +1870,8 @@ v0_par = 0.5, v0_perp = 1.0, v0 = 0.5.
 
 #### 7.6.5 Start stall, the runtime ramp and aAccEff
 
-In v1 the command is the jerk-aware law of section 7.13 (brief decision 18). This subsection gives the reason for vBack and the
-definition of aAccEff, which the law uses as its speed-up limit Amax; the time ramp below is the law's limit for an unlimited jerk.
+In v1 the command is exactly the time ramp below (the jerk-aware law of section 7.13 was removed in v1), with the lag lead and the
+hand-over envelope of section 8.3.7. v1 has no motor curve: aAccEff = aA of the span (0 on a constant arc).
 
 Starting the forward pass from the measured speed is right for the time estimate. It does **not** stop the robot from
 stalling when it starts at rest: with v0 = 0, vProf(0) = 0, a follower that commands vProf(s*) commands 0, and s* stays 0
@@ -1890,13 +1895,13 @@ aAccEff(v, s) = 0 on a constant-speed arc (no speed-up there, section 7.8); on a
   at the arc entry.
 - The follower adds the lag lead and the hand-over point on top (section 8.3.7).
 
-Example (no jerk limit): from rest with aAcc = 3, the commands are 0.06, 0.12, 0.18 m/s in successive loops, until they meet
-vBack. With the v1 law and jerkMax = 50 they are 0.01, 0.04, 0.09, 0.15 m/s (section 7.13.4).
+Example (v1): from rest with aAcc = 3, the commands are 0.06, 0.12, 0.18 m/s in successive loops, until they meet
+vBack.
 
 #### 7.6.6 Start faster than the envelope: no check
 
 **Decision** (user, simplification pass): there is no start-speed check and no warning for it. If v0 > vBack(0),
-the jerk law brakes at once, from any start state, still jerk-limited, and the limiter bounds the acceleration
+the law brakes at once (v_cmd = vBack), and the limiter bounds the acceleration
 (section 7.13.4). A start that cannot meet a cap ahead shows as a cross-track error on that arc, which the follower
 corrects.
 
@@ -2297,19 +2302,22 @@ below the knee. Then:
 
 ```
 t0[0] = 0,  t0[k+1] = t0[k] + t_k
-spanTime    = sum of sub-profile span times + dwells (section 7.10.5)       (no-jerk lower bound, logging)
-profileTime = offline speed-law time + hand-over tails + dwells              (v1, section 7.13.6)
+spanTime    = sum of sub-profile span times (section 7.10.5)
+profileTime = spanTime + hand-over tail max(0, ln(d_h/pos_tol)/k_p) per goal + dwells   (v1, closed form)
 t_timeout   = 1.5 * profileTime + 1.0 s
 ```
 
 Time to a point inside a span (for logging) adds the phase times before q. Use vF (vProf), not vB, for time.
 
-Examples (closed form, no jerk limit):
-- Shared example: `1.0233 + 0.6129 + 0.6129 + 1.0233 = 3.2723 s` (script). This is the lower bound for the run time, not the v1
-  timeout base: the v1 profileTime is 3.54 s (speed law with jerkMax = 50 and the hand-over tail), timeout 6.31 s (section 7.13.7).
+Examples (closed form):
+- Shared example: `1.0233 + 0.6129 + 0.6129 + 1.0233 = 3.2723 s` (script). v1 profileTime = 3.2723 + 0.1703 (tail) = 3.4426 s
+  (Java), timeout 6.16 s.
 - Arc span at constant speed: `1.4577/2.3784 = 0.6129 s`.
 
 ### 7.13 Runtime speed law: jerk-aware online trapezoid
+
+**Removed in v1; kept as v2 reference.** v1 uses the plain trapezoid law (sections 7.6.5, 8.3.7 and the v1 scope section); none of
+stopDist, the landing rule, D_brake, vJerk (7.8), STOP_DIST_MARGIN or the offline profileTime of 7.13.6 is in the code.
 
 **Decision** (brief decision 18): the v1 tangential speed command is a **jerk-aware online trapezoid**. Each loop it asks: "can I
 still speed up for one more loop and then slow down in time for every limit ahead, with jerk limit jerkMax and deceleration D? If
@@ -3172,6 +3180,12 @@ projection is clamped, and it is used in one place, the distance to go (8.3.7).
 
 #### 8.3.7 Speed reference: jerk-aware law, lag lead, hand-over
 
+**Changed in v1 (jerk limit removed):** (a) is the jerk-free form `v_cmd = min(vBack(s_v), sqrt(v_h^2 + 2·D·(s_goal - d_h - s_v)),
+sqrt(vMax^2 - c^2), v_cmd_prev + aAccEff·dt)` (state v_cmd only; reset to `max(0, V_meas·T_out)` on release from a stop); the goal is
+the envelope that reaches v_h at s_goal - d_h with D the smallest line aD on the way, so the CAPTURE step stays continuous; d_h is a
+fixed 0.05 m; the at-rest hand-over band in (e) is `d_h + 0.01 m`. (b), (c) apart from the d_h formula, (d) and (e) are unchanged.
+From rest the commands are 0.06, 0.12, 0.18 m/s (EX). The text below is the jerk-law version (v2 reference).
+
 **(a) The speed law** (section 7.13; brief decision 18). The command state is (v_cmd, a_cmd), initialized to (v0, 0) and reset to
 `(max(0, V_meas·T_out), 0)` on release from a stop. Each loop the law takes "up", "toward 0", "keep" or "brake", whichever is the first
 that can still meet every limit ahead with jerkMax and the per-span deceleration. This removes the start stall: vBack(start) > 0 at
@@ -3429,9 +3443,8 @@ t_timeout = 1.5 * profileTime + 1.0         // decision 10; profileTime with the
 if (t - t_start >= t_timeout) -> end, result FAILED_TIMEOUT
 ```
 
-profileTime comes from the offline simulation of the same speed law (section 7.13.6), with the hand-over tail. Examples (jerkMax = 50,
-EX): shared example 3.54 s, timeout 6.31 s; P1.stop() 4.32 s, timeout 7.48 s; P1.stop(1.5) 5.82 s, timeout 9.73 s; tight arc
-4.62 s, timeout 7.93 s. The dwell is exact, so 1.5 times it is spare margin. The 0.1 s settle and the modules' turn at a stop (at most 0.13 s)
+profileTime is the closed form of section 7.12 with the hand-over tail (v1). Examples (EX): shared example 3.4426 s, timeout 6.16 s;
+P1.stop() 4.2245 s, timeout 7.34 s; P1.stop(1.5) 5.7245 s, timeout 9.59 s. The dwell is exact, so 1.5 times it is spare margin. The 0.1 s settle and the modules' turn at a stop (at most 0.13 s)
 are not in profileTime; they fit in the margin. The timeout clock never pauses during ROTATE or DWELL; a robot that cannot reach a stop times out the same way.
 
 #### 8.7.4 After a failure
@@ -3680,8 +3693,8 @@ directory"). **Nine files** (v1, simplified 2026-11-03). There are exactly three
 |---|---|---|
 | `Point.java` | public final class | one waypoint: position plus optional angle, max speed, radius, stop with dwell |
 | `Path.java` | public final class | points, constraints, name; builds and holds the geometry; `flipped(...)`, `warnings()` |
-| `PathConstraints.java` | public record | vMax, aAcc, aDec, aLat, omegaMax, alphaMax, jerkMax; `fromConfig(KinematicsConfig, PathsConfig)` |
-| `PathsConfig.java` | public record | robot settings the Kinematics module does not have: max omega, max alpha, max jerk |
+| `PathConstraints.java` | public record | vMax, aAcc, aDec, aLat, omegaMax, alphaMax; `fromConfig(KinematicsConfig, PathsConfig)` |
+| `PathsConfig.java` | public record | robot settings the Kinematics module does not have: max omega, max alpha |
 | `PathFollowerConfig.java` | public record | follower gains, tolerances, timeout, flip mode and field size; nested `FlipMode`; constants `K_THETA`, `TAU_LAG`, `T_SETTLE`, `FIELD_LENGTH`, `FIELD_WIDTH` |
 | `PathDrivetrain.java` | public interface extends `Subsystem` | what the follower needs from the drivetrain: `getPose`, `getFieldSpeeds`, `driveFieldRelative`, default `getKinematicsConfig`, `getPathsConfig` |
 | `FollowPathCommand.java` | public class extends `Command` | the follower (the tracker is inside it); nested `Result`; a `Sendable` |
@@ -3791,7 +3804,7 @@ the flip memo and `sampleAt`.
 
 ```java
 public record PathConstraints(double vMax, double aAcc, double aDec, double aLat,
-                              double omegaMax, double alphaMax, double jerkMax) {
+                              double omegaMax, double alphaMax) {
     public static final double PROFILE_MARGIN    = 0.9;
 
     public PathConstraints { /* every field finite and > 0, else IllegalArgumentException (V16) */ }
@@ -3805,7 +3818,6 @@ public record PathConstraints(double vMax, double aAcc, double aDec, double aLat
     public PathConstraints withALat(double aLat);
     public PathConstraints withOmegaMax(double omegaMax);
     public PathConstraints withAlphaMax(double alphaMax);
-    public PathConstraints withJerkMax(double jerkMax);
 }
 ```
 
@@ -3816,10 +3828,10 @@ vMax     = PROFILE_MARGIN * c.maxAllowedModuleVelocity
 aAcc     = PROFILE_MARGIN * min(c.maxForwardAccel, c.maxSkidAccel, c.maxTiltAccelFront, c.maxTiltAccelSide)
 aDec     = PROFILE_MARGIN * min(c.maxSkidAccel, c.maxTiltAccelFront, c.maxTiltAccelSide)
 aLat     = aDec formula
-omegaMax = p.maxAngularVelocity,  alphaMax = p.maxAngularAccel,  jerkMax = p.maxJerk     (no margin: these are path limits, not limiter limits)
+omegaMax = p.maxAngularVelocity,  alphaMax = p.maxAngularAccel     (no margin: these are path limits, not limiter limits)
 ```
 
-With `new KinematicsConfig()` and `PathsConfig.defaults()`: (4.05, 7.2, 7.2, 7.2, 2·pi, 4·pi, 50). When the path has no constraints, the command takes the `KinematicsConfig` and the
+With `new KinematicsConfig()` and `PathsConfig.defaults()`: (4.05, 7.2, 7.2, 7.2, 2·pi, 4·pi). When the path has no constraints, the command takes the `KinematicsConfig` and the
 `PathsConfig` from the drivetrain (`getKinematicsConfig()`, `getPathsConfig()`, section 9.10). 
 
 ### 9.6 Config records
@@ -3837,13 +3849,11 @@ whose `withX` changes the object (KinematicsConfig.java:61-64).
 ```java
 public record PathsConfig(
         double maxAngularVelocity,   // [rad/s]   robot omega limit -> PathConstraints.omegaMax (not maxSteerRate, which is the module steer rate)
-        double maxAngularAccel,      // [rad/s^2] robot alpha limit -> PathConstraints.alphaMax (the limiter passes omega through)
-        double maxJerk) {            // [m/s^3]   tangential jerk of the speed command -> PathConstraints.jerkMax
+        double maxAngularAccel) {    // [rad/s^2] robot alpha limit -> PathConstraints.alphaMax (the limiter passes omega through)
     public PathsConfig { /* every field finite and > 0, else IllegalArgumentException (V16) */ }
-    public static PathsConfig defaults();   // (2·pi, 4·pi, 50); all placeholders, measure on the robot (section 12)
+    public static PathsConfig defaults();   // (2·pi, 4·pi); both placeholders, measure on the robot (section 12)
     public PathsConfig withMaxAngularVelocity(double radPerSec);
     public PathsConfig withMaxAngularAccel(double radPerSec2);
-    public PathsConfig withMaxJerk(double metersPerSec3);
 }
 ```
 
@@ -3922,7 +3932,7 @@ public interface PathDrivetrain extends Subsystem {
     ChassisSpeeds getFieldSpeeds();                  // measured, field-relative, omega CCW
     void driveFieldRelative(ChassisSpeeds speeds);   // field-relative command, omega CCW
     default KinematicsConfig getKinematicsConfig() { return new KinematicsConfig(); }   // limits when the path has no constraints
-    default PathsConfig getPathsConfig() { return PathsConfig.defaults(); }             // omega, alpha, jerk when the path has no constraints
+    default PathsConfig getPathsConfig() { return PathsConfig.defaults(); }             // omega, alpha when the path has no constraints
 }
 
 public class FollowPathCommand extends Command {   // also a Sendable (initSendable adds the keys of 8.13)
@@ -3996,7 +4006,7 @@ rest were merged or dropped. The types and wording are those of the code, except
 | V9 | `withRadius(r)` with r < 0 | `Point.withRadius` | IAE | `withRadius({r}): the radius must be 0 or more (meters). Use withRadius(0) to make the robot stop at this point, or leave withRadius out so the library chooses the radius, for example withRadius(0.5).` |
 | V11 | `withVelocity(v)` with v < 0 | `Point.withVelocity` | IAE | `withVelocity({v}): the speed must be 0 or more (m/s). withVelocity(0) is the same as stop(). To limit the speed at a point use a positive number, for example withVelocity(1.0).` |
 | V13 | `stop(d)` with d < 0 | `Point.stop` | IAE | `stop({d}): the wait time must be 0 or more (seconds). Use stop() to stop without waiting, or stop(1.5) to wait 1.5 seconds.` |
-| V16 | a config value out of range: a `PathConstraints` field, a `PathsConfig` angular limit or jerk, or a `PathFollowerConfig` number not finite or not > 0 | the record constructors (one shared helper, `PathConstraints.requirePositive`) | IAE | `{Record}.{field} must be a finite number above 0 ({unit}), but it is {v}. Start from {Record factory} and change one value, for example {example}.` Example: `PathConstraints.vMax must be a finite number above 0 (m/s), but it is -1.0. Start from PathConstraints.fromConfig(config) and change one value, for example PathConstraints.fromConfig(config).withVMax(3.0).` The factory is `PathConstraints.fromConfig(config)`, `PathsConfig.defaults()` or `PathFollowerConfig.defaults()`. Null arguments of `PathConstraints.fromConfig` throw NPE (V3): `PathConstraints.fromConfig: the KinematicsConfig is null; pass your robot's config (for example PathConstraints.fromConfig(new KinematicsConfig()))`. |
+| V16 | a config value out of range: a `PathConstraints` field, a `PathsConfig` angular limit, or a `PathFollowerConfig` number not finite or not > 0 | the record constructors (one shared helper, `PathConstraints.requirePositive`) | IAE | `{Record}.{field} must be a finite number above 0 ({unit}), but it is {v}. Start from {Record factory} and change one value, for example {example}.` Example: `PathConstraints.vMax must be a finite number above 0 (m/s), but it is -1.0. Start from PathConstraints.fromConfig(config) and change one value, for example PathConstraints.fromConfig(config).withVMax(3.0).` The factory is `PathConstraints.fromConfig(config)`, `PathsConfig.defaults()` or `PathFollowerConfig.defaults()`. Null arguments of `PathConstraints.fromConfig` throw NPE (V3): `PathConstraints.fromConfig: the KinematicsConfig is null; pass your robot's config (for example PathConstraints.fromConfig(new KinematicsConfig()))`. |
 | V24 | no drivetrain (null) | `FollowPathCommand` constructor | NPE | `FollowPathCommand: the drivetrain is null; pass your drivetrain subsystem, which implements PathDrivetrain (for example new FollowPathCommand(swerve, path)).` (same format as V3; replaces the old no-requirement error) |
 | V30 | a point has `stop()`, `stop(d)` or `withVelocity(0)` **and** `withRadius(r)` with r > 0 | `Path` constructor | IAE | `Point {i} has both stop() and withRadius({r}). A stop point is a sharp corner (the robot stops exactly on the point), so it has no arc. Remove withRadius({r}) to stop on the point, or remove stop() to drive through the corner on a round arc.` If the stop and the radius come from two points merged (closer than 1 mm), the text is `Points {i} and {j} are less than 1 mm apart and were merged into one point, but point {a} has stop() and point {b} has withRadius({r}). ...` with the same advice. |
 
@@ -4069,7 +4079,7 @@ Path path = new Path(
 ```
 
 (3, 4) is a corner: `withVelocity(1.0)` caps the whole arc through it at 1.0 m/s (arcs are driven at one constant speed). The robot
-brakes on the line before the arc and speeds up on the line after it. v1 run time (jerk law): 5.51 s, against 3.53 s without the cap. On a
+brakes on the line before the arc and speeds up on the line after it. v1 profileTime: 5.43 s, against 3.44 s without the cap. On a
 straight part (a pass marker) the cap acts at the point only: the robot brakes before it and speeds up after it. The earlier ARC_VAR design
 (brake to the point inside the arc, section 7.8) would take about 4.06 s; it is not in v1. Zones with a length are v2.
 
@@ -4087,9 +4097,9 @@ Path path = new Path(
 - Order at a stop: arrive (within 0.03 m and below 0.1 m/s), correct a residual heading error of more than 3 deg,
   wait, leave under the speed law (section 8.6). The heading here goes linearly from the measured start heading to 180 deg at (7, 4) (an exact
   half turn from 0 deg turns CCW, section 6.3); it does not jump at the stop.
-- With EX and a start heading of 0 (script): legs 3.0 m and 3.6056 m, trapezoid motion without a jerk limit 2.0000 + 2.1926 s, dwell
-  1.5 s: 5.6926 s (the dwell is the only stop term, section 7.10.4). This is the lower bound; the v1 profileTime (jerk law) is longer by roughly 6%
-  plus the hand-over tails (not computed for this path).
+- With EX and a start heading of 0 (script): legs 3.0 m and 3.6056 m, trapezoid motion 2.0000 + 2.1926 s, dwell
+  1.5 s: 5.6926 s (the dwell is the only stop term, section 7.10.4). The v1 profileTime adds the hand-over tail (0.1703 s with the
+  default k_p and pos_tol) per goal.
 - At the last point the stop is automatic; `.stop(1.0)` there holds 1 s after the finish test passes.
 
 **(d) Face target** (removed in v1; kept as v2 reference)
@@ -4134,7 +4144,7 @@ In `ExampleSwerveWithPose` (the code is the reference):
 
 ```java
 private final PathFollowerConfig followerConfig = PathFollowerConfig.defaults();   // ROTATE flip, field 16.54 x 8.07
-// ExampleSwerveWithPose implements PathDrivetrain; pathsConfig = PathsConfig.defaults() (omega, alpha, jerk placeholders)
+// ExampleSwerveWithPose implements PathDrivetrain; pathsConfig = PathsConfig.defaults() (omega, alpha placeholders)
 
 public FollowPathCommand followCommand(Path path) {
     return new FollowPathCommand(this, path).withConfig(followerConfig);
@@ -4161,7 +4171,7 @@ Tests: section 13.5.
 
 ## 10. Defaults
 
-Every constant of v1, with its single home. Rows for removed features (moduleRadius, ARC_RHO, FT_SPAN, r_face_min, the jerk warning threshold, the motor-curve inversion, the stale-pose gate) were deleted; `kTheta`, `tauLag` and `tSettle` are constants of `PathFollowerConfig`, not settings. "Home" is the record field (configurable) or the internal class that owns the
+Every constant of v1, with its single home. Rows for removed features (moduleRadius, ARC_RHO, FT_SPAN, r_face_min, the jerk warning threshold, the motor-curve inversion, the stale-pose gate; with the jerk limit: maxJerk, STOP_DIST_MARGIN, D_H_MAX, the room-to-brake bisection and the offline profileTime guard) were deleted; `kTheta`, `tauLag` and `tSettle` are constants of `PathFollowerConfig`, not settings. "Home" is the record field (configurable) or the internal class that owns the
 constant: an **internal constant** is a documented `static final`, not configurable (**Decision**, user, simplification pass: only
 `PathConstraints`, `PathsConfig` and `PathFollowerConfig` are public config types). All values are **Recommendation** starting values,
 reasoned and simulated in Python only, not tuned on a robot, unless marked **Fact** or **Decision**.
@@ -4174,10 +4184,9 @@ reasoned and simulated in Python only, not tuned on a robot, unless marked **Fac
 | aLat | same as aDec = 7.2 | m/s^2 | `PathConstraints.aLat` | 7.2.1 | |
 | maxAngularVelocity | 2·pi | rad/s | `PathsConfig.maxAngularVelocity` | 7.2.1, 9.6 | placeholder; measure (section 12) |
 | maxAngularAccel | 4·pi | rad/s^2 | `PathsConfig.maxAngularAccel` | 7.2.1, 9.6 | placeholder |
-| maxJerk | 50 | m/s^3 | `PathsConfig.maxJerk` | 7.13.7, 9.6 | placeholder |
 | | PROFILE_MARGIN | 0.9 | - | `PathConstraints.PROFILE_MARGIN` (public constant) | 7.2.1 | v1 has no motor curve or wheel cap |
-| STOP_DIST_MARGIN | 0.005 | m | `SpeedProfile.STOP_DIST_MARGIN` (internal constant) | 7.13.4 | |
-| D_H_MAX | 0.05; `d_h = min(D_H_MAX, jerkMax·dt_nom/k_p^2)` | m | `FollowPathCommand` (internal constant) | 8.3.7 | hand-over distance; at rest the hand-over band is d_h + 2·STOP_DIST_MARGIN |
+| HAND_OVER (d_h) | 0.05 (fixed; v_h = k_p·d_h) | m | `SpeedProfile.HAND_OVER` (internal constant) | 8.3.7 | hand-over distance to the 2D capture law |
+| REST_HAND_OVER_MARGIN | 0.01 | m | `SpeedProfile.REST_HAND_OVER_MARGIN` (internal constant) | 8.3.7e | at rest the hand-over band is d_h + this |
 | R_MIN | 0.05 | m | `PathGeometry` (internal constant) | 5.7.3 | **Decision** (brief decision 2) |
 | R_MAX | 2.0 | m | `PathGeometry` (internal constant) | 5.7.2 | |
 | D_BULGE | 0.5 | m | `PathGeometry` (internal constant) | 5.7.2 | accepted by the user |
@@ -4196,8 +4205,6 @@ reasoned and simulated in Python only, not tuned on a robot, unless marked **Fac
 | half-turn tie | 1e-9 (a change within this of pi turns CCW) | rad | `PathGeometry` (internal constant) | 6.3 | |
 | HEADING_LAG_ALLOWED (e_allow) | 5 deg = 0.0873 | rad | `SpeedProfile` (internal constant) | 6.6, 7.4.6 | |
 | S_EPS | 1e-6 | m | `SpeedProfile` (internal constant) | 7.3.1 | span merge |
-| room-to-brake bisection | 60 iterations | - | `SpeedProfile` (internal constant) | 7.8 | vJerk on lines after constant-speed arcs and at ARC_VAR entries |
-| offline profileTime guard | `10·spanTime + 10` | s | `SpeedProfile` (internal constant) | 7.13.6 | |
 | DEFAULT_DS | 0.02 | m | grid test oracle only (test code) | Appendix B | not in production code |
 | dt_nom | 0.02 | s | `FollowPathCommand` (internal constant) | 8.2.2 | the only home of the nominal loop period; equals `KinematicsConfig.cycleDt` (**Fact** :25). Run time uses the measured dt |
 | k_n | 3.0 | 1/s | `PathFollowerConfig.kN` | 8.3.5 | |
@@ -4244,7 +4251,7 @@ reasoned and simulated in Python only, not tuned on a robot, unless marked **Fac
 | Non-zero end speed, chaining paths | no (end speed 0; `withVelocity` on the last point ignored) | yes | decision 5, 7.4.7 |
 | Heading anchors (linear in s) | yes | face target (6.9), also for an s range | decision 4, resolution R1, simplification pass |
 | Speed profile | per-span closed form with constant acceleration limits, constant speed on every arc (a `withVelocity` point caps the whole arc), junction passes | motor-curve speed-up (7.9), wheel-speed cap (7.11), ARC_VAR (7.8), speed zones, clothoid sub-spans | decision 16, resolution R10, simplification pass |
-| Runtime speed command | jerk-aware online trapezoid law (tangential jerk) | lateral jerk at arc joints via clothoids | decision 18 |
+| Runtime speed command | plain online trapezoid `min(vBack(s_v), v_prev + aAccEff·dt)` with lag lead and hand-over envelope; no jerk limit | jerk-aware law (section 7.13, tangential jerk); lateral jerk at arc joints via clothoids | decision 18, user decision 2026-11-03 |
 | Events at a fraction of the path or a waypoint index | no: use `cmd.progress()` / `distanceTraveled()` with a `Trigger` | `PathEvent` (8.8, 9.7) | decision 7, simplification pass |
 | Alliance flip NONE / MIRROR / ROTATE | yes | - | decision 9, resolution R6 |
 | Finish 0.03 m, 2 deg, 0.1 s; timeout; `FollowPathCommand.Result` | yes | - | decision 10 |
@@ -4265,14 +4272,13 @@ reasoned and simulated in Python only, not tuned on a robot, unless marked **Fac
 Only the decisions that remain, and the values that must be measured. Everything else in this document is decided.
 
 1. **Robot settings outside the Kinematics module** (**Decision**, user: `KinematicsConfig` is not changed). They live in `PathsConfig`
-   (section 9.6): `maxAngularVelocity` (2·pi), `maxAngularAccel` (4·pi), `maxJerk` (50) and `moduleRadius` (removed in v1; R_mod; the module positions
+   (section 9.6): `maxAngularVelocity` (2·pi), `maxAngularAccel` (4·pi), `maxJerk` (removed in v1 with the jerk limit) and `moduleRadius` (removed in v1; R_mod; the module positions
    are private in `DemaciaKinematics`, DemaciaKinematics.java:58, so `PathsConfig.fromModules` takes the same array the drivetrain uses).
    Nothing to decide; the values must be measured (item 2).
 2. **Values to measure on the robot** (none can be decided on paper):
    - **tau_d**, the drivetrain lag (0.085 s modelled, **Uncertain**): fit the line step (section 8.13). It sets k_n and k_p (raise both to 4 if
      tau_d allows; the hand-over tail is `ln(d_h/0.03)/k_p`, section 8.3.7) and tau_lag (rule in section 8.4).
-   - **`PathsConfig` values**: maxAngularVelocity and maxAngularAccel (placeholders 2·pi and 4·pi) and maxJerk (placeholder 50 m/s^3;
-     it costs +4 to 15% time).
+   - **`PathsConfig` values**: maxAngularVelocity and maxAngularAccel (placeholders 2·pi and 4·pi).
    - The `KinematicsConfig` limits themselves (placeholders, KinematicsConfig.java:8-15), from which aAcc, aDec and aLat follow.
    - Whether omega_ff from the commanded speed or from a filtered ds*/dt tracks better (test FOL-H4).
    - The clothoid criterion (section 5.12.3) from match logs, which decides G2 for v2.

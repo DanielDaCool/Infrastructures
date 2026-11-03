@@ -38,7 +38,7 @@ source, for example [RobotPose](RobotPose.md).
 - **Automatic rounded corners.** Each corner is a circle through the point. The radius is chosen for you, and
   you can set it per point.
 - **Speed from the path, not from a clock.** The robot slows for corners and for the end, and speeds up
-  on straight parts, within the limits you give, with a limit on jerk so the speed changes smoothly. A round corner is
+  on straight parts, within the limits you give (speed up with `aAcc`, brake with `aDec`). A round corner is
   driven at one steady speed. `.withVelocity(v)` on a corner point caps that whole arc at `v`.
 - **Stops where you ask.** `.stop()` on any middle point, with an optional wait.
 - **Headings.** An angle on some points; the robot turns smoothly between them.
@@ -183,12 +183,12 @@ Good to know:
 
 ## Limits
 
-`PathConstraints` has seven numbers: `vMax` (m/s), `aAcc`, `aDec`, `aLat` (m/s^2), `omegaMax` (rad/s),
-`alphaMax` (rad/s^2) and `jerkMax` (m/s^3). `PathConstraints.fromConfig(kinematicsConfig, pathsConfig)` computes
+`PathConstraints` has six numbers: `vMax` (m/s), `aAcc`, `aDec`, `aLat` (m/s^2), `omegaMax` (rad/s),
+and `alphaMax` (rad/s^2). `PathConstraints.fromConfig(kinematicsConfig, pathsConfig)` computes
 the first four from your `KinematicsConfig` (about 10% below the limiter's limits; with the default config 4.05 m/s
-and 7.2 m/s^2). The last three come from `PathsConfig`, the Path module's own settings that `KinematicsConfig` does
-not have: `maxAngularVelocity`, `maxAngularAccel` and `maxJerk` (placeholders 2 pi, 4 pi and 50 m/s^3; measure
-them). `fromConfig(kinematicsConfig)` uses `PathsConfig.defaults()`. The jerk limit makes the speed change smoothly; it costs a few percent of time.
+and 7.2 m/s^2). The last two come from `PathsConfig`, the Path module's own settings that `KinematicsConfig` does
+not have: `maxAngularVelocity` and `maxAngularAccel` (placeholders 2 pi and 4 pi; measure
+them). `fromConfig(kinematicsConfig)` uses `PathsConfig.defaults()`.
 
 Change one for one path: `path.withConstraints(PathConstraints.fromConfig(c, pathsConfig).withVMax(2.0))`.
 If a path has no constraints, the command uses `drivetrain.getKinematicsConfig()` and `drivetrain.getPathsConfig()` (defaults: `new KinematicsConfig()` /

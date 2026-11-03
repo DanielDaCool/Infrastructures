@@ -33,7 +33,7 @@ public interface PathDrivetrain extends Subsystem {
         return new KinematicsConfig();
     }
 
-    /** @return omega, alpha and jerk limits used when a path has no constraints of its own */
+    /** @return omega and alpha limits used when a path has no constraints of its own */
     default PathsConfig getPathsConfig() {
         return PathsConfig.defaults();
     }

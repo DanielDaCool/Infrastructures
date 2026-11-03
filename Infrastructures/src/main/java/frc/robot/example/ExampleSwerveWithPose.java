@@ -150,7 +150,7 @@ public class ExampleSwerveWithPose extends SubsystemBase implements PathDrivetra
         this.modules = modules;
         this.moduleLocations = moduleLocations;
         this.kinematicsConfig = kinematicsConfig;
-        this.pathsConfig = PathsConfig.defaults(); // omega, alpha and jerk limits: placeholders, measure on the robot
+        this.pathsConfig = PathsConfig.defaults(); // omega and alpha limits: placeholders, measure on the robot
         this.kinematics = new DemaciaKinematics(kinematicsConfig, moduleLocations);
         this.limiter = new SwerveAccelerationLimiter(kinematicsConfig);
         this.pigeon = pigeon;

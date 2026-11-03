@@ -66,8 +66,6 @@ public class FollowPathCommand extends Command {
     static final double DT_MIN = 0.005;
     /** Loop period clamp [s] (8.2.2). */
     static final double DT_MAX = 0.10;
-    /** Largest hand-over distance d_h [m] (8.3.7); d_h = min(this, jerkMax*DT_NOM/kP^2). */
-    static final double D_H_MAX = 0.05;
     /** Correction clamp c_max [m/s] (8.3.8). */
     static final double C_MAX = 1.0;
     /** Minimum lookahead of the projection window [m] (8.2.3). */
@@ -129,7 +127,7 @@ public class FollowPathCommand extends Command {
     private double sStop = Double.NaN;
 
     // control state
-    private SpeedProfile.State lawState = new SpeedProfile.State(0.0, 0.0);
+    private double vCmd;                   // speed law command v_cmd (8.3.7a)
     private double vtPrev;
     private double vLimPrev;
     private double omegaPrev;
@@ -236,7 +234,7 @@ public class FollowPathCommand extends Command {
         pEnd = table.evaluate(length).position();
         timeout = config.timeoutFactor() * profile.profileTime() + config.timeoutMargin();
 
-        // reset the run (8.14): s = 0, (v_cmd, a_cmd) = (v0, 0)
+        // reset the run (8.14): s = 0, v_cmd = v0
         tStart = now;
         tPrev = Double.NaN;
         sHi = 0.0;
@@ -244,7 +242,7 @@ public class FollowPathCommand extends Command {
         sSubStart = 0.0;
         sStop = Double.NaN;
         sGoal = profile.nextStopS(0.0);
-        lawState = new SpeedProfile.State(v0, 0.0);
+        vCmd = v0;
         vtPrev = v0;
         vLimPrev = v0;
         omegaPrev = vm.omegaRadiansPerSecond;
@@ -395,7 +393,7 @@ public class FollowPathCommand extends Command {
         // 8.6, 8.7: state machine; ROTATE and DWELL are tested in the loop they are entered, so a zero dwell costs no loop
         switch (state) {
             case TRACK:
-                if (dGo <= dH || (lawState.v() == 0.0 && dGo <= dH + 2.0 * SpeedProfile.STOP_DIST_MARGIN)) {
+                if (dGo <= dH || (vCmd == 0.0 && dGo <= dH + SpeedProfile.REST_HAND_OVER_MARGIN)) {
                     vLimPrev = vtPrev;
                     tIn = 0.0;
                     state = sGoal >= length - S_TOL ? State.CAPTURE_END : State.CAPTURE_STOP;
@@ -438,7 +436,7 @@ public class FollowPathCommand extends Command {
             PathSample out = table.evaluate(sStop);
             double v = Math.max(0.0, vm.vxMetersPerSecond * out.tangent().getCos()
                     + vm.vyMetersPerSecond * out.tangent().getSin());
-            lawState = new SpeedProfile.State(v, 0.0);
+            vCmd = v;
             vtPrev = v;
             state = length < L_SHORT ? State.CAPTURE_END : State.TRACK;
             geometry(p);
@@ -454,11 +452,8 @@ public class FollowPathCommand extends Command {
             double sV = Math.min(lead, sGoal - dH);
             double c = clamp(-config.kN() * eN, -C_MAX, C_MAX);
             double budget = Math.sqrt(Math.max(0.0, constraints.vMax() * constraints.vMax() - c * c));
-            lawState = profile.step(lawState, sV, sGoal, Math.min(profile.capAt(sV), budget), dt);
-            if (lawState.v() > budget) { // 8.3.9: a jump of c cuts v_t at once and resets the law
-                lawState = new SpeedProfile.State(budget, Math.min(lawState.a(), 0.0));
-            }
-            vt = lawState.v();
+            vCmd = profile.speed(vCmd, sStar, sV, sGoal, budget, dt); // 8.3.9: a jump of c cuts v_t at once
+            vt = vCmd;
             PathSample look = sample(Math.min(lead, sGoal));
             vx = vt * look.tangent().getCos() - c * at.tangent().getSin();
             vy = vt * look.tangent().getSin() + c * at.tangent().getCos();
