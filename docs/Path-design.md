@@ -31,7 +31,7 @@ speed-up and the wheel-speed cap (`moduleRadius`, `PathsConfig.fromModules`); th
 **Jerk limit removed in v1** (user decision, 2026-11-03). The runtime speed command is the plain trapezoid law of sections 7.6.5 and 8.3.7:
 `v_cmd = min(vBack(s_v), sqrt(v_h^2 + 2·D·(s_goal - d_h - s_v)), sqrt(vMax^2 - c^2), v_prev + aAccEff·dt)`, with the lag lead
 `s_v = min(s* + v_prev·tau_lag, s_goal - d_h)`, `v_h = k_p·d_h`, D the smallest line aD up to the hand-over point, and aAccEff = 0 on a
-constant-speed arc. Braking is limited by aD through vBack (position-based); there are no stopDist cases, no landing rule, no D_brake,
+constant-speed arc except below the planned arc speed vF (a speed-up floor at aAcc after a correction-budget cut, so the robot cannot stall on an arc). Each braking term is used in the discrete form `sqrt(vE^2 + (D·dt)^2) - D·dt`, so one loop never brakes harder than D. Braking is limited by aD through vBack (position-based); there are no stopDist cases, no landing rule, no D_brake,
 no room-to-brake cap vJerk (the plain backward pass already leaves the braking room) and no offline simulation. `d_h` is a fixed
 0.05 m (`SpeedProfile.HAND_OVER`); the at-rest hand-over band is `d_h + 0.01 m`. `profileTime` is closed form: the span times of the
 passes (section 7.7) + dwells + the hand-over tail `max(0, ln(d_h/pos_tol)/k_p)` per goal. `PathConstraints` has no `jerkMax` and
@@ -1167,7 +1167,7 @@ and e_n late on the arc:
 **Inference:** while a_lat stays within what the robot can follow, the error is mostly a **steady lag** on the arc,
 about `a_lat·0.05/k_n`, for example `2.83·0.05/3 = 0.047 m`. Clothoids do not remove it; the follower's lookahead
 does (section 8.3.4). Clothoids matter when the robot is pushed near its limits (the last row), which the aLat cap
-is meant to prevent. This supports G1 in v1. The v1 speed law limits only the tangential jerk; the **vector** jerk of the command at
+is meant to prevent. This supports G1 in v1. The **vector** jerk of the command at
 line/arc joints (110 to 320 m/s^3 in the plant simulation, section 7.13.8) is not limited, and clothoids are the v2 fix for it. The toy model is not a swerve model (no module steering, no limiter).
 **Uncertain** how closely it matches the robot.
 
@@ -1507,15 +1507,15 @@ Caps from the heading:
   `1.2501^2/(2·4·pi) = 0.0622 rad = 3.56 deg <= 5 deg`.
 - Wheel cap with R_mod = 0.3889 m: `4.05/(1 + 0.5256·0.3889) = 3.363 m/s`, above the 2.7241 peak.
 - Result: the trapezoid profile time (no jerk limit) is 3.2723 s, the same as with no heading (script); no heading cap binds, so the
-  v1 run time (3.54 s with the jerk law) is unchanged as well.
+  v1 profileTime (3.4426 s) is unchanged as well.
 
 Variants (script):
 - **P1 at 180 deg.** The change is exactly 180 deg, so it turns CCW (+pi). theta' = pi/2.9885 = 1.0512 rad/m; the
   kink cap at P1 is `1.481/1.0512 = 1.4088 m/s` and binds, so the whole arc is driven at 1.4088 m/s (section 7.8).
-  Trapezoid profile time **4.2812 s** with the span method (v1 time with the jerk law 4.54 s); the grid oracle, which
+  Trapezoid profile time **4.2812 s** with the span method (v1 profileTime 4.2812 + 0.1703 = 4.4515 s); the grid oracle, which
   may change speed on the arc, gives 3.4372 s (Appendix B).
 - **P1.stop().** theta' = (pi/2)/2.8284 = 0.5554 rad/m on [0, 2.8284], 0 after. The robot reaches 90 deg exactly at
-  the stop; ROTATE is skipped unless the residual is more than 3 deg. Profile unchanged (trapezoid 3.8839 s; jerk law 4.32 s).
+  the stop; ROTATE is skipped unless the residual is more than 3 deg. Profile unchanged (trapezoid 3.8839 s; v1 profileTime 4.2245 s).
 - **P0.withAngle(0)** gives the same profile as the measured theta0 = 0.
 
 ### 6.12 Edge cases
@@ -1627,7 +1627,7 @@ Notes:
   through unchanged (**Fact** SwerveAccelerationLimiter.java:80), so nothing limits alpha today; the follower does
   (section 8.5.2).
 - A per-path override is a `with...` copy: `PathConstraints.fromConfig(cfg, pathsCfg).withVMax(2.0)`.
-- The robot settings that `KinematicsConfig` does not have (angular limits, jerk, module distance) live in the Path module's own
+- The robot settings that `KinematicsConfig` does not have (angular limits, module distance) live in the Path module's own
   `PathsConfig` (section 9.6). **Decision** (user): the Kinematics module is not changed.
 
 #### 7.2.2 Inputs that are not record fields
@@ -1744,8 +1744,8 @@ Rules:
 - `P_{n-1}.withVelocity(v)`: ignored in v1, warning W4 (the end speed is 0). In v2 it becomes the end speed (section 7.4.7).
 - A value above the arc's curvature cap (or vMax) has no effect; there is no warning in v1 (C2 is removed).
 
-Example: `P1.withVelocity(1.0)` on the shared example holds both arc spans at 1.0 m/s (the curvature cap is 2.3784 m/s with aLat = 4). v1 run time with the jerk law:
-**5.51 s** (3.53 s without the cap, 4.30 s with `P1.stop()`). The earlier ARC_VAR rule gave 3.7751 s (trapezoid, script) and 4.06 s (jerk law); those numbers in the text
+Example: `P1.withVelocity(1.0)` on the shared example holds both arc spans at 1.0 m/s (the curvature cap is 2.3784 m/s with aLat = 4). v1 profileTime:
+**5.43 s** (3.44 s without the cap, 4.22 s with `P1.stop()`). The earlier ARC_VAR rule gave 3.7751 s (trapezoid, script) and 4.06 s (old jerk law, v2 reference); those numbers in the text
 below and in 7.8 are the v2 reference.
 
 #### 7.4.3 Curvature cap
@@ -1980,13 +1980,13 @@ v_arc = min( sqrt(aLat/abs(kappa)),                curvature cap (7.4.3)
              withVelocity of the arc's waypoint,     point cap (7.4.2), when it does not make the arc ARC_VAR
              heading-kink cap at the waypoint,       (7.4.6)
              rotation and wheel caps of both arc spans,
-             vB at the arc exit,                     backward pass, jerk-aware on the line after the arc (below)
+             vB at the arc exit,                     backward pass (plain in v1; the jerk-aware vJerk below is v2 reference)
              vF at the arc entry )                   forward pass: the speed reached on a short line before it
 ```
 
 On the arc `a_t = 0` and `a_n = v_arc^2·abs(kappa) <= aLat`, so the arc is inside the ellipse by construction, with no
-mode loop and no traction share to tune. The runtime law follows the same rule: it reaches the arc speed with a = 0 by the
-arc entry and holds it on the arc; it does not speed up on a constant-speed arc and brakes there only in an emergency (section 7.13.4).
+mode loop and no traction share to tune. The v1 runtime law holds the arc speed on the arc; it speeds up there only below the planned
+arc speed vF (recovery after a correction-budget cut, section 8.3.7), never above it.
 A speed-up on the line after an arc starts at the arc exit.
 
 **ARC_VAR: the arc of a `withVelocity` point** (**Decision**, user: `withVelocity(v)` caps the speed at the point itself, so only
@@ -2249,7 +2249,7 @@ Geometry (section 5.8.7): LINE 2.8284 m, STOP at s = 2.8284, LINE 2.8284 m; L = 
 - Heading: theta' = 0.5554 rad/m before the stop, 0 after; the robot reaches 90 deg at the stop (section 6.11).
 - Motion time 3.8839 s (matches `2·sqrt(2.8284/3) = 1.9420` per leg).
 
-| Variant | Trapezoid motion (no jerk limit) | Dwell | Trapezoid total | v1 profileTime (jerk law, jerkMax = 50) | v1 timeout |
+| Variant | Trapezoid motion (no jerk limit) | Dwell | Trapezoid total | old profileTime (jerk law, v2 reference) | old timeout |
 |---|---|---|---|---|---|
 | P1.stop() | 3.8839 | 0 | 3.8839 s | **4.32 s** | **7.48 s** |
 | P1.stop(0.5) | 3.8839 | 0.5 | 4.3839 s | 4.82 s | 8.23 s |
@@ -2257,7 +2257,7 @@ Geometry (section 5.8.7): LINE 2.8284 m, STOP at s = 2.8284, LINE 2.8284 m; L = 
 | P1.stop(0.5), P1.withAngle(0), P2.withAngle(90 deg): the heading turns on the second leg (theta' = 0.5554), no cap binds (hand) | 3.8839 | 0.5 | 4.3839 s | 4.82 s | 8.23 s |
 | no stop (arc, shared example) | 3.2723 | 0 | 3.2723 s | 3.54 s | 6.31 s |
 
-The stop costs 0.61 s here with the trapezoid (0.78 s with the jerk law, 4.32 against 3.54 s). Keeping the arc with a stop on it (the rule before decision 17) would take 4.1048 s of motion
+The stop costs 0.61 s here with the trapezoid (v1 profileTime 4.2245 against 3.4426 s; 0.78 s with the old jerk law). Keeping the arc with a stop on it (the rule before decision 17) would take 4.1048 s of motion
 (script, computed with the earlier arc rule that allowed braking on the arc), 0.22 s slower than the two straight lines. That supports decision 17.
 
 ### 7.11 Swerve wheel-speed limit with rotation
@@ -2850,7 +2850,7 @@ Runtime samples:
 | 5.5 | 3, slow-down | `sqrt(6·0.4769) = 1.6916` | 1.6916 |
 
 Variants, trapezoid profile without a jerk limit (script); these are the limits and lower bounds the law works with. The v1
-profileTime and timeout (jerk law) are in section 7.13.7 where computed:
+profileTime and timeout of the old jerk law (v2 reference) are in section 7.13.7 where computed:
 
 | Variant | Key numbers | Trapezoid time | v1 profileTime / timeout |
 |---|---|---|---|
@@ -2877,13 +2877,11 @@ buildProfile(path(flipped), c: PathConstraints, cfg: KinematicsConfig?, R_mod, v
   for each sub-profile [s_a, s_b] between stops:
       J[j] = min(vCap[j-1], vCap[j], wpVel(j), headingKinkCap(j));  J[first] uses normal caps;  J[last] = 0
       vB = J; for j = last-1 .. first: vB[j] = min(vB[j], sqrt(vB[j+1]^2 + 2*aD[j]*l[j]))
-                                       if (line j starts at a constant-arc exit) or (j is the first span of an ARC_VAR arc):
-                                           vB[j] = min(vB[j], vJerk(j))                                  # 7.8, bisection
       vF = vB; vF[first] = min(vF[first], subStartSpeed)                           # v0 for the first, 0 after a stop
       for j = first+1 .. last: vF[j] = min(vF[j], Fup(j-1, vF[j-1], l[j-1]))      # trapezoid or motor ramp; vF[j-1] on a constant arc
       t_k = spanTime(vF[k], vF[k+1], vCap[k], aA[k], aD[k], l[k])                      # closed form
-  spanTimeLowerBound = sum t_k
-  profileTime = offlineSpeedLaw(v0, spans, constraints, guard = 10*spanTimeLowerBound + 10) + sum_goals handoverTail + sum_stops dwell + lastDwell   # 7.13.6
+  spanTime = sum t_k
+  profileTime = startDwell + spanTime + sum_goals (max(0, ln(d_h/pos_tol)/k_p) + dwell(goal))   # closed form, 7.12
 
 spanLimits(k):
   cap = c.vMax; aA = c.aAcc; aD = c.aDec
@@ -2894,7 +2892,10 @@ spanLimits(k):
   if kind[k] == ARC_VAR and cfg: aA = min(aA, 0.9*cfg.maxForwardAccel*(1 - cap/cfg.freeSpeed))   # motor at the cap (7.8)
   return (cap, aA, aD)                       # LINE: Fup uses min(aA, 0.9*motor curve) in closed form; RHO = ARC_RHO = 0.8
 
-runtime (each loop, current sub-profile):  (v_cmd, a_cmd) = speedLaw.step(v_cmd, a_cmd, s_v, cap)   # 7.13.9; follower 8.3.1, 8.14
+runtime (each loop, current sub-profile):  v_cmd = speed(v_cmd, s*, s_v, s_goal, sqrt(vMax^2 - c^2), dt)   # 8.3.7; follower 8.3.1, 8.14
+  speed: vE = min(vBack(s_v), sqrt(v_h^2 + 2*D*(s_goal - d_h - s_v)))  each term in the discrete form sqrt(vE^2 + (D*dt)^2) - D*dt
+         up = v_cmd + aAccEff(s*)*dt;  on a constant arc below vF: up = min(vF, v_cmd + aAcc*dt)
+         return max(0, min(vE, cap, up))
 ```
 
 Tests: section 13.3.
@@ -2914,7 +2915,7 @@ The follower uses only these functions of the active (already flipped) path and 
 | `L` | total length [m] | goal, events, clamps |
 | `x(s)`, `T(s)`, `N(s)`, `kappa(s)` | point, tangent, left normal, curvature (s clamped to [0, L]); `evaluateLeft` for left limits | translation command |
 | `project(p, sMin, sMax, s_prev)` | `(s*, e_n)` (section 5.10.4) | progress |
-| `speedLaw.step(v_cmd, a_cmd, s_v, cap)` | the jerk-aware speed law of the current sub-profile (section 7.13): next (v_cmd, a_cmd) | speed command (8.3.7) |
+| `speed(v_cmd, s*, s_v, s_goal, cap, dt)` | the plain trapezoid speed law of the current sub-profile (sections 7.6.5, 8.3.7): next v_cmd | speed command (8.3.7) |
 | `vBack(s)`, `vCap` | braking envelope and span cap (section 7.1); the law's limits | cap, telemetry |
 | `aAccEff(v, s)` | effective speed-up limit (section 7.6.5), the law's Amax | CAPTURE speed-up limit (8.3.7e) |
 | `vProf(s)` | forward-pass profile | logging only |
@@ -3059,7 +3060,7 @@ s_v     = min(s* + v_t_prev * tau_lag, s_goal - d_h)              // lag-led pro
 d_go    = (s_goal - s*) - e_t                                     // signed distance to go (8.3.7)
 c       = clamp( -k_n * e_n, -c_max, +c_max )                     // 8.3.2, 8.3.8
 cap     = min( vCap[span at s_v], sqrt(vMax^2 - c^2) )            // speed budget (8.3.9)
-(v_cmd, a_cmd) = speedLaw.step(v_cmd, a_cmd, s_v, cap)            // jerk-aware online trapezoid (section 7.13)
+v_cmd = speed(v_cmd, s*, s_v, s_goal, cap, dt)                    // plain online trapezoid (sections 7.6.5, 8.3.7)
 v_t     = v_cmd
 V       = v_t * T(s_L) + c * N(s*)                                // field frame [m/s]
 v_t_prev = v_t
@@ -3182,7 +3183,7 @@ projection is clamped, and it is used in one place, the distance to go (8.3.7).
 
 **Changed in v1 (jerk limit removed):** (a) is the jerk-free form `v_cmd = min(vBack(s_v), sqrt(v_h^2 + 2·D·(s_goal - d_h - s_v)),
 sqrt(vMax^2 - c^2), v_cmd_prev + aAccEff·dt)` (state v_cmd only; reset to `max(0, V_meas·T_out)` on release from a stop); the goal is
-the envelope that reaches v_h at s_goal - d_h with D the smallest line aD on the way, so the CAPTURE step stays continuous; d_h is a
+the envelope that reaches v_h at s_goal - d_h with D the smallest line aD on the way (both braking terms in the discrete form `sqrt(vE^2 + (D·dt)^2) - D·dt`, so the law reaches the hand-over at about 0.10 m/s and CAPTURE ramps it to at most v_h); on a constant arc the law speeds up at aAcc while below the planned arc speed vF; d_h is a
 fixed 0.05 m; the at-rest hand-over band in (e) is `d_h + 0.01 m`. (b), (c) apart from the d_h formula, (d) and (e) are unchanged.
 From rest the commands are 0.06, 0.12, 0.18 m/s (EX). The text below is the jerk-law version (v2 reference).
 
@@ -4374,16 +4375,16 @@ gaps are intentional.
 | PROF-6 | any path, any s | vProf <= vCap; `vProf^2·abs(kappa) <= aLat + 1e-9`; vProf constant on every constant-speed arc (a_t = 0 there); on ARC_VAR spans `vProf^2·abs(kappa) <= rho_lat·aLat + 1e-9` and `(a_t/aT)^2 + (a_n/aLat)^2 <= 1 + 1e-9` |
 | PROF-7 | span boundaries | every segment start, waypoint s and stop s is a boundary (abs(diff) < 1e-9) |
 | PROF-8 | naive-trapezoid trap: a 0.3 m span entered at 3 m/s must end at 0, aDec 3 | vB at its entry = 1.3416; the previous span brakes 3 -> 1.3416 over 1.2 m |
-| PROF-9 | start stall: v0 = 0, ideal robot (s += v_cmd·dt), jerkMax = 50 | leaves s = 0; v_cmd = 0.01, 0.04, 0.09 m/s after 1, 2, 3 loops (aAcc 3); jerk-free limit 0.06, 0.12, 0.18 |
+| PROF-9 | start stall: v0 = 0, ideal robot (s += v_cmd·dt) | leaves s = 0; v_cmd = 0.06, 0.12, 0.18 m/s after 1, 2, 3 loops (aAcc 3) |
 | PROF-12 | sideways start V_meas = (0.5, 1.0), T(0) = (1, 0) | v0 = 0.5; no warning |
 | PROF-13 | V_meas = (-1, 0), T(0) = (1, 0) | v0 = 0 |
 | PROF-14 | shared example + P1.withVelocity(1.0), span method | both arc spans ARC_VAR: cap 2.1273, aA = aD = 1.8; junctions vF = [0, 2.1273, 1.0, 2.1273, 0]; braking for the arc from s = 1.1425 (peak 2.6182), for P1 from s = 2.0092; total 3.7751 s; v1 time 4.06 s, timeout 7.09 s |
 | PROF-15 | same, grid oracle | 3.5770 s |
 | PROF-16 | `withVelocity(0)` on P1 | identical to P1.stop() |
 | PROF-17 | `withVelocity(-1)` | IAE V11 |
-| PROF-18 | P1.stop() on the shared example | two sub-profiles; trapezoid peaks 2.9130 at s = 1.4142 and 4.2426; trapezoid motion 3.8839 s; v1 profileTime 4.32 s, timeout 7.48 s |
-| PROF-19 | P1.stop(0.5); P1.stop(1.5) | v1 profileTime 4.82 s (timeout 8.23 s); 5.82 s (timeout 9.73 s) |
-| PROF-20 | stop restart: sub-profile 2 of P1.stop() | vBack(2.8284) = 4.0 (> 0); law restarts from (0, 0): 0.01, 0.04, 0.09 m/s after release |
+| PROF-18 | P1.stop() on the shared example | two sub-profiles; trapezoid peaks 2.9130 at s = 1.4142 and 4.2426; trapezoid motion 3.8839 s; v1 profileTime 4.2245 s (+ 2 tails), timeout 7.34 s |
+| PROF-19 | P1.stop(0.5); P1.stop(1.5) | v1 profileTime 4.7245 s (timeout 8.09 s); 5.7245 s (timeout 9.59 s) |
+| PROF-20 | stop restart: sub-profile 2 of P1.stop() | vBack(2.8284) = 4.0 (> 0); law restarts from 0: 0.06, 0.12, 0.18 m/s after release |
 | PROF-21 | wheel cap: theta' = 1 rad/m, R_mod = 0.3889, vWheelMax 4.5, margin 0.9 | cap = 4.05/1.3889 = 2.916 |
 | PROF-22 | heading 170 deg -> -170 deg over 2 m | see HEAD-5 |
 | PROF-23 | heading 0 -> 180 deg at P1, alphaMax 4·pi, e_allow 5 deg | J at P1 = 1.4088 (kink cap); the whole arc at 1.4088, junctions [0, 1.4088, 1.4088, 1.4088, 0]; 4.2812 s (grid oracle 3.4372 s) |
@@ -4395,7 +4396,21 @@ gaps are intentional.
 | PROF-29 | PathConstraints with aLat = 0 or NaN | IAE V16 |
 | PROF-30 | limiter pass-through: run the profile through `SwerveAccelerationLimiter` with the default config (simulation) | output equals input every loop (difference < 1e-9) on the shared example |
 | PROF-31 | measured start v0 = 1.5, shared example | 2.9051 s |
-| PROF-33 | hand-over tail, k_p 3, jerkMax 50 | d_h = 0.05 m, tail `ln(0.05/0.03)/3 = 0.170 s` per goal |
+| PROF-33 | hand-over, k_p 3 | d_h = 0.05 m (fixed), v_h = 0.15 m/s; tail `ln(0.05/0.03)/3 = 0.170 s` per goal |
+| PROF-L1 | plain law, ideal tracking: shared example, P1.stop(), P1.withVelocity(1.0), 150 random paths | never above vBack(s_v); per-loop deceleration <= aDec (discrete form `sqrt(vE^2 + (D·dt)^2) - D·dt`); no stall; never past a goal; shared example 3.39 s, profileTime 3.4426 s |
+| PROF-L2 | hand-over envelope, shared example, EX | at s_goal - d_h: `sqrt(0.15^2 + 0.06^2) - 0.06 = 0.1016 m/s`; 1 m before the end: discrete form of `sqrt(0.15^2 + 2·3·0.95)` |
+| PROF-L3 | correction-budget cut on a constant arc (v_cmd from 0) | speeds up at aAcc to the planned arc speed vF (2.3784 m/s on the shared example) and holds it; never above vF |
+| PROF-L4 | bad input (NaN s, cap or dt; dt = 0) | holds v_prev |
+| PROF-38 | ARC_VAR selection: tight arc with P1.withVelocity(v), v = 0.5, 1.0 and 1.2, EX | 0.5 < ARC_VAR cap 0.9798: both arc spans ARC_VAR, 4.5577 s; 1.0 (between 0.9798 and the curvature cap 1.0954): constant arc at 1.0, 4.4075 s; 1.2: constant arc at its cap 1.0954, 4.3210 s, no warning |
+
+The old physics test "turn in place pi/2 in 0.7071 s" is removed: v1 has no turn-in-place step (resolution R1).
+
+#### 13.3.1 v2 reference: jerk-aware law (section 7.13)
+
+Removed in v1; kept as v2 reference. These cases test the jerk-aware law, stopDist, vJerk and the offline profileTime, which are not in the v1 code.
+
+| ID | Input | Expected |
+|---|---|---|
 | PROF-34 | law, ideal tracking: shared example and tight arc, EX and DEF + motor, jerkMax 30 to 150 | a = 0 at every arc entry (within one loop), no "up" on a constant-speed arc, speed constant on it; traction-ellipse use at the arc entry <= 1 (largest 0.9982 in the script, at jerkMax 10) |
 | PROF-35 | two arcs joined by a 0.7729 m line: (0,0), (4,0), (5,1.2).withRadius(1.0), (9,1.2), EX, jerkMax 50 | arc speeds 1.2498 and 2.0; the speed changes only on the line; ellipse use at the second arc entry 0.9639; time to 0.03 m 5.22 s |
 | PROF-36 | 6 m straight line cut into 0.1 m spans (face-target style), EX, jerkMax 50 | 3.08 s (the uncut line 3.06 s): line-to-line junctions do not force a = 0 |
@@ -4416,10 +4431,8 @@ gaps are intentional.
 | PROF-J17 | random span chains (lines with random aD, constant-speed arcs, ARC_VAR arcs with a `withVelocity` point, point caps, short lines after arcs into slower arcs, stops, the end), jerkMax <= the C2 threshold `max(aAcc, aDec)/(5·dt_nom)` | speed at any junction at most 4 mm/s above vB and at a `withVelocity` point at most 4 mm/s above v (interpolated; never above in the script), no stall, traction-ellipse use on arcs <= 1 at the end of every loop, except the one-loop constant-arc entry effect (<= about 1.08; section 7.8) (<= 0.99995 in the earlier chains, <= 0.99944 with ARC_VAR arcs, <= 0.9505 on ARC_VAR spans). Also log the use interpolated at junctions next to arcs (up to 1.074 at constant-arc entries in the script, section 7.8). Above the threshold the speed reached 6.7 mm/s above vB and the use 1.97 (documented, section 7.8) |
 | PROF-J18 | DEF, line 3 m, arc r = 2 (2 m), 0.75 m line, arc r = 0.5 (0.8 m), line 2 m; jerkMax 50 | vJerk caps the first arc at 3.035 m/s (jerk-free pass: 3.795); no braking on either arc; ellipse use <= 1 (0.869 in the script) |
 | PROF-37 | ARC_VAR law, ideal tracking: shared example + P1.withVelocity(1.0) and tight arc + P1.withVelocity(0.5), EX, jerkMax 10 to 150 | a = 0 at the ARC_VAR entry (within one loop); braking and speed-up on the arc within aA = aD = 1.8; speed at P1 at most v + 4 mm/s (0.9746 and 0.5000 m/s at jerkMax 50 in the script); traction-ellipse use on the arc <= 1 (0.9608 and 0.8885); time to 0.03 m 4.06 and 5.00 s at jerkMax 50 |
-| PROF-38 | ARC_VAR selection: tight arc with P1.withVelocity(v), v = 0.5, 1.0 and 1.2, EX | 0.5 < ARC_VAR cap 0.9798: both arc spans ARC_VAR, 4.5577 s; 1.0 (between 0.9798 and the curvature cap 1.0954): constant arc at 1.0, 4.4075 s; 1.2: constant arc at its cap 1.0954, 4.3210 s, no warning |
 | PROF-J19 | law comes to rest within d_h + 2·STOP_DIST_MARGIN of a goal (jerkMax 150, rest 5.2 mm before the hand-over point) | hands over to CAPTURE at rest; the offline profileTime run ends; without the rule it never ends (guard reached) |
 
-The old physics test "turn in place pi/2 in 0.7071 s" is removed: v1 has no turn-in-place step (resolution R1).
 
 ### 13.4 Follower
 

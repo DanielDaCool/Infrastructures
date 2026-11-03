@@ -161,6 +161,7 @@ final class SpeedProfile {
     private final double[] cap;
     private final double[] aA;
     private final double[] aD;
+    private final double[] aUp; // speed-up limit without the constant-arc rule: recovery below the plan on an arc
 
     // junctions j = 0..K
     private final double[] js;
@@ -279,6 +280,7 @@ final class SpeedProfile {
         cap = new double[kCount];
         aA = new double[kCount];
         aD = new double[kCount];
+        aUp = new double[kCount];
         for (int k = 0; k < kCount; k++) {
             double vc = c.vMax();
             double a1 = c.aAcc();
@@ -299,6 +301,7 @@ final class SpeedProfile {
                 }
             }
             cap[k] = vc;
+            aUp[k] = dth > 0.0 ? Math.min(c.aAcc(), c.alphaMax() / dth) : c.aAcc();
             aA[k] = a1;
             aD[k] = a2;
         }
@@ -463,8 +466,10 @@ final class SpeedProfile {
      * One loop of the runtime speed law (7.6.5, 8.3.7a):
      * {@code v = min(vBack(sV), sqrt(v_h^2 + 2 D (sGoal - d_h - sV)), cap, vPrev + aAccEff(s) dt)}, with
      * {@code v_h = kP d_h} and D the smallest line aD up to the hand-over point. Braking is tied to
-     * position (vBack and the hand-over envelope, limited by aD); speed-up is a time ramp, 0 on a
-     * constant arc. A non-finite input, or dt &lt;= 0, holds vPrev.
+     * position (vBack and the hand-over envelope, limited by aD), each in the discrete form
+     * {@code sqrt(vE^2 + (D dt)^2) - D dt} so one loop never brakes harder than D; speed-up is a time
+     * ramp, 0 on a constant arc except below the planned arc speed vF (recovery after a correction-budget cut).
+     * A non-finite input, or dt &lt;= 0, holds vPrev.
      *
      * @param vPrev previous speed command [m/s]
      * @param s     progress s* (selects the speed-up limit)
@@ -481,9 +486,26 @@ final class SpeedProfile {
         }
         double sHand = sGoal - HAND_OVER;
         double vH = kP * HAND_OVER;
-        double vHand = Math.sqrt(vH * vH + 2.0 * brakeLimit(sV, sHand) * Math.max(0.0, sHand - sV));
-        double v = Math.min(Math.min(vBack(sV, sGoal), vHand), cap);
-        return Math.max(0.0, Math.min(v, Math.max(0.0, vPrev) + accelLimit(s) * dt));
+        double d = brakeLimit(sV, sHand);
+        double vHand = discrete(Math.sqrt(vH * vH + 2.0 * d * Math.max(0.0, sHand - sV)), d, dt);
+        int kb = spanInSub(sV, sGoal);
+        double q = Math.max(0.0, Math.min(len[kb], sV - sStart[kb]));
+        double vBk = Math.min(this.cap[kb], discrete(Math.sqrt(vB[kb + 1] * vB[kb + 1] + 2.0 * aD[kb] * (len[kb] - q)),
+                aD[kb], dt));
+        double v = Math.min(Math.min(vBk, vHand), cap);
+        double vp = Math.max(0.0, vPrev);
+        int k = spanAt(s);
+        double up = vp + accelLimit(s) * dt;
+        if (kind[k] == Kind.ARC && vp < vF[k]) {
+            up = Math.min(vF[k], vp + aUp[k] * dt); // speed-up floor: back to the planned arc speed, never above
+        }
+        return Math.max(0.0, Math.min(v, up));
+    }
+
+    /** @return the discrete braking form of the envelope speed vE with deceleration d: v with v^2 + 2 d dt v = vE^2 */
+    private static double discrete(double vE, double d, double dt) {
+        double b = d * dt;
+        return b > 0.0 ? Math.sqrt(vE * vE + b * b) - b : vE;
     }
 
     // ================================================================ queries
