@@ -54,6 +54,8 @@ are handled automatically.
 | [QuestNavLib](https://questnav.gg/) | 2026-2.2.0 | `Quest` source |
 | [LimelightHelpers](https://github.com/LimelightVision/limelightlib-wpijava) | Bundled | Limelight sources |
 
+This package is self-contained: it does not need Kinematics or Path.
+
 ## Installation
 
 1. Copy [`Infrastructures/src/main/java/frc/robot/RobotPose`](.)

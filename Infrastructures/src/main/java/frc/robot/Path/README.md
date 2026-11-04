@@ -6,8 +6,9 @@
 
 Autonomous paths for swerve robots. You write the points the robot must drive through. Path rounds
 the corners, picks a heading and a speed for every part of the path, and a command drives the robot
-along it. It uses the [Kinematics](../Kinematics/README.md) module for the drivetrain and works with any pose
-source, for example [RobotPose](../RobotPose/README.md).
+along it. It works with any swerve drivetrain and any pose source: you implement `getPose()` (from odometry,
+a pose estimator or vision), `getFieldSpeeds()` and a field-relative drive method. The only code it needs from
+outside its own package is `KinematicsConfig.java` (see [Installation](#installation)).
 
 > [!WARNING]
 > **Status: implemented; unit-tested in simulation (JUnit, not committed); not yet run on a robot.** The
@@ -52,13 +53,18 @@ source, for example [RobotPose](../RobotPose/README.md).
 |---|---|
 | [WPILib / GradleRIO](https://docs.wpilib.org/) | 2026.2.1 |
 | Java | 17 |
-| [Kinematics](../Kinematics/README.md) module | For the drivetrain (drive method with the acceleration limiter) |
+| `frc.robot.Kinematics.KinematicsConfig` | One small settings class (speed and acceleration limits); Path imports it. Part of the Kinematics package |
 | Vendor libraries | None |
 
 ## Installation
 
 1. Copy `Infrastructures/src/main/java/frc/robot/Path` into your robot project, keeping the same package path.
-2. Make sure your drivetrain uses the Kinematics module, and make it implement `PathDrivetrain` (see below).
+2. Copy `Infrastructures/src/main/java/frc/robot/Kinematics/KinematicsConfig.java` into your project too (same package path,
+   `frc/robot/Kinematics`). It is a plain settings class with no other dependencies. Path reads only `maxAllowedModuleVelocity`, `maxForwardAccel`,
+   `maxSkidAccel`, `maxTiltAccelFront` and `maxTiltAccelSide` from it, and only to compute default limits. If you already use the whole
+   Kinematics package, it is already there.
+3. Make your drivetrain implement `PathDrivetrain` (see [Quick start](#quick-start)). Any pose source works; the drive method
+   should send the field-relative speeds through your own swerve code (with an acceleration limiter if you have one).
 
 ## Quick start
 
@@ -69,7 +75,7 @@ Path path = new Path(new Point(1, 2), new Point(3, 4), new Point(5, 2));   // al
 ```
 
 **2. Implement `PathDrivetrain` on your drivetrain.** The follower needs the pose, the real speed of the robot and a way
-to drive it. It is already done in `ExampleSwerveWithPose`, together with `follow(Path)` and `followCommand(Path)` (steps 3 and 4):
+to drive it:
 
 ```java
 public class Swerve extends SubsystemBase implements PathDrivetrain {
@@ -115,7 +121,11 @@ return Commands.defer(() -> {
 }, Set.of(swerve));
 ```
 
-`ExampleSwerveWithPose.follow(Path)` does exactly this (with `followCommand(path)` = `new FollowPathCommand(this, path).withConfig(followerConfig)`) (its `isRedAlliance()` reads `DriverStation.getAlliance()`).
+`isRed` and `setStartPose` are your own: `isRed` reads `DriverStation.getAlliance()`, and `setStartPose` resets your pose
+estimator or odometry.
+
+In the full project, `frc/robot/example/ExampleSwerveWithPose.java` shows these steps in one drivetrain (it also uses the
+RobotPose and Kinematics packages; you do not need it to use Path).
 
 > [!IMPORTANT]
 > - Set every option **before** you schedule the command. A change takes effect only the next time it starts.
