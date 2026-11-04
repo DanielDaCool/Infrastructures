@@ -5,11 +5,11 @@
 [![Phoenix 6](https://img.shields.io/badge/Phoenix%206-26.1.0-green)](https://v6.docs.ctr-electronics.com/)
 [![QuestNav](https://img.shields.io/badge/QuestNav-2026--2.2.0-purple)](https://questnav.gg/)
 
-Infrastructures is a set of Java modules for FRC robot code. It currently has two: swerve
-kinematics with an acceleration limiter, and pose estimation that fuses wheel odometry, Limelight
-and Quest data. Each module can be used on its own. You copy its package into your robot project
-and call it from your own drivetrain code. This branch (`development`) holds both modules
-together so they can be tested as one project.
+Infrastructures is a set of Java modules for FRC robot code. It currently has three: swerve
+kinematics with an acceleration limiter, pose estimation that fuses wheel odometry, Limelight
+and Quest data, and a distance-based path planner and follower. Each module can be used on its
+own. You copy its package into your robot project and call it from your own drivetrain code.
+This branch (`development`) holds all three modules together so they can be tested as one project.
 
 ## Modules
 
@@ -107,6 +107,7 @@ path.warnings();                           // build warnings (merged points, aut
 1. Copy the package you want into your robot project, keeping the same package path:
    - [`frc/robot/Kinematics`](Infrastructures/src/main/java/frc/robot/Kinematics)
    - [`frc/robot/RobotPose`](Infrastructures/src/main/java/frc/robot/RobotPose)
+   - [`frc/robot/Path`](Infrastructures/src/main/java/frc/robot/Path) (also needs Kinematics; WPILib only)
 2. For RobotPose, install the Phoenix 6 and QuestNav vendor libraries (WPILib: Manage Vendor
    Libraries), or copy the files from [`Infrastructures/vendordeps`](Infrastructures/vendordeps).
    Kinematics needs no vendor libraries.
@@ -158,6 +159,8 @@ the conflict for good.
 ├── docs/
 │   ├── Kinematics.md            Kinematics guide
 │   ├── Kinematics-design.md     Kinematics design notes
+│   ├── Path.md                  Path guide
+│   ├── Path-design.md           Path design notes
 │   ├── RobotPose.md             RobotPose guide
 │   ├── RobotPose-design.md      RobotPose design notes
 │   └── library-plan.md          Plan for packaging as one library
@@ -168,6 +171,7 @@ the conflict for good.
     └── src/main/java/frc/
         └── robot/
             ├── Kinematics/      Swerve kinematics, acceleration limiter
+            ├── Path/            Distance-based path planner and follower
             ├── RobotPose/       Estimation/ (odometry, pose estimator), Vision/ (sources, configs)
             ├── example/         ExampleChassis, ExampleSwerveWithPose
             └── Main, Robot, RobotContainer
