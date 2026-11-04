@@ -6,8 +6,8 @@
 
 Autonomous paths for swerve robots. You write the points the robot must drive through. Path rounds
 the corners, picks a heading and a speed for every part of the path, and a command drives the robot
-along it. It uses the [Kinematics](Kinematics.md) module for the drivetrain and works with any pose
-source, for example [RobotPose](RobotPose.md).
+along it. It uses the [Kinematics](../Kinematics/README.md) module for the drivetrain and works with any pose
+source, for example [RobotPose](../RobotPose/README.md).
 
 > [!WARNING]
 > **Status: implemented; unit-tested in simulation (JUnit, not committed); not yet run on a robot.** The
@@ -15,7 +15,7 @@ source, for example [RobotPose](RobotPose.md).
 
 > [!NOTE]
 > This page is the student guide. The geometry, the heading and speed profiles, the follower and every
-> setting are in [Path-design.md](Path-design.md), which also keeps the designs of features that v1 does not have.
+> setting are in [Path-design.md](../../../../../../../docs/Path-design.md), which also keeps the designs of features that v1 does not have.
 
 ## Contents
 
@@ -52,7 +52,7 @@ source, for example [RobotPose](RobotPose.md).
 |---|---|
 | [WPILib / GradleRIO](https://docs.wpilib.org/) | 2026.2.1 |
 | Java | 17 |
-| [Kinematics](Kinematics.md) module | For the drivetrain (drive method with the acceleration limiter) |
+| [Kinematics](../Kinematics/README.md) module | For the drivetrain (drive method with the acceleration limiter) |
 | Vendor libraries | None |
 
 ## Installation
@@ -298,4 +298,4 @@ All paths are relative to `Infrastructures/src/main/java/frc/robot/Path` (`frc.r
 | `PathsConfig.java`, `PathFollowerConfig.java` | Robot settings, and follower settings (gains, tolerances, timeout, flip, field size, `FlipMode`), with defaults |
 | `PathGeometry.java`, `SpeedProfile.java` | Internal (corner geometry, heading and speed profiles); not for use in robot code |
 
-The full design is in [Path-design.md](Path-design.md).
+The full design is in [Path-design.md](../../../../../../../docs/Path-design.md).

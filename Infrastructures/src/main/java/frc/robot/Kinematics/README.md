@@ -11,7 +11,7 @@ it drives and spins at the same time. It is a drop-in replacement for DemaciaCod
 
 > [!NOTE]
 > This README is the student guide. The full design, the math, simulation results and every
-> setting are documented in [Kinematics-design.md](Kinematics-design.md).
+> setting are documented in [Kinematics-design.md](../../../../../../../docs/Kinematics-design.md).
 
 ## Contents
 
@@ -61,7 +61,7 @@ Average distance from the path in simulation:
 
 ## Installation
 
-1. Copy [`Infrastructures/src/main/java/frc/robot/Kinematics`](../Infrastructures/src/main/java/frc/robot/Kinematics)
+1. Copy [`Infrastructures/src/main/java/frc/robot/Kinematics`](.)
    into your robot project, keeping the same package path.
 2. Follow [Getting started](#getting-started).
 
@@ -162,7 +162,7 @@ SwerveAccelerationLimiter limiter = new SwerveAccelerationLimiter(kinematicsConf
 ```
 
 The values are copied when the kinematics and the limiter are created, so finish the config
-first. The limiter's settings are in [Kinematics-design.md](Kinematics-design.md#tuning-the-limits).
+first. The limiter's settings are in [Kinematics-design.md](../../../../../../../docs/Kinematics-design.md#tuning-the-limits).
 
 | Setting | Description | How to find it | Default |
 |---|---|---|---|
@@ -190,9 +190,9 @@ the robot keeps turning fast but drives much slower.
 
 Also set `lastFieldSpeeds` to the measured speeds when something else drove the robot last
 loop, and turn it on a gyro reset. The example chassis
-[`ExampleChassis.java`](../Infrastructures/src/main/java/frc/robot/example/ExampleChassis.java)
+[`ExampleChassis.java`](../example/ExampleChassis.java)
 shows all of it; see also
-[Kinematics-design.md](Kinematics-design.md#adding-the-acceleration-limit-to-your-chassis).
+[Kinematics-design.md](../../../../../../../docs/Kinematics-design.md#adding-the-acceleration-limit-to-your-chassis).
 
 ## Building
 
@@ -204,13 +204,13 @@ From the `Infrastructures` directory:
 
 Simulation results do not replace testing on the robot. Check the settings above and the
 module directions on real hardware; see
-[Kinematics-design.md](Kinematics-design.md#checking-it-on-the-robot).
+[Kinematics-design.md](../../../../../../../docs/Kinematics-design.md#checking-it-on-the-robot).
 
 ## Troubleshooting
 
 | Symptom | Likely cause |
 |---|---|
-| Robot turns the wrong way after the import change | Your chassis used a different version of the old kinematics; see [Differences from DemaciaCode](Kinematics-design.md#differences-from-demaciacode). |
+| Robot turns the wrong way after the import change | Your chassis used a different version of the old kinematics; see [Differences from DemaciaCode](../../../../../../../docs/Kinematics-design.md#differences-from-demaciacode). |
 | Drives slower than expected while turning | `maxAllowedModuleVelocity` is higher than the wheels can really reach, or a limiter is used without the line above. |
 | Curves when driving and spinning | `latency` is too small (or too big). |
 | Wheels snap to 0° when stopping | The module code overrides speed-0 states. |

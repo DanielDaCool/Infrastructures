@@ -2,12 +2,12 @@
 
 **Status: implemented; unit-tested in simulation (JUnit, not committed); not yet run on a robot. Numbers marked (script) were computed with Python re-implementations; in v1 the Java `profileTime` is a simulation of the per-loop speed law at build plus the hand-over tail (see the v1 scope). Line numbers cited for `ExampleSwerveWithPose.java` are from the file before `getFieldSpeeds()` and `follow(Path)` were added.**
 
-The student guide is [Path.md](Path.md). This page has everything behind it: how a list of points
+The student guide is [Path README](../Infrastructures/src/main/java/frc/robot/Path/README.md). This page has everything behind it: how a list of points
 becomes a path, how the heading and the speed are chosen along it, how the follow command drives
 the robot, the full API, every default, and the test cases.
 
-The code is in `Infrastructures/src/main/java/frc/robot/Path` (package `frc.robot.Path`). It uses the [Kinematics](Kinematics.md) module on the drivetrain side and takes
-the pose from a `Supplier<Pose2d>`, so any pose source works, for example [RobotPose](RobotPose.md).
+The code is in `Infrastructures/src/main/java/frc/robot/Path` (package `frc.robot.Path`). It uses the [Kinematics](../Infrastructures/src/main/java/frc/robot/Kinematics/README.md) module on the drivetrain side and takes
+the pose from a `Supplier<Pose2d>`, so any pose source works, for example [RobotPose](../Infrastructures/src/main/java/frc/robot/RobotPose/README.md).
 
 ## v1 scope (simplified, 2026-11-03)
 

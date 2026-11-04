@@ -1,6 +1,6 @@
 # Kinematics – design and details (for mentors and developers)
 
-The student guide is the [README](../README.md). This page has everything behind it: how the
+The student guide is the [README](../Infrastructures/src/main/java/frc/robot/Kinematics/README.md). This page has everything behind it: how the
 kinematics and the limiter work, what each fix does with the simulation numbers, the full API,
 tuning and the differences from DemaciaCode.
 

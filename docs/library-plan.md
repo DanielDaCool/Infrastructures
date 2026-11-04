@@ -27,7 +27,7 @@ and uses it **without copying or changing the code**.
 - Done on `development` (merge commits, history kept). After testing, merge `development` into
   `main`; the module branches stay until the owner removes them.
 - Module branch READMEs conflict with `development`'s root README on every merge: keep
-  `development`'s README and apply the module change to `docs/Kinematics.md` or `docs/RobotPose.md`.
+  `development`'s README and apply the module change to the module README.
 
 ### 2. One package
 Root package **`frc.demacia.infrastructures`** (doesn't clash with `frc.robot` in team projects or
@@ -99,7 +99,7 @@ Team side: VS Code → WPILib → Manage Vendor Libraries → Install new librar
 ### 5. Docs
 - Root `README.md` from `development`, changed to: install (vendordep URL) instead of copying
   packages, new package names, no branch-copy instructions.
-- `docs/Kinematics.md`, `docs/Kinematics-design.md`, `docs/RobotPose.md`, `docs/RobotPose-design.md`
+- each module README and `docs/<Module>-design.md`
   kept, with package names and links updated.
 - `CHANGELOG.md` per version.
 

@@ -1,6 +1,6 @@
 # RobotPose – design and details (for mentors and developers)
 
-The student guide is the [README](../README.md). This page has everything behind it: how the
+The student guide is the [README](../Infrastructures/src/main/java/frc/robot/RobotPose/README.md). This page has everything behind it: how the
 estimator works, why it is built this way (with the simulation numbers), each vision source in
 detail, the full calibration procedure, every tunable, and how it compares with other teams.
 
@@ -218,7 +218,7 @@ RobotPose.initialize(odometryThread::getNewSamples, ...);
 
 Each vision frame moves the estimate by `K` of the way to the measurement, per axis, with
 `K = 1 / (1 + σ_vision / σ_odometry)`. The vision σ comes from the tag distance (Limelights) or
-`QuestConfig.thinnedStd` (Quest), see the [README](../README.md), step 1. The odometry σ also sets the jump filter:
+`QuestConfig.thinnedStd` (Quest), see the [README](../Infrastructures/src/main/java/frc/robot/RobotPose/README.md), step 1. The odometry σ also sets the jump filter:
 a frame is rejected when its distance from the estimate is more than about
 `3.7 · sqrt(σ_odometry² + σ_vision²)` (0.2 m with 0.05 and 0.02). Examples with odometry σ = 0.1:
 
@@ -250,7 +250,7 @@ field (`AprilTagFields.kDefaultField`).
 - Only the offset's **height, pitch and yaw** (plus its x and y position) are read, and they
   are used in the distance math, so measure them carefully. Roll is ignored.
 - Pitch is positive = camera **tilted up**, the opposite of WPILib's right-hand pitch. This
-  is the one exception to the frame contract (see the [README](../README.md), step 1).
+  is the one exception to the frame contract (see the [README](../Infrastructures/src/main/java/frc/robot/RobotPose/README.md), step 1).
 - The math is exact for a pinhole camera (Limelight's `tx`/`ty` are each the atan of the
   normalized image coordinate on their axis), including a pitched camera with the tag off to
   the side.
