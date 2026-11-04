@@ -31,6 +31,77 @@ RobotPose keeps equal to its own heading. RobotPose is fed by the module positio
 For Kinematics without RobotPose, see
 [`ExampleChassis.java`](Infrastructures/src/main/java/frc/robot/example/ExampleChassis.java).
 
+## Using Path
+
+> [!WARNING]
+> Status: implemented and unit-tested in simulation; not yet run on a robot. The limits and gains are
+> starting values. Tuning and troubleshooting: [docs/Path.md](docs/Path.md).
+
+**1. Implement `PathDrivetrain` on your drivetrain.** The follower needs the pose, the measured speeds and a
+way to drive. [`ExampleSwerveWithPose`](Infrastructures/src/main/java/frc/robot/example/ExampleSwerveWithPose.java)
+does this.
+
+```java
+public class Swerve extends SubsystemBase implements PathDrivetrain {
+    @Override public Pose2d getPose() { ... }                          // blue-origin pose, also on red
+    @Override public ChassisSpeeds getFieldSpeeds() { ... }            // measured, field-relative, omega CCW
+    @Override public void driveFieldRelative(ChassisSpeeds speeds) { ... }
+
+    // optional: limits used when a path has no constraints (defaults: new KinematicsConfig(), PathsConfig.defaults())
+    @Override public KinematicsConfig getKinematicsConfig() { return kinematicsConfig; }
+    @Override public PathsConfig getPathsConfig() { return pathsConfig; }
+}
+```
+
+**2. Build a path.** Meters, blue-alliance side of the field.
+
+```java
+Path path = new Path(
+    new Point(1, 2),
+    new Point(3, 4).withAngle(Rotation2d.fromDegrees(90)),
+    new Point(5, 2));
+```
+
+- `.withAngle(Rotation2d)`: the robot faces this way at this point.
+- `.withVelocity(v)`: at most `v` m/s here; on a round corner it caps the whole arc.
+- `.withRadius(r)`: corner radius in m (`0` makes it a stop).
+- `.stop()` / `.stop(seconds)`: stop exactly on the point, optionally wait.
+
+**3. Follow it.** Make a new command each time autonomous starts. On red the command flips the path itself,
+so flip the start pose the same way:
+
+```java
+PathFollowerConfig followerConfig = PathFollowerConfig.defaults();   // optional: .withFlip(PathFollowerConfig.FlipMode.MIRROR); default ROTATE
+
+return Commands.defer(() -> {
+    Path active = isRed ? path.flipped(followerConfig) : path;
+    Pose2d start = new Pose2d(active.startPoint(),
+        active.startHeading().orElse(swerve.getPose().getRotation()));
+    return Commands.runOnce(() -> swerve.setStartPose(start))
+        .andThen(new FollowPathCommand(swerve, path).withConfig(followerConfig));
+}, Set.of(swerve));
+```
+
+`isRed` and `setStartPose` are your own (the example reads `DriverStation.getAlliance()` and resets its pose estimator).
+The robot must start within 0.5 m of the first point, or the command ends with `FAILED_START_TOO_FAR`.
+`ExampleSwerveWithPose.follow(Path)` does exactly this.
+
+**4. Actions along the path.** Keep the command and use a `Trigger` on `progress()` (0 to 1, never goes down).
+The triggered command must not require the drivetrain.
+
+```java
+FollowPathCommand follow = new FollowPathCommand(swerve, path).withConfig(followerConfig);
+new Trigger(() -> follow.progress() > 0.7).onTrue(intake.deployCommand());
+```
+
+**5. Logging.** The command is a `Sendable`:
+
+```java
+SmartDashboard.putData("Path", follow);   // or any logger that takes a Sendable
+follow.getResult();                        // RUNNING, OK, FAILED_TIMEOUT, FAILED_START_TOO_FAR, FAILED_POSE, INTERRUPTED
+path.warnings();                           // build warnings (merged points, auto stops, ignored radius)
+```
+
 ## Installation
 
 1. Copy the package you want into your robot project, keeping the same package path:
@@ -101,12 +172,6 @@ the conflict for good.
             ├── example/         ExampleChassis, ExampleSwerveWithPose
             └── Main, Robot, RobotContainer
 ```
-
-## Contributing
-
-Work on the branch of the module you are changing, not on `development` or `main`. Keep changes to
-a module's own files and docs. Before asking for a merge into `development`, run
-`./gradlew build`.
 
 ## License
 
