@@ -15,6 +15,7 @@ date | task type | model used | signal | better model
 2026-11-02 | example wiring + doc sync to real API | sonnet (medium) | approved, minors only | sonnet (right)
 
 ## Rules
+- User preference: never use Opus for simple tasks (README edits, doc wording, mechanical edits, scaffolding): use haiku or sonnet. This also applies to new cloud sessions (pass `model`).
 - User preference: run subagents at effort "medium", not "high" (token cost). Escalate to high only with the user's OK.
 - design-math editing and fix application (geometry/physics/control docs): opus; always re-review fixes, they introduced issues twice.
 
