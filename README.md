@@ -9,7 +9,7 @@ Infrastructures is a set of Java modules for FRC robot code. It currently has th
 kinematics with an acceleration limiter, pose estimation that fuses wheel odometry, Limelight
 and Quest data, and a distance-based path planner and follower. Each module can be used on its
 own. You copy its package into your robot project and call it from your own drivetrain code.
-This branch (`development`) holds all three modules together so they can be tested as one project.
+The `development` and `Paths` branches hold all three modules together so they can be tested as one project.
 
 ## Modules
 
@@ -58,14 +58,15 @@ On Windows, set `JAVA_HOME` to the WPILib 2026 JDK before running Gradle.
 
 ## Branch workflow
 
-`Kinematics` and `RobotPose` are developed independently, each on its own branch. They are merged
-into `development` for integration testing. When the tests pass, `development` is merged into
+`Kinematics`, `RobotPose` and `Paths` (the Path module) are developed independently, each on its own
+branch. They are merged into `development` for integration testing. When the tests pass, `development` is merged into
 `main`.
 
 ```
 git switch development
 git merge Kinematics
 git merge RobotPose
+git merge Paths
 # build and test
 git switch main
 git merge development
