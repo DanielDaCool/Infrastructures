@@ -17,7 +17,7 @@ This branch (`development`) holds all three modules together so they can be test
 |---|---|---|
 | Kinematics | Swerve kinematics (field-relative and robot-relative), feed-forwards, and a swerve acceleration limiter. No vendor libraries. | [README](Infrastructures/src/main/java/frc/robot/Kinematics/README.md), [Design](docs/Kinematics-design.md) |
 | RobotPose | Pose estimation from module positions and gyro, plus Limelight and Quest vision sources. Needs Phoenix 6 and QuestNav. | [README](Infrastructures/src/main/java/frc/robot/RobotPose/README.md), [Design](docs/RobotPose-design.md) |
-| Path | Autonomous paths: points to rounded corners, heading and speed profiles, and a command that follows the path. Uses Kinematics; any pose source. No vendor libraries. Not yet run on a robot. | [README](Infrastructures/src/main/java/frc/robot/Path/README.md), [Design](docs/Path-design.md) |
+| Path | Autonomous paths: points to rounded corners, heading and speed profiles, and a command that follows the path. Any drivetrain and pose source; needs no other module. No vendor libraries. Not yet run on a robot. | [README](Infrastructures/src/main/java/frc/robot/Path/README.md), [Design](docs/Path-design.md) |
 
 Also in `docs/`: [library-plan.md](docs/library-plan.md), the plan for packaging the modules as one
 importable library.
@@ -37,7 +37,7 @@ For Kinematics without RobotPose, see
 1. Copy the package you want into your robot project, keeping the same package path:
    - [`frc/robot/Kinematics`](Infrastructures/src/main/java/frc/robot/Kinematics)
    - [`frc/robot/RobotPose`](Infrastructures/src/main/java/frc/robot/RobotPose)
-   - [`frc/robot/Path`](Infrastructures/src/main/java/frc/robot/Path) (also needs Kinematics; WPILib only)
+   - [`frc/robot/Path`](Infrastructures/src/main/java/frc/robot/Path) (WPILib only; needs no other module)
 2. For RobotPose, install the Phoenix 6 and QuestNav vendor libraries (WPILib: Manage Vendor
    Libraries), or copy the files from [`Infrastructures/vendordeps`](Infrastructures/vendordeps).
    Kinematics and Path need no vendor libraries.

@@ -34,7 +34,7 @@ import frc.robot.Path.FollowPathCommand;
 import frc.robot.Path.Path;
 import frc.robot.Path.PathFollowerConfig;
 import frc.robot.Path.PathDrivetrain;
-import frc.robot.Path.PathsConfig;
+import frc.robot.Path.PathConstraints;
 import frc.robot.Path.Point;
 import frc.robot.RobotPose.RobotPose;
 import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator.OdometryData;
@@ -120,8 +120,7 @@ public class ExampleSwerveWithPose extends SubsystemBase implements PathDrivetra
     private final Translation2d[] moduleLocations;
     private final DemaciaKinematics kinematics;
     private final SwerveAccelerationLimiter limiter;
-    private final KinematicsConfig kinematicsConfig;
-    private final PathsConfig pathsConfig;
+    private final PathConstraints pathConstraints;
     private final PathFollowerConfig followerConfig = PathFollowerConfig.defaults(); // gains, tolerances, red flip (ROTATE)
     private final Pigeon2 pigeon;
     private final StatusSignal<Angle> yaw; // main thread copy (refreshed here, not by the thread) [deg]
@@ -149,8 +148,12 @@ public class ExampleSwerveWithPose extends SubsystemBase implements PathDrivetra
         }
         this.modules = modules;
         this.moduleLocations = moduleLocations;
-        this.kinematicsConfig = kinematicsConfig;
-        this.pathsConfig = PathsConfig.defaults(); // omega and alpha limits: placeholders, measure on the robot
+        // 90% of the limiter's limits; omega and alpha are placeholders, measure on the robot
+        double brake = Math.min(kinematicsConfig.maxSkidAccel,
+                Math.min(kinematicsConfig.maxTiltAccelFront, kinematicsConfig.maxTiltAccelSide));
+        this.pathConstraints = new PathConstraints(PathConstraints.PROFILE_MARGIN * kinematicsConfig.maxAllowedModuleVelocity,
+                PathConstraints.PROFILE_MARGIN * Math.min(kinematicsConfig.maxForwardAccel, brake), PathConstraints.PROFILE_MARGIN * brake, PathConstraints.PROFILE_MARGIN * brake,
+                2.0 * Math.PI, 4.0 * Math.PI);
         this.kinematics = new DemaciaKinematics(kinematicsConfig, moduleLocations);
         this.limiter = new SwerveAccelerationLimiter(kinematicsConfig);
         this.pigeon = pigeon;
@@ -395,13 +398,8 @@ public class ExampleSwerveWithPose extends SubsystemBase implements PathDrivetra
     }
 
     @Override
-    public KinematicsConfig getKinematicsConfig() {
-        return kinematicsConfig;
-    }
-
-    @Override
-    public PathsConfig getPathsConfig() {
-        return pathsConfig;
+    public PathConstraints getPathConstraints() {
+        return pathConstraints;
     }
 
     /**

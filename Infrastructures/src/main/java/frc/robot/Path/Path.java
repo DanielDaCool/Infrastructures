@@ -44,7 +44,7 @@ public final class Path {
      * @param points      two or more points
      */
     public Path(PathConstraints constraints, Point... points) {
-        this(Objects.requireNonNull(constraints, Point.nullMessage("new Path", "the constraints", "a PathConstraints (for example PathConstraints.fromConfig(config))")),
+        this(Objects.requireNonNull(constraints, Point.nullMessage("new Path", "the constraints", "a PathConstraints (for example PathConstraints.defaults())")),
                 checkPoints(points));
     }
 
@@ -90,7 +90,7 @@ public final class Path {
 
     /** @return a copy with per-path constraints */
     public Path withConstraints(PathConstraints constraints) {
-        Objects.requireNonNull(constraints, Point.nullMessage("withConstraints", "the constraints", "a PathConstraints (for example PathConstraints.fromConfig(config))"));
+        Objects.requireNonNull(constraints, Point.nullMessage("withConstraints", "the constraints", "a PathConstraints (for example PathConstraints.defaults())"));
         return new Path(points, geometry, constraints, name, warnings);
     }
 

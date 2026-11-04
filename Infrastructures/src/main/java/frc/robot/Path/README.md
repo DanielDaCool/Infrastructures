@@ -7,8 +7,8 @@
 Autonomous paths for swerve robots. You write the points the robot must drive through. Path rounds
 the corners, picks a heading and a speed for every part of the path, and a command drives the robot
 along it. It works with any swerve drivetrain and any pose source: you implement `getPose()` (from odometry,
-a pose estimator or vision), `getFieldSpeeds()` and a field-relative drive method. The only code it needs from
-outside its own package is `KinematicsConfig.java` (see [Installation](#installation)).
+a pose estimator or vision), `getFieldSpeeds()` and a field-relative drive method. It needs no code from outside
+its own package.
 
 > [!WARNING]
 > **Status: implemented; unit-tested in simulation (JUnit, not committed); not yet run on a robot.** The
@@ -53,17 +53,12 @@ outside its own package is `KinematicsConfig.java` (see [Installation](#installa
 |---|---|
 | [WPILib / GradleRIO](https://docs.wpilib.org/) | 2026.2.1 |
 | Java | 17 |
-| `frc.robot.Kinematics.KinematicsConfig` | One small settings class (speed and acceleration limits); Path imports it. Part of the Kinematics package |
 | Vendor libraries | None |
 
 ## Installation
 
 1. Copy `Infrastructures/src/main/java/frc/robot/Path` into your robot project, keeping the same package path.
-2. Copy `Infrastructures/src/main/java/frc/robot/Kinematics/KinematicsConfig.java` into your project too (same package path,
-   `frc/robot/Kinematics`). It is a plain settings class with no other dependencies. Path reads only `maxAllowedModuleVelocity`, `maxForwardAccel`,
-   `maxSkidAccel`, `maxTiltAccelFront` and `maxTiltAccelSide` from it, and only to compute default limits. If you already use the whole
-   Kinematics package, it is already there.
-3. Make your drivetrain implement `PathDrivetrain` (see [Quick start](#quick-start)). Any pose source works; the drive method
+2. Make your drivetrain implement `PathDrivetrain` (see [Quick start](#quick-start)). Any pose source works; the drive method
    should send the field-relative speeds through your own swerve code (with an acceleration limiter if you have one).
 
 ## Quick start
@@ -86,9 +81,8 @@ public class Swerve extends SubsystemBase implements PathDrivetrain {
     }
     @Override public void driveFieldRelative(ChassisSpeeds speeds) { ... }   // omega CCW; keep your acceleration limiter here
 
-    // optional: the limits used when a path has no constraints (defaults: new KinematicsConfig(), PathsConfig.defaults())
-    @Override public KinematicsConfig getKinematicsConfig() { return kinematicsConfig; }
-    @Override public PathsConfig getPathsConfig() { return pathsConfig; }
+    // optional: the limits used when a path has no constraints (default: PathConstraints.defaults())
+    @Override public PathConstraints getPathConstraints() { return myConstraints; }
 }
 ```
 
@@ -105,7 +99,7 @@ FollowPathCommand follow = new FollowPathCommand(swerve, path);   // requires sw
 ```
 
 The command takes the pose, speeds and output from the drivetrain, and the robot limits from
-`getKinematicsConfig()` / `getPathsConfig()` when the path has no constraints of its own. The pose must be the
+`getPathConstraints()` when the path has no constraints of its own. The pose must be the
 blue-origin pose also on the red alliance. A `null` drivetrain or path throws a `NullPointerException` that says what to pass.
 
 **4. Use it in autonomous.** Set the start pose from the path for the current alliance (on red the command drives the
@@ -132,7 +126,7 @@ RobotPose and Kinematics packages; you do not need it to use Path).
 > - The robot must start within 0.5 m of the first point (for the current alliance). Otherwise the command ends at once
 >   with `FAILED_START_TOO_FAR`. A path cannot be started from the middle.
 > - `Point`, `Path` and the config records never change. `p.withAngle(a)` returns a new point; write `p = p.withAngle(a)` or chain the
->   calls. (`KinematicsConfig.withX` is different: it changes the object, and `FollowPathCommand.withX` returns the same command.)
+>   calls. (`FollowPathCommand.withX` is different: it returns the same command.)
 
 ## The points API
 
@@ -194,15 +188,12 @@ Good to know:
 ## Limits
 
 `PathConstraints` has six numbers: `vMax` (m/s), `aAcc`, `aDec`, `aLat` (m/s^2), `omegaMax` (rad/s),
-and `alphaMax` (rad/s^2). `PathConstraints.fromConfig(kinematicsConfig, pathsConfig)` computes
-the first four from your `KinematicsConfig` (about 10% below the limiter's limits; with the default config 4.05 m/s
-and 7.2 m/s^2). The last two come from `PathsConfig`, the Path module's own settings that `KinematicsConfig` does
-not have: `maxAngularVelocity` and `maxAngularAccel` (placeholders 2 pi and 4 pi; measure
-them). `fromConfig(kinematicsConfig)` uses `PathsConfig.defaults()`.
+and `alphaMax` (rad/s^2). `PathConstraints.defaults()` gives placeholders (4.05 m/s, 7.2 m/s^2 for the three
+accelerations, 2 pi rad/s, 4 pi rad/s^2): measure your robot and set your own with the constructor or the `withX` calls.
+Use about 90% of what the drivetrain can really do (`PathConstraints.PROFILE_MARGIN` is 0.9), so the robot can follow the plan.
 
-Change one for one path: `path.withConstraints(PathConstraints.fromConfig(c, pathsConfig).withVMax(2.0))`.
-If a path has no constraints, the command uses `drivetrain.getKinematicsConfig()` and `drivetrain.getPathsConfig()` (defaults: `new KinematicsConfig()` /
-`PathsConfig.defaults()`), read when the command starts.
+Change one for one path: `path.withConstraints(PathConstraints.defaults().withVMax(2.0))`.
+If a path has no constraints, the command uses `drivetrain.getPathConstraints()` (default `PathConstraints.defaults()`), read when the command starts.
 
 ## Alliance, progress, logging
 
@@ -243,7 +234,7 @@ Do these in order. Change one thing at a time. Watch `eN` (above) on the dashboa
 `kTheta` (4.0), `tauLag` (0.05 s) and `tSettle` (0.1 s) are constants in `PathFollowerConfig.java`, not settings: to
 change one, edit the constant.
 
-1. **Settings of the drivetrain first.** `KinematicsConfig` (`latency`, speed limits) must be right. Path does not
+1. **Settings of the drivetrain first.** Your drivetrain's own settings (command latency, speed limits) must be right, and your `PathConstraints` must match what it can do. Path does not
    fix a drivetrain that does not follow its commands.
 2. **Measure the lag.** Drive a straight line, start the robot 0.2 m to the side, and look at how `eN` goes to zero.
    Fit it to `exp(-k_n * (t - lag))`, or compare `vRef` with `vMeas`. The design model value is 0.085 s (not
@@ -272,7 +263,7 @@ Warnings and failures go to the Driver Station (`DriverStation.reportWarning`). 
 | Program stops with `Path needs at least 2 points ...` | `new Path(...)` got fewer than two points |
 | `All ... points of the path are at the same place` | Every point is within 1 mm of the first; check the coordinates |
 | `new Path: point 1 is null; pass a Point for every position (for example new Point(1, 2)).` (any `... is null; pass ...` text) | A null argument: pass the thing named in the text |
-| `PathConstraints.vMax must be a finite number above 0 (m/s), but it is -1.0. Start from PathConstraints.fromConfig(config) and change one value, for example PathConstraints.fromConfig(config).withVMax(3.0).` (same form for `PathsConfig` and `PathFollowerConfig`) | A config value is zero, negative, NaN or infinite; start from the factory named in the text |
+| `PathConstraints.vMax must be a finite number above 0 (m/s), but it is -1.0. Start from PathConstraints.defaults() and change one value, for example PathConstraints.defaults().withVMax(3.0).` (same form for `PathFollowerConfig`) | A config value is zero, negative, NaN or infinite; start from the factory named in the text |
 | `Point(NaN, ...)` error | A division by zero or a value never set in the coordinates |
 | `Point 1 has both stop() and withRadius(0.5). A stop point is a sharp corner ...` | A stop point is a sharp corner; remove one of the two |
 | `withVelocity(-1.0): the speed must be 0 or more (m/s). withVelocity(0) is the same as stop(). To limit the speed at a point use a positive number, for example withVelocity(1.0).` (`stop(...)` and `withRadius(...)` are alike) | A negative number. Use `withVelocity(0)` or `stop()` to stop |
@@ -281,7 +272,7 @@ Warnings and failures go to the Driver Station (`DriverStation.reportWarning`). 
 | Warning: `withRadius(0.5) is ignored here: only a point where the path turns has a corner radius. Remove withRadius from this point.` (also `withVelocity(...)` and `stop() is ignored here ...` on the first or last point) | `withRadius` on the first or last point or on a straight-line point, or `withVelocity` / `stop()` on the first or last point |
 | Warning: `this point is on a straight line between its neighbors, so it is only a pass marker, and the path misses it by ... m ...` | The point is on a straight line and the path misses it; add `.stop()` there or remove the point |
 | Robot drives a whole corner slowly | `withVelocity` caps the whole arc; or the heading must turn too fast at the corner point (a big angle change there). Spread the turn over more path or use a larger radius |
-| Robot runs wide on arcs | Lookahead `TAU_LAG` too small (tuning step 4), or `latency` in `KinematicsConfig` is wrong |
+| Robot runs wide on arcs | Lookahead `TAU_LAG` too small (tuning step 4), or the command latency in your drivetrain is wrong |
 | Robot weaves around the path | `kN` too high for the lag (tuning steps 2 and 3) |
 | Robot ends a little short or late | `kP` low, or the finish tolerance is tight; see `eN` and `s` |
 | Warning: `Path "name": alliance unknown; driving the blue path. For a red run, connect the Driver Station (or set the alliance in the simulator) before the command starts.` | The alliance was not known when the command started |
@@ -297,15 +288,15 @@ Warnings and failures go to the Driver Station (`DriverStation.reportWarning`). 
 
 ## Project structure
 
-All paths are relative to `Infrastructures/src/main/java/frc/robot/Path` (`frc.robot.Path`). Nine files.
+All paths are relative to `Infrastructures/src/main/java/frc/robot/Path` (`frc.robot.Path`). Eight files.
 
 | File | Description |
 |---|---|
 | `Point.java`, `Path.java` | The points and the path (geometry is built in the constructor; `warnings()`, `flipped(...)`) |
-| `PathConstraints.java` | The seven limits and `fromConfig` |
-| `PathDrivetrain.java` | The interface your drivetrain implements (`getPose`, `getFieldSpeeds`, `driveFieldRelative`, optional configs) |
+| `PathConstraints.java` | The six limits, `defaults()` and `withX` |
+| `PathDrivetrain.java` | The interface your drivetrain implements (`getPose`, `getFieldSpeeds`, `driveFieldRelative`, optional `getPathConstraints`) |
 | `FollowPathCommand.java` | The command, `FollowPathCommand.Result`, `progress()`, Sendable keys |
-| `PathsConfig.java`, `PathFollowerConfig.java` | Robot settings, and follower settings (gains, tolerances, timeout, flip, field size, `FlipMode`), with defaults |
+| `PathFollowerConfig.java` | Follower settings (gains, tolerances, timeout, flip, field size, `FlipMode`), with defaults |
 | `PathGeometry.java`, `SpeedProfile.java` | Internal (corner geometry, heading and speed profiles); not for use in robot code |
 
 The full design is in [Path-design.md](../../../../../../../docs/Path-design.md).

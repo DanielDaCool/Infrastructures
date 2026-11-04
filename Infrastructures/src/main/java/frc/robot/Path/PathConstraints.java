@@ -1,7 +1,5 @@
 package frc.robot.Path;
 
-import frc.robot.Kinematics.KinematicsConfig;
-
 /**
  * Motion limits of a path (design doc sections 7.2, 9.5). Immutable; each {@code withX} returns a
  * new record.
@@ -29,8 +27,8 @@ public record PathConstraints(double vMax, double aAcc, double aDec, double aLat
     }
 
     private static void check(String name, double value, String unit, String change) {
-        requirePositive("PathConstraints", name, value, unit, "PathConstraints.fromConfig(config)",
-                "PathConstraints.fromConfig(config)." + change);
+        requirePositive("PathConstraints", name, value, unit, "PathConstraints.defaults()",
+                "PathConstraints.defaults()." + change);
     }
 
     /**
@@ -41,8 +39,8 @@ public record PathConstraints(double vMax, double aAcc, double aDec, double aLat
      * @param field   field name, for example "vMax"
      * @param value   the value to check
      * @param unit    its unit, for example "m/s"
-     * @param factory the factory to start from, for example "PathConstraints.fromConfig(config)"
-     * @param example a complete example call, for example "PathConstraints.fromConfig(config).withVMax(3.0)"
+     * @param factory the factory to start from, for example "PathConstraints.defaults()"
+     * @param example a complete example call, for example "PathConstraints.defaults().withVMax(3.0)"
      */
     static void requirePositive(String record, String field, double value, String unit, String factory,
                                 String example) {
@@ -54,41 +52,16 @@ public record PathConstraints(double vMax, double aAcc, double aDec, double aLat
     }
 
     /**
-     * Derives the limits from the Kinematics config at {@link #PROFILE_MARGIN} (section 9.5).
-     * The plan speeds up with a constant aAcc. On a torque-limited drivetrain (for example the
-     * SwerveAccelerationLimiter's {@code 10 (1 - v / freeSpeed)}) the robot trails the plan above
-     * about 1.5 m/s; if that matters, lower aAcc with {@link #withAAcc}.
+     * Placeholder limits for a typical swerve robot: 4.05 m/s, 7.2 m/s^2 (acceleration, braking and
+     * lateral), 2*pi rad/s and 4*pi rad/s^2. Measure your robot and change them, for example
+     * {@code PathConstraints.defaults().withVMax(3.0)}. The plan speeds up with a constant aAcc; on a
+     * torque-limited drivetrain the robot trails the plan above about 1.5 m/s, so lower aAcc with
+     * {@link #withAAcc} if that matters.
      *
-     * @param config robot limits
-     * @param paths  the settings Kinematics does not have
-     * @return the constraints
+     * @return the placeholder constraints
      */
-    public static PathConstraints fromConfig(KinematicsConfig config, PathsConfig paths) {
-        if (config == null) {
-            throw new NullPointerException("PathConstraints.fromConfig: the KinematicsConfig is null; pass your robot's"
-                    + " config (for example PathConstraints.fromConfig(new KinematicsConfig()))");
-        }
-        if (paths == null) {
-            throw new NullPointerException("PathConstraints.fromConfig: the PathsConfig is null; pass one (for example"
-                    + " PathConstraints.fromConfig(config, PathsConfig.defaults())), or leave it out");
-        }
-        double tilt = Math.min(config.maxTiltAccelFront, config.maxTiltAccelSide);
-        double brake = Math.min(config.maxSkidAccel, tilt);
-        double vMax = PROFILE_MARGIN * config.maxAllowedModuleVelocity;
-        double aAcc = PROFILE_MARGIN * Math.min(config.maxForwardAccel, brake);
-        double aDec = PROFILE_MARGIN * brake;
-        return new PathConstraints(vMax, aAcc, aDec, aDec,
-                paths.maxAngularVelocity(), paths.maxAngularAccel());
-    }
-
-    /**
-     * Same as {@code fromConfig(config, PathsConfig.defaults())}.
-     *
-     * @param config robot limits
-     * @return the constraints
-     */
-    public static PathConstraints fromConfig(KinematicsConfig config) {
-        return fromConfig(config, PathsConfig.defaults());
+    public static PathConstraints defaults() {
+        return new PathConstraints(4.05, 7.2, 7.2, 7.2, 2.0 * Math.PI, 4.0 * Math.PI);
     }
 
     /** @return a copy with vMax changed */

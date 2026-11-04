@@ -6,8 +6,12 @@ The student guide is [Path README](../Infrastructures/src/main/java/frc/robot/Pa
 becomes a path, how the heading and the speed are chosen along it, how the follow command drives
 the robot, the full API, every default, and the test cases.
 
-The code is in `Infrastructures/src/main/java/frc/robot/Path` (package `frc.robot.Path`). It uses the [Kinematics](../Infrastructures/src/main/java/frc/robot/Kinematics/README.md) module on the drivetrain side and takes
-the pose from a `Supplier<Pose2d>`, so any pose source works, for example [RobotPose](../Infrastructures/src/main/java/frc/robot/RobotPose/README.md).
+The code is in `Infrastructures/src/main/java/frc/robot/Path` (package `frc.robot.Path`). It does not depend on any other module (the drivetrain gives it limits as a `PathConstraints`) and takes
+the pose from the drivetrain's `getPose()`, so any pose source works, for example [RobotPose](../Infrastructures/src/main/java/frc/robot/RobotPose/README.md).
+
+> [!NOTE]
+> **Update (after this design was written):** `PathsConfig`, `PathConstraints.fromConfig(...)` and `PathDrivetrain.getKinematicsConfig()` / `getPathsConfig()` were removed so Path has no dependency on Kinematics. Limits now come from `PathConstraints` directly (`PathConstraints.defaults()` = 4.05 m/s, 7.2 m/s^2, 2 pi rad/s, 4 pi rad/s^2) and `PathDrivetrain.getPathConstraints()`. Where this page says `PathsConfig` or `fromConfig`, read it that way; the numbers are unchanged. The sections have not been rewritten.
+
 
 ## v1 scope (simplified, 2026-11-03)
 

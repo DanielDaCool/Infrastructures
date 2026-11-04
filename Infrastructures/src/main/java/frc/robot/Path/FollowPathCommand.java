@@ -223,8 +223,7 @@ public class FollowPathCommand extends Command {
             return;
         }
 
-        constraints = active.constraints().orElseGet(() ->
-                PathConstraints.fromConfig(drivetrain.getKinematicsConfig(), drivetrain.getPathsConfig()));
+        constraints = active.constraints().orElseGet(drivetrain::getPathConstraints);
         heading = SpeedProfile.Heading.build(active, p.getRotation().getRadians());
         double v0 = alongT0(vm);
         profile = SpeedProfile.build(active, heading, constraints, v0, config.kP(), config.posTol());

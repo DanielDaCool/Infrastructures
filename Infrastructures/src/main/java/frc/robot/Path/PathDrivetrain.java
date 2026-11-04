@@ -3,7 +3,6 @@ package frc.robot.Path;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
 import edu.wpi.first.wpilibj2.command.Subsystem;
-import frc.robot.Kinematics.KinematicsConfig;
 
 /**
  * What {@link FollowPathCommand} needs from a drivetrain. Implement it on your swerve subsystem:
@@ -13,7 +12,7 @@ import frc.robot.Kinematics.KinematicsConfig;
  *     public Pose2d getPose() { return odometry.getEstimatedPosition(); }
  *     public ChassisSpeeds getFieldSpeeds() { return measuredFieldSpeeds(); }
  *     public void driveFieldRelative(ChassisSpeeds speeds) { setFieldSpeeds(speeds); }
- *     // optional: override getKinematicsConfig() / getPathsConfig() with your robot's limits
+ *     // optional: override getPathConstraints() with your robot's limits
  * }
  * }</pre>
  */
@@ -28,13 +27,8 @@ public interface PathDrivetrain extends Subsystem {
     /** @param speeds the field-relative command (blue frame), omega CCW */
     void driveFieldRelative(ChassisSpeeds speeds);
 
-    /** @return the robot limits used when a path has no constraints of its own */
-    default KinematicsConfig getKinematicsConfig() {
-        return new KinematicsConfig();
-    }
-
-    /** @return omega and alpha limits used when a path has no constraints of its own */
-    default PathsConfig getPathsConfig() {
-        return PathsConfig.defaults();
+    /** @return the robot limits used when a path has no constraints of its own (default: {@link PathConstraints#defaults()}) */
+    default PathConstraints getPathConstraints() {
+        return PathConstraints.defaults();
     }
 }
