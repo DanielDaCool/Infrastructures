@@ -1,51 +1,163 @@
-# Infrastructures
+# Path
 
 [![WPILib](https://img.shields.io/badge/WPILib-2026.2.1-blue)](https://docs.wpilib.org/)
 [![Java](https://img.shields.io/badge/Java-17-orange)](https://adoptium.net/)
-[![Phoenix 6](https://img.shields.io/badge/Phoenix%206-26.1.0-green)](https://v6.docs.ctr-electronics.com/)
-[![QuestNav](https://img.shields.io/badge/QuestNav-2026--2.2.0-purple)](https://questnav.gg/)
+[![Vendor libraries](https://img.shields.io/badge/vendor%20libraries-none-lightgrey)](#requirements)
 
-Infrastructures is a set of Java modules for FRC robot code. It currently has three: swerve
-kinematics with an acceleration limiter, pose estimation that fuses wheel odometry, Limelight
-and Quest data, and a distance-based path planner and follower. Each module can be used on its
-own. You copy its package into your robot project and call it from your own drivetrain code.
-The `development` and `Paths` branches hold all three modules together so they can be tested as one project.
+A distance-based path planner and follower for FRC swerve robots. You give it the points the
+robot must drive through. The path passes through every point where it turns (each corner, stop
+and end point), with rounded arcs at the corners. A command drives the robot along it, using the
+pose and field speeds from your own drivetrain.
 
-## Modules
+> [!WARNING]
+> **Status: implemented, unit-tested in simulation, not yet run on a robot.** The default
+> numbers are starting values, not tuned values.
 
-| Module | What it does | README and design |
-|---|---|---|
-| Kinematics | Swerve kinematics (field-relative and robot-relative), feed-forwards, and a swerve acceleration limiter. No vendor libraries. | [README](Infrastructures/src/main/java/frc/robot/Kinematics/README.md), [Design](docs/Kinematics-design.md) |
-| RobotPose | Pose estimation from module positions and gyro, plus Limelight and Quest vision sources. Needs Phoenix 6 and QuestNav. | [README](Infrastructures/src/main/java/frc/robot/RobotPose/README.md), [Design](docs/RobotPose-design.md) |
-| Path | Autonomous paths: points to rounded corners, heading and speed profiles, and a command that follows the path. Any drivetrain and pose source; needs no other module. No vendor libraries. Not yet run on a robot. | [README](Infrastructures/src/main/java/frc/robot/Path/README.md), [Design](docs/Path-design.md) |
+> [!NOTE]
+> The student guide (full API, headings, limits, tuning, troubleshooting) is
+> [Infrastructures/src/main/java/frc/robot/Path/README.md](Infrastructures/src/main/java/frc/robot/Path/README.md).
+> The geometry, profiles and every setting are in [docs/Path-design.md](docs/Path-design.md).
 
-Also in `docs/`: [library-plan.md](docs/library-plan.md), the plan for packaging the modules as one
-importable library.
+## Contents
 
-## Using the modules together
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Build](#build)
+- [Other modules](#other-modules)
+- [Project structure](#project-structure)
+- [License](#license)
 
-[`ExampleSwerveWithPose.java`](Infrastructures/src/main/java/frc/robot/example/ExampleSwerveWithPose.java)
-shows the modules in one drivetrain. Kinematics drives field-relative using the gyro heading, which
-RobotPose keeps equal to its own heading. RobotPose is fed by the module positions and the gyro, and by vision measurements.
-Path follows a path using that pose and the same drivetrain; see the Path README.
+## Requirements
 
-For Kinematics without RobotPose, see
-[`ExampleChassis.java`](Infrastructures/src/main/java/frc/robot/example/ExampleChassis.java).
+| Dependency | Version |
+|---|---|
+| [WPILib / GradleRIO](https://docs.wpilib.org/) | 2026.2.1 |
+| Java | 17 |
+| Vendor libraries | None |
+
+Path needs no other module from this repository.
 
 ## Installation
 
-1. Copy the package you want into your robot project, keeping the same package path:
-   - [`frc/robot/Kinematics`](Infrastructures/src/main/java/frc/robot/Kinematics)
-   - [`frc/robot/RobotPose`](Infrastructures/src/main/java/frc/robot/RobotPose)
-   - [`frc/robot/Path`](Infrastructures/src/main/java/frc/robot/Path) (WPILib only; needs no other module)
-2. For RobotPose, install the Phoenix 6 and QuestNav vendor libraries (WPILib: Manage Vendor
-   Libraries), or copy the files from [`Infrastructures/vendordeps`](Infrastructures/vendordeps).
-   Kinematics and Path need no vendor libraries.
-3. Continue with the README of each module (links in the table above).
+1. Copy [`Infrastructures/src/main/java/frc/robot/Path`](Infrastructures/src/main/java/frc/robot/Path)
+   into your robot project, keeping the package path `frc.robot.Path`.
+2. Make your drivetrain implement `PathDrivetrain` (see step 1 below).
 
-Pinned versions: WPILib/GradleRIO 2026.2.1, Java 17, Phoenix 6 26.1.0, QuestNavLib 2026-2.2.0.
+## Usage
 
-## Build and simulate
+### 1. Implement `PathDrivetrain`
+
+The follower needs the pose, the measured field-relative speeds, and a way to drive the robot.
+
+```java
+public class Swerve extends SubsystemBase implements PathDrivetrain {
+    @Override public Pose2d getPose() { ... }                 // blue-origin pose, also on the red alliance
+    @Override public ChassisSpeeds getFieldSpeeds() { ... }   // measured, field-relative, omega counter-clockwise
+    @Override public void driveFieldRelative(ChassisSpeeds speeds) { ... }   // keep your acceleration limiter here
+
+    // optional: limits used when a path has no constraints of its own (default: PathConstraints.defaults())
+    @Override public PathConstraints getPathConstraints() { return myConstraints; }
+}
+```
+
+### 2. Build a path
+
+Points are in meters, on the blue-alliance side of the field.
+
+```java
+Path path = new Path(new Point(1, 2), new Point(3, 4), new Point(5, 2));   // or Path.of(List<Point>)
+```
+
+| Call | What it does |
+|---|---|
+| `new Point(x, y)` | A point. Also `new Point(Translation2d)` and `new Point(Pose2d)` |
+| `.withAngle(Rotation2d)` | The robot faces this way at this point. The robot turns smoothly between angle points |
+| `.withVelocity(v)` | At most `v` m/s here. On a corner, caps the whole arc at `v` |
+| `.withRadius(r)` | Corner radius `r` m. `0` makes the corner a stop |
+| `.stop()` | Stop exactly on this point |
+| `.stop(seconds)` | Stop, then wait that many seconds |
+
+```java
+// heading on a point, and a slow corner
+Path path = new Path(
+    new Point(1, 2).withAngle(Rotation2d.fromDegrees(0)),
+    new Point(3, 4).withVelocity(1.0),
+    new Point(5, 2));
+
+// stop on a point for 1.5 s, then continue
+Path stopping = new Path(new Point(1, 2), new Point(4, 2).stop(1.5), new Point(7, 4));
+```
+
+A stop point is a sharp corner: the path arrives and leaves on straight lines. Use `.stop()` or
+`.withRadius(r)` with `r > 0` on a point, not both.
+
+`Point` and `Path` never change. `withAngle` and the other `withX` calls return a new object, so
+write `p = p.withAngle(a)` or chain the calls.
+
+### 3. Create and run the command
+
+Make a new command each time autonomous starts. A command can be used in only one composition.
+
+```java
+FollowPathCommand follow = new FollowPathCommand(swerve, path);   // requires swerve
+```
+
+The robot limits come from `getPathConstraints()` unless the path has its own, set with
+`path.withConstraints(PathConstraints.defaults().withVMax(2.0))`.
+
+### 4. Alliance flip
+
+Write every path for the blue alliance. On red, the command flips the path once when it starts.
+The flip mode is in `PathFollowerConfig`:
+
+```java
+PathFollowerConfig followerConfig = PathFollowerConfig.defaults()
+    .withFlip(PathFollowerConfig.FlipMode.MIRROR);   // ROTATE is the default; NONE never flips
+
+FollowPathCommand follow = new FollowPathCommand(swerve, path).withConfig(followerConfig);
+```
+
+For another field size, use `followerConfig.withField(lengthMeters, widthMeters)`. The default
+is `PathFollowerConfig.FIELD_LENGTH` x `PathFollowerConfig.FIELD_WIDTH` (16.54 x 8.07 m).
+
+Set every option before you schedule the command. The start pose must match the path for the
+current alliance, so flip it too. `Path.flipped(followerConfig)` returns a flipped copy:
+
+```java
+return Commands.defer(() -> {
+    Path active = isRed ? path.flipped(followerConfig) : path;
+    Pose2d start = new Pose2d(active.startPoint(),
+        active.startHeading().orElse(swerve.getPose().getRotation()));
+    return Commands.runOnce(() -> swerve.setStartPose(start))   // your method: reset your pose estimator
+        .andThen(new FollowPathCommand(swerve, path).withConfig(followerConfig));
+}, Set.of(swerve));
+```
+
+`isRed` and `setStartPose` are your own code. `isRed` can read `DriverStation.getAlliance()`.
+
+### 5. Progress triggers and logging
+
+`progress()` goes from 0 at the start to 1 at the end and never decreases during a run.
+`distanceTraveled()` returns meters.
+
+```java
+FollowPathCommand follow = new FollowPathCommand(swerve, path);
+new Trigger(() -> follow.progress() > 0.7).onTrue(intake.deployCommand());   // your command
+```
+
+The trigger's command must not require the drivetrain, or it cancels the path.
+
+`FollowPathCommand` is a `Sendable`, so you can log it to the dashboard:
+
+```java
+SmartDashboard.putData("Path", follow);
+```
+
+`command.getResult()` returns a `FollowPathCommand.Result`. `withOnFinish(result -> ...)` runs
+once at the end. Build warnings are available from `path.warnings()`.
+
+## Build
 
 Run these from the [`Infrastructures`](Infrastructures) directory:
 
@@ -56,25 +168,12 @@ Run these from the [`Infrastructures`](Infrastructures) directory:
 
 On Windows, set `JAVA_HOME` to the WPILib 2026 JDK before running Gradle.
 
-## Branch workflow
+## Other modules
 
-`Kinematics`, `RobotPose` and `Paths` (the Path module) are developed independently, each on its own
-branch. They are merged into `development` for integration testing. When the tests pass, `development` is merged into
-`main`.
+Each module is on its own branch and has its own README:
 
-```
-git switch development
-git merge Kinematics
-git merge RobotPose
-git merge Paths
-# build and test
-git switch main
-git merge development
-```
-
-Each module's README lives in its package folder, and its design doc under `docs/` (see the table above).
-Module branches that still keep their README at the root conflict with this README on merge: keep
-this README and copy the module's change into the module README by hand.
+- [Kinematics](https://github.com/DanielDaCool/Infrastructures/tree/Kinematics)
+- [RobotPose](https://github.com/DanielDaCool/Infrastructures/tree/RobotPose)
 
 ## Project structure
 
@@ -82,21 +181,20 @@ this README and copy the module's change into the module README by hand.
 .
 ├── README.md
 ├── docs/
-│   ├── Kinematics-design.md     Kinematics design notes
-│   ├── Path-design.md           Path design notes
-│   ├── RobotPose-design.md      RobotPose design notes
-│   └── library-plan.md          Plan for packaging as one library
-└── Infrastructures/
-    ├── build.gradle             GradleRIO 2026.2.1, Java 17
-    ├── vendordeps/              Phoenix 6, WPILib New Commands, QuestNavLib
-    ├── WPILib-License.md
-    └── src/main/java/frc/
-        └── robot/
-            ├── Kinematics/      README.md; Swerve kinematics, acceleration limiter
-            ├── Path/            README.md; Distance-based path planner and follower
-            ├── RobotPose/       README.md; Estimation/ (odometry, pose estimator), Vision/ (sources, configs)
-            ├── example/         ExampleChassis, ExampleSwerveWithPose
-            └── Main, Robot, RobotContainer
+│   └── Path-design.md                 Design notes
+└── Infrastructures/src/main/java/frc/robot/
+    ├── Path/
+    │   ├── README.md                  Student guide
+    │   ├── Point.java                 Points: position, angle, velocity, radius, stop
+    │   ├── Path.java                  The path: geometry, warnings(), flipped(...)
+    │   ├── PathConstraints.java       The six limits, defaults(), withX
+    │   ├── PathDrivetrain.java        Interface your drivetrain implements
+    │   ├── FollowPathCommand.java     The command, progress(), Result
+    │   ├── PathFollowerConfig.java    Gains, tolerances, FlipMode, field size
+    │   ├── PathGeometry.java          Internal: corner geometry
+    │   └── SpeedProfile.java          Internal: speed profile
+    └── example/
+        └── ExampleSwerveWithPose.java Path example (also uses Kinematics and RobotPose)
 ```
 
 ## License
