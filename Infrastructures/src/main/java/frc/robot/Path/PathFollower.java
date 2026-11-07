@@ -100,7 +100,8 @@ public final class PathFollower {
         double local = s - path.segmentStart(k);
         Translation2d tangent = seg.tangentAt(local);
         Translation2d normal = new Translation2d(-tangent.getY(), tangent.getX());
-        Translation2d look = path.tangentAt(Math.min(s + v * LAG_TIME, stop.s()));
+        // just before the stop, so the look-ahead stays on the leg arriving at it, not the next one
+        Translation2d look = path.tangentAt(Math.min(s + v * LAG_TIME, stop.s() - 1e-9));
         double eN = Path.cross(tangent, p.minus(seg.pointAt(local)));
         double psi = -Math.atan(eN / MERGE_DISTANCE);
         double vN = -Math.signum(eN) * Math.max(Math.abs(v * Math.sin(psi)), FINAL_KP * Math.abs(eN));
