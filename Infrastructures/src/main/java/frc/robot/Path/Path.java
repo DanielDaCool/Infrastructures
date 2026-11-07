@@ -1,7 +1,6 @@
 package frc.robot.Path;
 
-import static frc.robot.Path.PathConstants.MAX_ARC_TURN;
-import static frc.robot.Path.PathConstants.RADIUS;
+import static frc.robot.Path.PathConfig.RADIUS;
 
 import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.math.geometry.Rotation2d;
@@ -17,6 +16,9 @@ import java.util.List;
  * dropped when the path runs straight through it. The end is always a stop.
  */
 public final class Path {
+    /** Corners turning more than this become stops [rad]. */
+    private static final double MAX_ARC_TURN = Math.toRadians(150);
+
     record Stop(double distance, double dwell) {}
 
     record Anchor(double distance, Rotation2d angle) {}
@@ -134,9 +136,9 @@ public final class Path {
         return new Arc(corner.center(), corner.radius(), corner.isLeftTurn(), startAngle, sweep);
     }
 
-    /** This path for the red alliance, per {@link PathConstants#MIRRORED_FIELD}. */
+    /** This path for the red alliance, per {@link PathConfig#MIRRORED_FIELD}. */
     public Path flipped() {
-        return flipped(PathConstants.MIRRORED_FIELD);
+        return flipped(PathConfig.MIRRORED_FIELD);
     }
 
     Path flipped(boolean mirror) {

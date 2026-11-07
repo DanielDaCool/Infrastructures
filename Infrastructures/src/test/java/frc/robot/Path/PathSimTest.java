@@ -101,7 +101,7 @@ class PathSimTest {
                 if (!cmd.isScheduled()) { time = clock.now() - t0; break; }
             }
             Pose2d end = drive.sim.getTruePose();
-            double target = red && !PathConstants.MIRRORED_FIELD ? endDeg + 180 : red ? 180 - endDeg : endDeg;
+            double target = red && !PathConfig.MIRRORED_FIELD ? endDeg + 180 : red ? 180 - endDeg : endDeg;
             Result r = new Result(!Double.isNaN(time), time, maxDist, end.getTranslation().getDistance(driven.end()),
                     Math.toDegrees(MathUtil.angleModulus(Math.toRadians(target) - end.getRotation().getRadians())),
                     end.getTranslation().getDistance(start.getTranslation()));
@@ -143,7 +143,7 @@ class PathSimTest {
     void redAllianceDrivesTheFlippedPath() {
         Path blue = new Path(new Point(2, 2), new Point(5, 2), new Point(5, 5).withAngle(Rotation2d.fromDegrees(45)));
         Translation2d s = blue.flipped().start();
-        double startDeg = PathConstants.MIRRORED_FIELD ? 180 : 180; // blue heading 0 flipped
+        double startDeg = PathConfig.MIRRORED_FIELD ? 180 : 180; // blue heading 0 flipped
         assertGood(run("red left corner", blue, AllianceStationID.Red1, new Pose2d(s, Rotation2d.fromDegrees(startDeg)), 45));
     }
 

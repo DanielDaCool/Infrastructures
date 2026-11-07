@@ -11,6 +11,8 @@ import java.util.function.Supplier;
 
 /** Drives a blue-side {@link Path}, flipped on the red alliance. Ends at once if the robot is not near the start. */
 public class FollowPathCommand extends Command {
+    /** Max distance from the robot to the path start [m]. */
+    private static final double START_TOLERANCE = 0.5;
     private final Path path;
     private final Supplier<Pose2d> pose;
     private final Supplier<ChassisSpeeds> fieldSpeeds;
@@ -30,6 +32,7 @@ public class FollowPathCommand extends Command {
         this.fieldSpeeds = fieldSpeeds;
         this.driveFieldRelative = driveFieldRelative;
         addRequirements(drive);
+        Point.Field.layout(); // load the field file now, not at the start of auto when a red path is flipped
     }
 
     @Override
@@ -39,7 +42,7 @@ public class FollowPathCommand extends Command {
         Pose2d start = pose.get();
         double distance = start.getTranslation().getDistance(active.start());
         follower = null;
-        if (distance > PathConstants.START_TOLERANCE) {
+        if (distance > START_TOLERANCE) {
             DriverStation.reportError(String.format("FollowPathCommand: robot %.2f m from path start", distance), false);
         } else {
             follower = new PathFollower(active, start);

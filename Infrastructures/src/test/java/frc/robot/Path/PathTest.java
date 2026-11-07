@@ -1,6 +1,8 @@
 package frc.robot.Path;
 
-import static frc.robot.Path.PathConstants.*;
+import static frc.robot.Path.PathConfig.*;
+import static frc.robot.Path.PathFollower.MERGE_DISTANCE;
+import static frc.robot.Path.PathFollower.MIN_SPEED;
 import static org.junit.jupiter.api.Assertions.*;
 
 import edu.wpi.first.math.MathUtil;
@@ -8,11 +10,14 @@ import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Translation2d;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
+import edu.wpi.first.wpilibj.TimedRobot;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class PathTest {
+    private static final double DT = TimedRobot.kDefaultPeriod;
+
     private static Path left() { return new Path(new Point(0, 0), new Point(2, 0), new Point(2, 2)); }
 
     private static Path right() { return new Path(new Point(0, 0), new Point(2, 0), new Point(2, -2)); }
@@ -213,7 +218,7 @@ class PathTest {
 
     @Test
     void flippedPathRotateAndMirror() {
-        double L = FIELD_LENGTH, W = FIELD_WIDTH;
+        double L = Point.Field.layout().getFieldLength(), W = Point.Field.layout().getFieldWidth();
         for (boolean mirror : new boolean[] {false, true}) {
             Path flipped = new Path(new Point(1, 1), new Point(3, 2).withAngle(Rotation2d.fromDegrees(30))).flipped(mirror);
             Translation2d start = mirror ? new Translation2d(L - 1, 1) : new Translation2d(L - 1, W - 1);
@@ -266,7 +271,7 @@ class PathTest {
     void arcSpeedRespectsLateralAccelerationLimit() {
         Path path = new Path(new Point(0, 0), new Point(6, 0), new Point(6, 6));
         Sim sim = new Sim(path, 0, 15);
-        double cap = Math.sqrt(MAX_LATERAL_ACCELERATION * RADIUS);
+        double cap = Math.sqrt(MAX_ACCELERATION * RADIUS);
         assertTrue(cap < MAX_VELOCITY, "test needs a cap below MAX_VELOCITY");
         assertFalse(sim.arcSpeeds.isEmpty(), "never on the arc");
         for (double v : sim.arcSpeeds) assertTrue(v <= cap + 1e-6, "arc speed " + v + " > cap " + cap);

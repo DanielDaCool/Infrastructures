@@ -1,5 +1,7 @@
 package frc.robot.Path;
 
+import edu.wpi.first.apriltag.AprilTagFieldLayout;
+import edu.wpi.first.apriltag.AprilTagFields;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Translation2d;
 
@@ -8,7 +10,7 @@ public final class Point {
     private final Translation2d position;
     private final Rotation2d angle; // null = none
     private final boolean stop;
-    private final double dwell, radius; // radius NaN = PathConstants.RADIUS
+    private final double dwell, radius; // radius NaN = PathConfig.RADIUS
 
     private Point(Translation2d position, Rotation2d angle, boolean stop, double dwell, double radius) {
         this.position = position; this.angle = angle; this.stop = stop; this.dwell = dwell; this.radius = radius;
@@ -46,12 +48,23 @@ public final class Point {
     /** Wait at the stop [s]. */ public double dwell() { return dwell; }
     /** Corner radius [m], NaN = default. */ public double radius() { return radius; }
 
-    /** This point on the red side: mirrored across x = FIELD_LENGTH / 2, or rotated 180 deg about the center. */
+    /** This point on the red side: mirrored across x = field length / 2, or rotated 180 deg about the center. */
     Point flipped(boolean mirror) {
-        double x = PathConstants.FIELD_LENGTH - position.getX();
-        double y = mirror ? position.getY() : PathConstants.FIELD_WIDTH - position.getY();
+        double fieldLength = Field.layout().getFieldLength(), fieldWidth = Field.layout().getFieldWidth();
+        double x = fieldLength - position.getX();
+        double y = mirror ? position.getY() : fieldWidth - position.getY();
         Rotation2d flippedAngle = angle == null ? null : mirror ? Rotation2d.kPi.minus(angle) : angle.plus(Rotation2d.kPi);
         return new Point(new Translation2d(x, y), flippedAngle, stop, dwell, radius);
+    }
+
+    /** The current season field, loaded once on first use; its size is the flip size. */
+    static final class Field {
+        private static AprilTagFieldLayout layout;
+
+        static synchronized AprilTagFieldLayout layout() {
+            if (layout == null) layout = AprilTagFieldLayout.loadField(AprilTagFields.kDefaultField);
+            return layout;
+        }
     }
 
     private static double check(double value, String name) {
