@@ -111,8 +111,11 @@ public final class PathFollower {
         // signed distance from the path, left of the path positive
         double sideError = Path.cross(tangent, position.minus(segment.pointAt(progressOnSegment)));
         double mergeAngle = -Math.atan(sideError / MERGE_DISTANCE);
-        double sidewaysSpeed = -Math.signum(sideError)
-                * Math.max(Math.abs(speed * Math.sin(mergeAngle)), FINAL_KP * Math.abs(sideError));
+        // Turn the travel direction toward the path by mergeAngle and keep the speed, so the robot curves
+        // onto it. Only close to a stop, where the robot is slow, also pull straight in so it settles.
+        double sidewaysSpeed = Math.abs(speed) * Math.sin(mergeAngle);
+        if (Math.abs(distanceToStop) < MERGE_DISTANCE)
+            sidewaysSpeed = -Math.signum(sideError) * Math.max(Math.abs(sidewaysSpeed), FINAL_KP * Math.abs(sideError));
         sidewaysSpeed = MathUtil.clamp(sidewaysSpeed, -MAX_VELOCITY, MAX_VELOCITY);
         Translation2d velocity =
                 lookAheadDirection.times(speed * Math.cos(mergeAngle)).plus(normal.times(sidewaysSpeed));

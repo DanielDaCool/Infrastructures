@@ -44,6 +44,7 @@ class PathTest {
         boolean progressMonotonic = true;
         final List<Translation2d> positions = new ArrayList<>();
         final List<Double> cmdSpeeds = new ArrayList<>();
+        final List<Translation2d> cmds = new ArrayList<>();
         final List<Double> arcSpeeds = new ArrayList<>();
 
         Sim(Path path, double lag, double maxTime) { this(path, lag, 0, 0, path.start(), maxTime); }
@@ -60,6 +61,7 @@ class PathTest {
                 Translation2d cmd = new Translation2d(c.vxMetersPerSecond, c.vyMetersPerSecond);
                 positions.add(pos);
                 cmdSpeeds.add(cmd.getNorm());
+                cmds.add(cmd);
                 if (follower.progress() < lastProgress - 1e-12) progressMonotonic = false;
                 lastProgress = follower.progress();
                 maxDistance = Math.max(maxDistance, distanceToPath(path, pos));
@@ -268,5 +270,26 @@ class PathTest {
         assertTrue(cap < MAX_VELOCITY, "test needs a cap below MAX_VELOCITY");
         assertFalse(sim.arcSpeeds.isEmpty(), "never on the arc");
         for (double v : sim.arcSpeeds) assertTrue(v <= cap + 1e-6, "arc speed " + v + " > cap " + cap);
+    }
+
+    @Test
+    void mergesOntoLegAlongAGentleCurve() {
+        // start 0.3 m left of a long straight leg: the robot should curve onto it, not drive straight at it
+        Path path = new Path(new Point(0, 0), new Point(8, 0));
+        for (double lag : new double[] {0, 0.1}) {
+            Sim sim = new Sim(path, lag, 0, 0, new Translation2d(0.5, 0.3), 15);
+            double maxAngle = 0, minY = Double.POSITIVE_INFINITY;
+            for (int i = 0; i < sim.cmds.size(); i++) {
+                Translation2d c = sim.cmds.get(i);
+                if (sim.positions.get(i).getX() < 7 && c.getNorm() > 0.05)
+                    maxAngle = Math.max(maxAngle, Math.toDegrees(Math.abs(Math.atan2(c.getY(), c.getX()))));
+                minY = Math.min(minY, sim.positions.get(i).getY());
+            }
+            System.out.printf("MERGE lag=%.1f maxAngle=%.1f deg minY=%.4f m%n", lag, maxAngle, minY);
+            double limit = Math.toDegrees(Math.atan(0.3 / MERGE_DISTANCE)) + 4; // the merge angle at the start, plus margin
+            assertTrue(maxAngle <= limit, "approach angle " + maxAngle + " deg > " + limit + ", lag " + lag);
+            assertTrue(minY > -0.02, "crossed the leg by " + (-minY) + " m, lag " + lag);
+            assertFalse(Double.isNaN(sim.finishTime), "finished, lag " + lag);
+        }
     }
 }
