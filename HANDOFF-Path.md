@@ -5,7 +5,7 @@ Branch `Paths` (local, tracks `origin/Paths`), worktree `C:/Users/User/Infrastru
 
 ## Done
 - `Infrastructures/src/main/java/frc/robot/Path/`: 8 files, 602 Java lines (was 2,614; baseline 642):
-  `PathConstants`, `Point`, `Segment`, `Line`, `Arc`, `Path` (corner circles through the waypoint, tangent legs, stops, flip),
+  `PathConfig`, `Point`, `Segment`, `Line`, `Arc`, `Path` (corner circles through the waypoint, tangent legs, stops, flip),
   `PathFollower` (projected progress, speed, merge, heading, stops, finish), `FollowPathCommand` (suppliers + consumer).
 - Removed: `PathGeometry`, `SpeedProfile`, `PathConstraints`, `PathFollowerConfig`, `PathDrivetrain`.
 - Examples: `ExampleSwerveWithPose.followCommand/follow`, `ExampleChassis.followCommand` (+ abstract `getPose()`).
@@ -28,7 +28,7 @@ Branch `Paths` (local, tracks `origin/Paths`), worktree `C:/Users/User/Infrastru
 
 ## Decisions (user)
 - Corner circle passes through the waypoint (baseline intent). Drivetrain hookup: pose supplier, field-speeds supplier,
-  field-relative drive consumer, subsystem. Flip: rotate or mirror via `PathConstants.MIRRORED_FIELD`, set per season.
+  field-relative drive consumer, subsystem. Flip: rotate or mirror via `PathConfig.MIRRORED_FIELD`, set per season.
 - Approved improvements: arc cap sqrt(aLat r), lag look-ahead, smooth merge (`psi = -atan(eN / MERGE_DISTANCE)`),
   heading interpolation, 2-D accel limit; plus `stop(dwell)`, start-too-far check, `withRadius`.
 - Later (not in code): per-point velocity, omega slew limit, per-path limits, events, telemetry.

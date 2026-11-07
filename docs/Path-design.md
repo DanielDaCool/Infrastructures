@@ -3,7 +3,7 @@
 The student guide is [Path README](../Infrastructures/src/main/java/frc/robot/Path/README.md). This note holds
 only the math the code uses. The earlier long design is in [archive/Path-design.md](archive/Path-design.md).
 
-Units are m, s, rad. `perp(x, y) = (-y, x)`. Constants are in `PathConstants`.
+Units are m, s, rad. `perp(x, y) = (-y, x)`. Values to set per robot are in `PathConfig`; the other constants are private to the class that uses them. Braking and the arc acceleration equal `MAX_ACCELERATION`, the vector limit is `2 * MAX_ACCELERATION`, and `DT` is `TimedRobot.kDefaultPeriod`.
 
 ## Corner circle
 
@@ -59,16 +59,16 @@ Segments switch by projection, never by a distance threshold, and `progress` nev
 `previousSpeed` is the previous commanded speed (0 after a stop). With `segmentStart_j` and `arcSpeedLimit_j` the
 distance and speed cap of each later arc, and `stop.distance` the path distance of the next stop:
 
-`speed = max(0, min(previousSpeed + MAX_ACCELERATION * DT, MAX_VELOCITY, sqrt(arcSpeedLimit_j^2 + 2 * MAX_DECELERATION * (segmentStart_j - progress)), approachSpeed))`
+`speed = max(0, min(previousSpeed + MAX_ACCELERATION * DT, MAX_VELOCITY, sqrt(arcSpeedLimit_j^2 + 2 * MAX_ACCELERATION * (segmentStart_j - progress)), approachSpeed))`
 
-Near a stop `approachSpeed = min(sqrt(2 * MAX_DECELERATION * distanceToStop), FINAL_KP * distanceToStop)` uses the
+Near a stop `approachSpeed = min(sqrt(2 * MAX_ACCELERATION * distanceToStop), FINAL_KP * distanceToStop)` uses the
 signed along-track error `distanceToStop` (negative past the stop, so an overshoot drives back) with magnitude at
 least `MIN_SPEED` until the robot is within `POSITION_TOLERANCE / 2`, then zero. The final command vector is clamped
 to `MAX_VELOCITY`.
 
-`arcSpeedLimit = sqrt(MAX_LATERAL_ACCELERATION / |curvature|)`, i.e. `sqrt(MAX_LATERAL_ACCELERATION * radius)`,
+`arcSpeedLimit = sqrt(MAX_ACCELERATION / |curvature|)`, i.e. `sqrt(MAX_ACCELERATION * radius)`,
 applied from the start of the arc. The law uses its own previous command, not the measured speed. A 2-D limit
-follows: `|velocity - previousVelocity| <= MAX_VECTOR_ACCELERATION * DT`.
+follows: `|velocity - previousVelocity| <= 2 * MAX_ACCELERATION * DT`.
 
 ## Merge law
 

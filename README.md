@@ -58,7 +58,7 @@ Path path = new Path(new Point(1, 2), new Point(3, 4), new Point(5, 2));
 |---|---|
 | `new Point(x, y)` | A point |
 | `.withAngle(Rotation2d)` | The robot faces this way at this point. The robot turns smoothly between angle points |
-| `.withRadius(r)` | Corner circle radius `r` m (default `PathConstants.RADIUS`) |
+| `.withRadius(r)` | Corner circle radius `r` m (default `PathConfig.RADIUS`) |
 | `.stop()` | Stop exactly on this point |
 | `.stop(seconds)` | Stop, then wait that many seconds |
 
@@ -93,8 +93,8 @@ command reports an error and finishes without driving.
 ### 3. Alliance flip
 
 Write every path for the blue alliance. On red, the command flips the path once when it starts.
-`PathConstants.MIRRORED_FIELD` picks the mode and is set per season: `false` rotates the field 180 degrees
-about its center, `true` mirrors it across `x = FIELD_LENGTH / 2`.
+`PathConfig.MIRRORED_FIELD` picks the mode and is set per season: `false` rotates the field 180 degrees
+about its center, `true` mirrors it across `x = L / 2`, with `L` the field length from WPILib's AprilTag layout for the season.
 
 ### 4. Progress triggers
 
@@ -135,7 +135,7 @@ Each module is on its own branch and has its own README:
 └── Infrastructures/src/main/java/frc/robot/
     ├── Path/
     │   ├── README.md                  Student guide
-    │   ├── PathConstants.java         Every constant
+    │   ├── PathConfig.java            Values to set for your robot
     │   ├── Point.java                 Points: position, angle, radius, stop
     │   ├── Path.java                  The path: corners, stops, flipped()
     │   ├── Segment.java, Line.java, Arc.java  Path pieces

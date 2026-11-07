@@ -60,7 +60,7 @@ not reset your pose. The trigger's command must not require the drivetrain, or i
 | `.withAngle(Rotation2d)` | The robot faces this way at this point; it turns smoothly between angle points |
 | `.stop()` | Stop exactly on this point |
 | `.stop(seconds)` | Stop, wait that many seconds, then continue |
-| `.withRadius(meters)` | Corner circle radius for this point (`>= 0`). Default is `PathConstants.RADIUS` |
+| `.withRadius(meters)` | Corner circle radius for this point (`>= 0`). Default is `PathConfig.RADIUS` |
 
 The last point is always a stop. A path needs at least 2 points.
 
@@ -78,13 +78,13 @@ Each middle point is a corner. The robot drives along a circle that passes throu
 ## Speed and following
 
 - The speed is a profile along the path, not a clock. It accelerates with `MAX_ACCELERATION` and brakes with
-  `MAX_DECELERATION` by the distance left along the path to the next stop or the end.
-- An arc of radius `radius` is capped at `sqrt(MAX_LATERAL_ACCELERATION * radius)`. The robot brakes before the arc.
+  `MAX_ACCELERATION` by the distance left along the path to the next stop or the end.
+- An arc of radius `radius` is capped at `sqrt(MAX_ACCELERATION * radius)`. The robot brakes before the arc.
 - Progress follows the robot's projection onto the path. It never decreases, and segments switch by that
   projection, not by a distance threshold.
 - If the robot is off the path, it returns on a smooth curve (merge over `MERGE_DISTANCE`, turning the travel direction toward the path at the same speed), not a straight line.
 - The direction looks ahead `LAG_TIME` seconds to cancel the command delay.
-- The commanded velocity vector changes by at most `MAX_VECTOR_ACCELERATION * DT` per loop.
+- The commanded velocity vector changes by at most `2 * MAX_ACCELERATION * DT` per loop.
 - A NaN pose gives zero speeds.
 
 ## Headings
@@ -97,37 +97,41 @@ limited to `MAX_OMEGA`.
 ## Alliance flip
 
 `FollowPathCommand.initialize` reads `DriverStation.getAlliance()`. On Red it uses `path.flipped()`.
-`PathConstants.MIRRORED_FIELD` picks the mode; set it per season:
+`PathConfig.MIRRORED_FIELD` picks the mode; set it per season:
 
 - `false`: red is the blue field rotated 180 degrees about the field center: `(L - x, W - y)`, angle + pi.
 - `true`: red is the blue field mirrored across `x = L / 2`: `(L - x, y)`, angle becomes `pi - angle`.
 
-`L` and `W` are `FIELD_LENGTH` and `FIELD_WIDTH`. Your pose must be in the same field coordinates on both alliances.
+`L` and `W` are the field length and width of the current season from WPILib's AprilTag layout (`AprilTagFields.kDefaultField`, 16.541 and 8.069 m for 2026). Your pose must be in the same field coordinates on both alliances.
 
 ## Constants
 
+Set these in `PathConfig.java` for your robot:
+
 | Constant | Default | Meaning |
 |---|---|---|
-| `RADIUS` | 0.25 m | Default corner circle radius |
 | `MAX_VELOCITY` | 2.0 m/s | Speed limit |
-| `MAX_ACCELERATION` | 3.0 m/s^2 | Speed-up limit along the path |
-| `MAX_DECELERATION` | 3.0 m/s^2 | Braking used by the profile |
-| `MAX_LATERAL_ACCELERATION` | 3.0 m/s^2 | Sets the arc speed cap |
-| `MAX_VECTOR_ACCELERATION` | 6.0 m/s^2 | Limit on the change of the commanded velocity vector |
+| `MAX_ACCELERATION` | 3.0 m/s^2 | Speed-up and braking along the path, and the arc speed cap. The commanded velocity vector may change by `2 * MAX_ACCELERATION` |
 | `MAX_OMEGA` | 2 pi rad/s | Rotation speed limit |
-| `HEADING_KP` | 4.0 1/s | Heading error gain |
-| `FINAL_KP` | 3.0 1/s | Gain near a stop, and on the normal error within `MERGE_DISTANCE` of a stop |
-| `MERGE_DISTANCE` | 0.5 m | Scale of the return curve to the path |
-| `LAG_TIME` | 0.05 s | Lookahead time for the direction |
+| `RADIUS` | 0.25 m | Default corner circle radius |
 | `POSITION_TOLERANCE` | 0.03 m | Position tolerance at a stop and at the end |
 | `ANGLE_TOLERANCE` | 2 deg | Heading tolerance at the end |
-| `STOP_SPEED` | 0.1 m/s | Measured speed below which a stop counts as reached |
-| `MIN_SPEED` | 0.15 m/s | Lowest approach speed to a stop until within `POSITION_TOLERANCE / 2`, so a drive deadband can't stall it |
-| `START_TOLERANCE` | 0.5 m | Largest allowed distance from the first point at start |
-| `MAX_ARC_TURN` | 150 deg | Larger turns become an automatic stop |
-| `DT` | 0.02 s | Loop period |
-| `FIELD_LENGTH` / `FIELD_WIDTH` | 16.54 / 8.07 m | Field size for the flip |
 | `MIRRORED_FIELD` | false | Flip mode (see above) |
+
+The loop period is `TimedRobot.kDefaultPeriod`. The field size for the flip comes from the season's AprilTag layout.
+
+These are private constants in the class that uses them; change them only when tuning:
+
+| Constant (class) | Default | Meaning |
+|---|---|---|
+| `HEADING_KP` (`PathFollower`) | 4.0 1/s | Heading error gain |
+| `FINAL_KP` (`PathFollower`) | 3.0 1/s | Gain near a stop, and on the normal error within `MERGE_DISTANCE` of a stop |
+| `MERGE_DISTANCE` (`PathFollower`) | 0.5 m | Scale of the return curve to the path |
+| `LAG_TIME` (`PathFollower`) | 0.05 s | Lookahead time for the direction |
+| `STOP_SPEED` (`PathFollower`) | 0.1 m/s | Measured speed below which a stop counts as reached |
+| `MIN_SPEED` (`PathFollower`) | 0.15 m/s | Lowest approach speed to a stop until within `POSITION_TOLERANCE / 2`, so a drive deadband can't stall it |
+| `START_TOLERANCE` (`FollowPathCommand`) | 0.5 m | Largest allowed distance from the first point at start |
+| `MAX_ARC_TURN` (`Path`) | 150 deg | Larger turns become an automatic stop |
 
 ## Finish, stop and start rules
 
@@ -155,7 +159,7 @@ All in `frc.robot.Path`.
 
 | File | Description |
 |---|---|
-| `PathConstants.java` | Every constant above |
+| `PathConfig.java` | The values you set for your robot |
 | `Point.java` | The immutable point |
 | `Path.java` | The path: corner geometry, stops, heading anchors, `flipped()` |
 | `Segment.java`, `Line.java`, `Arc.java` | One piece of the path: base class, straight line, circle arc |
