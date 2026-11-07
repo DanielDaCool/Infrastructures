@@ -78,10 +78,12 @@ stays on the arriving leg); `lookAheadDirection` is the tangent at `lookAheadDis
 `sideError = cross(tangent, position - pointAt(progress))`. With `MERGE_DISTANCE`:
 
 `mergeAngle = -atan(sideError / MERGE_DISTANCE)`, along-path part `speed * cos(mergeAngle)` along `lookAheadDirection`,
-`sidewaysSpeed = speed * sin(mergeAngle)` along `normal = perp(tangent)`.
+`sidewaysSpeed = |speed| * sin(mergeAngle)` along `normal = perp(tangent)`. The travel direction is turned toward the
+path and the speed is kept, so the robot curves onto the leg; the approach angle depends only on `sideError`, not on speed
+(0.3 m beside a leg: 31.0 deg; test `PathTest.mergesOntoLegAlongAGentleCurve`).
 
-At low speed the sideways part is raised:
-`sidewaysSpeed = -signum(sideError) * max(|sidewaysSpeed|, FINAL_KP * |sideError|)`, then `|sidewaysSpeed| <= MAX_VELOCITY`.
+Only when `|distanceToStop| < MERGE_DISTANCE` (the robot is slow and must settle) the sideways part is raised:
+`sidewaysSpeed = -signum(sideError) * max(|sidewaysSpeed|, FINAL_KP * |sideError|)`. In all cases `|sidewaysSpeed| <= MAX_VELOCITY`.
 The path is approached asymptotically, never by a straight line to a point.
 
 ## Heading interpolation

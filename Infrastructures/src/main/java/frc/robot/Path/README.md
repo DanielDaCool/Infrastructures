@@ -82,7 +82,7 @@ Each middle point is a corner. The robot drives along a circle that passes throu
 - An arc of radius `radius` is capped at `sqrt(MAX_LATERAL_ACCELERATION * radius)`. The robot brakes before the arc.
 - Progress follows the robot's projection onto the path. It never decreases, and segments switch by that
   projection, not by a distance threshold.
-- If the robot is off the path, it returns on a smooth curve (merge over `MERGE_DISTANCE`), not a straight line.
+- If the robot is off the path, it returns on a smooth curve (merge over `MERGE_DISTANCE`, turning the travel direction toward the path at the same speed), not a straight line.
 - The direction looks ahead `LAG_TIME` seconds to cancel the command delay.
 - The commanded velocity vector changes by at most `MAX_VECTOR_ACCELERATION * DT` per loop.
 - A NaN pose gives zero speeds.
@@ -116,7 +116,7 @@ limited to `MAX_OMEGA`.
 | `MAX_VECTOR_ACCELERATION` | 6.0 m/s^2 | Limit on the change of the commanded velocity vector |
 | `MAX_OMEGA` | 2 pi rad/s | Rotation speed limit |
 | `HEADING_KP` | 4.0 1/s | Heading error gain |
-| `FINAL_KP` | 3.0 1/s | Gain near a stop and on the normal error at low speed |
+| `FINAL_KP` | 3.0 1/s | Gain near a stop, and on the normal error within `MERGE_DISTANCE` of a stop |
 | `MERGE_DISTANCE` | 0.5 m | Scale of the return curve to the path |
 | `LAG_TIME` | 0.05 s | Lookahead time for the direction |
 | `POSITION_TOLERANCE` | 0.03 m | Position tolerance at a stop and at the end |

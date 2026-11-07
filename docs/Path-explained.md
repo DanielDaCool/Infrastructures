@@ -150,7 +150,7 @@ segment `index` begins. Local `distanceOnSegment = distance - segmentStarts.get(
 The brain that runs every loop. `calculate(pose, measuredFieldSpeeds)` (`:44`) returns the speeds.
 It remembers: current segment `segmentIndex`, next stop `stopIndex`, `progress`, last commanded speed `previousSpeed`,
 last command vector `previousVelocity`, dwell counter `waitLoops` and `finished`. Details in section 5.
-`updateTargetHeading(distance)` (`:132`) computes the heading plan. `isFinished()` (`:124`) and `progress()` (`:127`)
+`updateTargetHeading(distance)` (`:149`) computes the heading plan. `isFinished()` (`:138`) and `progress()` (`:141`)
 are for the command.
 
 ### FollowPathCommand (`FollowPathCommand.java`)
@@ -232,7 +232,7 @@ Rather than write one formula for each combination, `Path` uses **signed radii**
 `+radius` for a left turn, `-radius` for a right turn, and `0` for a plain point (start, end, stop). A plain point is
 just a circle of radius 0.
 
-For circles with centers `C1`, `C2` and signed radii `fromSignedRadius`, `toSignedRadius` (`tangentLeg`, `Path.java:212`):
+For circles with centers `C1`, `C2` and signed radii `fromSignedRadius`, `toSignedRadius` (`tangentLeg`, `Path.java:213`):
 
 1. `centerDistance = |C2 - C1|` and `radiusDifference = toSignedRadius - fromSignedRadius`.
 2. `legNormal = unitVector(C2 - C1)` rotated CCW by `acos(radiusDifference / centerDistance)`.
@@ -270,7 +270,7 @@ Worked numbers (computed):
 point and a circle this means the point is outside the circle. For two same-direction circles (`radiusDifference = 0`) it
 means the circles are not at the same place. For opposite directions it means the circles do not overlap. If
 the test fails, `tangentLeg` returns `null` and the path throws "corner arc does not fit"
-(`Path.java:103`, `:222`).
+(`Path.java:103`, `:217`).
 
 For our running example: the start `A = (0,0)` to circle `C = (1.8232, 0.1768)` (left): the tangent point is
 `(1.8132, -0.0730)`. The circle `C` to the end `B = (2,2)`: tangent point `(2.0730, 0.1868)`.
@@ -364,21 +364,21 @@ stop with dwell 0 (it brakes to a halt, then continues). An explicit `.stop()` d
 
 `PathFollower.calculate` runs once per loop (`DT = 0.02 s`). Steps in the order of the code.
 
-### 5.1 Guards (`:47-48`)
+### 5.1 Guards (`:47-49`)
 
 If the follower already finished, or the pose has a NaN or infinite `x`, `y` or heading, return zero speeds.
 A NaN would otherwise poison every later number (NaN in a `min` or `max` spreads, and some comparisons with NaN are
 false). Zero is the safe answer.
 
-### 5.2 Progress and switching segments (`:49-57`)
+### 5.2 Progress and switching segments (`:50-59`)
 
 The follower knows the current segment `segmentIndex`. It projects the robot onto it: `distanceOnSegment = segment.project(position)`.
 
 - If `distanceOnSegment >= length` of the segment, the robot has passed its end, so move to the next one (`segmentIndex++`) and project
   again. This is a `while` loop, so a big jump can skip a short segment.
-- It never moves past a segment that **ends at the next stop** (`:52`, the `segmentStart(segmentIndex+1)` vs `stop.distance()` test). The
+- It never moves past a segment that **ends at the next stop** (`:52-53`, the `segmentStart(segmentIndex+1)` vs `stop.distance()` test). The
   stop must be reached and released first. Otherwise a robot that overshoots would start the next leg without stopping.
-- Then `progress = max(progress, segmentStart(segmentIndex) + clamp(distanceOnSegment, 0, length))` (`:57`).
+- Then `progress = max(progress, segmentStart(segmentIndex) + clamp(distanceOnSegment, 0, length))` (`:58-59`).
 
 Why switch by projection and not by distance to the end point: the robot never hits an exact point. A distance
 threshold can fire early or never. Projection is a clean geometric question: "am I past the end of this segment?".
@@ -390,20 +390,20 @@ progress a one-way quantity. The cost: the robot cannot retreat along the path (
 
 Then `updateTargetHeading(distance)` sets the heading plan (5.7) and `headingError = angleModulus(targetHeading - heading)`.
 
-### 5.3 Stops, dwell and finishing (`:61-83`)
+### 5.3 Stops, dwell and finishing (`:63-85`)
 
-- `measuredSpeed` is the measured speed `hypot(vx, vy)`. If it is NaN, fall back to the last command's length (`:62`).
+- `measuredSpeed` is the measured speed `hypot(vx, vy)`. If it is NaN, fall back to the last command's length (`:64`).
 - `stopDistance` is the straight distance from the robot to the next stop point.
 - `atStop = stopDistance < POSITION_TOLERANCE (3 cm) && measuredSpeed < STOP_SPEED (0.1 m/s)`. Both: **close** and **slow**. Close
   alone could be a fly-by at speed.
 - **Last stop (the end):** finished when `atStop` and the heading error is under `ANGLE_TOLERANCE` (2 degrees), using
-  `Math.abs(angleModulus(finalHeading - heading))` (`:66`). Then return zeros and set `finished`. The end dwell is not used.
-- **Middle stop:** when `atStop` (or when already waiting), count loops: `++waitLoops >= round(dwell / DT)` (`:72`).
+  `Math.abs(angleModulus(finalHeading - heading))` (`:68`). Then return zeros and set `finished`. The end dwell is not used.
+- **Middle stop:** when `atStop` (or when already waiting), count loops: `++waitLoops >= round(dwell / DT)` (`:74`).
   When it reaches the count, release the stop: `stopIndex++`, `waitLoops = -1`, set `progress = stop.distance()` and re-find `segmentIndex` with
   `indexAt(progress)`. Setting `progress` exactly fixes the case where the robot was up to 3 cm short. A dwell of 0 releases
   on the first loop. A dwell of 1.0 s counts 50 loops.
 - While waiting, or when within `POSITION_TOLERANCE / 2` (1.5 cm) of the stop, return **zero translation** but keep turning
-  toward the heading plan with `clamp(HEADING_KP * headingError, +-MAX_OMEGA)` (`:79-83`), and reset `previousSpeed` and
+  toward the heading plan with `clamp(HEADING_KP * headingError, +-MAX_OMEGA)` (`:81-85`), and reset `previousSpeed` and
   `previousVelocity` to zero, so the next leg starts from rest.
 
 Why `Math.abs` and `angleModulus` on the angle: a heading error of `-1.5` degrees is a good result, but `-1.5 < 2` is true
@@ -411,16 +411,16 @@ for any big negative error too, so the absolute value is required. And `358` deg
 heading; `angleModulus` wraps the difference into `(-pi, pi]` so "almost one full turn away" reads as "almost
 zero".
 
-### 5.4 The speed law (`:85-98`)
+### 5.4 The speed law (`:87-103`)
 
 The speed `speed` is the smallest of several limits. Each one has a physical reason.
 
-**(a) Acceleration limit and top speed (`:88`).**
+**(a) Acceleration limit and top speed (`:91`).**
 `speed = min(previousSpeed + MAX_ACCELERATION * DT, MAX_VELOCITY)`. In one loop, speed may rise by `3 * 0.02 = 0.06 m/s`. From rest to
 `2 m/s` takes `2 / 3 = 0.67 s` and `0.67 m`. The law builds on its own previous command `previousSpeed`, not on the measured
 speed. Measured speed is noisy and lags, and would make the speed "jump".
 
-**(b) Arc speed cap (`:89-94`).** On a circle of radius `radius`, a robot at speed `speed` has centripetal acceleration `speed^2 / radius`
+**(b) Arc speed cap (`:92-98`).** On a circle of radius `radius`, a robot at speed `speed` has centripetal acceleration `speed^2 / radius`
 (the sideways acceleration needed to keep turning). Wheels can only give so much sideways force before slipping, so cap
 it at `MAX_LATERAL_ACCELERATION` (`a_lat = 3`):
 
@@ -431,14 +431,14 @@ For `radius = 0.25`: `sqrt(3 * 0.25) = 0.87 m/s`. For `radius = 0.5`: `1.22 m/s`
 The robot must already be that slow **when it arrives** at the arc. So for every later arc `j` before the next stop
 the code limits the speed now so it can still brake in time:
 
-`speed <= sqrt(v_arc_j^2 + 2 * a_dec * d_j)`, with `d_j` the distance to the arc's start (`:93`).
+`speed <= sqrt(v_arc_j^2 + 2 * a_dec * d_j)`, with `d_j` the distance to the arc's start (`:96-97`).
 
 This is the braking formula `v^2 = v_j^2 + 2 a d` (constant deceleration: final speed squared = start speed squared plus
 twice acceleration times distance), turned around: the fastest we may go `d` meters before the arc and still be at
 `v_arc` when we get there, braking at `a_dec`. Example: from `2 m/s` down to `0.87 m/s` at `a_dec = 3` needs `d = (4 - 0.75) / 6 = 0.54 m`.
 On the arc itself `d = 0`, so the cap is just `v_arc`.
 
-**(c) Stop approach (`:85-87`, `:95-98`).** `distanceToStop` is the path distance left to the next stop. Two laws, and `speed` takes the
+**(c) Stop approach (`:87-90`, `:99-103`).** `distanceToStop` is the path distance left to the next stop. Two laws, and `speed` takes the
 smaller:
 
 - Constant braking: `speed <= sqrt(2 * a_dec * distanceToStop)`. This is the same formula with final speed 0. From `2 m/s` it begins at
@@ -447,27 +447,27 @@ smaller:
   approach with time constant `1/3 s`: smooth, no overshoot, no jerk at the end. The two laws are equal at `0.67 m`
   (both give `2 m/s`). Closer than that, the proportional law is lower.
 
-**MIN_SPEED (`:96`).** As the distance goes to 0, both laws go to 0. But a swerve drive has a **deadband**: tiny
+**MIN_SPEED (`:101`).** As the distance goes to 0, both laws go to 0. But a swerve drive has a **deadband**: tiny
 commands do not move the robot, because motors need some minimum output to overcome friction and the controller
 ignores values near zero. The robot would stall short of the stop forever. So the magnitude is raised to at least
 `MIN_SPEED = 0.15 m/s` (the proportional law falls below it at about 5 cm). This floor stays until the robot is within
 1.5 cm (the `POSITION_TOLERANCE / 2` check in 5.3), where the command drops to zero and the stop is declared.
 
 The sign is kept from `distanceToStop` (`copySign`). If the robot **passed** the stop, `distanceToStop` is negative. For the segment that
-ends at the stop, `distanceOnSegment` is not clamped (`:87`), so the overshoot is visible, `approachSpeed` is negative, and the final line
-`speed = max(speed, min(0, approachSpeed))` (`:98`) lets `speed` go to `-0.15`: it drives back toward the stop slowly. Otherwise `speed` is floored at 0.
+ends at the stop, `distanceOnSegment` is not clamped (`:89-90`), so the overshoot is visible, `approachSpeed` is negative, and the final line
+`speed = max(speed, min(0, approachSpeed))` (`:103`) lets `speed` go to `-0.15`: it drives back toward the stop slowly. Otherwise `speed` is floored at 0.
 
-### 5.5 Direction: the look-ahead and the smooth merge (`:100-113`)
+### 5.5 Direction: the look-ahead and the smooth merge (`:105-121`)
 
 Now the follower has a speed `speed` and needs a direction.
 
-**Look-ahead (`:104`).** The drivetrain does not respond instantly: commands pass through a CAN loop, motor controllers,
+**Look-ahead (`:109-110`).** The drivetrain does not respond instantly: commands pass through a CAN loop, motor controllers,
 and the wheel's inertia. Assume a lag of `LAG_TIME = 0.05 s`. In that time the robot moves `speed * LAG_TIME`
 (`0.1 m` at `2 m/s`). So the direction is read from the path tangent not at `progress`, but at `progress + speed * LAG_TIME`: we steer
 for where the robot will be when the command takes effect. The look point is held just before the stop
 (`stop.distance() - 1e-9`), so near a stop the direction does not read from the next leg.
 
-**Normal error (`:105`).** `tangent` is the unit direction of the path at `progress`. `normal = (-ty, tx)` is the tangent rotated 90 degrees
+**Normal error (`:106-107`, `:112`).** `tangent` is the unit direction of the path at `progress`. `normal = (-ty, tx)` is the tangent rotated 90 degrees
 CCW: it points to the **left** of the path. The cross-track error
 
 `sideError = cross(tangent, position - pathPoint(progress))`
@@ -475,35 +475,49 @@ CCW: it points to the **left** of the path. The cross-track error
 is the signed distance of the robot to the left of the path (the shadow of `position - pathPoint` on the normal). `sideError` (eN) `> 0` means the robot is left of
 the path, `sideError < 0` means right.
 
-**The merge angle (`:106`).** Let `L = MERGE_DISTANCE = 0.5 m`. Then
+**The merge angle (`:113`).** Let `L = MERGE_DISTANCE = 0.5 m`. Then
 
 `mergeAngle = -atan(sideError / MERGE_DISTANCE)`.
 
-`mergeAngle` is how much to tilt the velocity away from the path direction, toward the path. The minus sign: if the robot is
-left (`sideError > 0`) we tilt right (`mergeAngle < 0`). The numbers: `sideError = 0.1 m` gives `-11.3` degrees; `0.5 m` gives `-45` degrees; `1 m` gives
+`mergeAngle` is how much to turn the direction of travel away from the path direction, toward the path. The minus sign: if the robot is
+left (`sideError > 0`) we turn right (`mergeAngle < 0`). The numbers: `sideError = 0.1 m` gives `-11.3` degrees; `0.3 m` gives `-31` degrees; `0.5 m` gives `-45` degrees; `1 m` gives
 `-63` degrees; far away it tends to `-90` degrees (drive straight at the path). `atan` is the key: it is smooth,
-and it saturates, so the angle never exceeds 90 degrees and never flips.
+and it saturates, so the angle never exceeds 90 degrees and never flips. The angle depends only on `sideError`. It does not depend on the speed.
 
-**Why this makes a curve and not a straight line to a point.** The velocity along the path is `speed cos(mergeAngle)` and sideways
-is `speed sin(mergeAngle)`. For a small error, `sin(mergeAngle) ~ -sideError / MERGE_DISTANCE`, so the sideways speed is `-speed * sideError / MERGE_DISTANCE`: proportional to
-the error. That is `d(sideError)/dt = -(speed / MERGE_DISTANCE) * sideError`, so the error shrinks exponentially, with time constant `MERGE_DISTANCE / speed`. Picture the
-path as a river and the robot as a boat: the closer to the path, the more it points along it. It merges
-**tangentially**, and ends up on the path moving along it. A "straight line to a point 1 m ahead" is a different
+**The merge law (`:116`).** The robot keeps its speed and only turns the direction of travel. The velocity along the path is `speed cos(mergeAngle)`
+and the sideways part is
+
+`sidewaysSpeed = |speed| * sin(mergeAngle)`
+
+(negative when the robot is left of the path, so it moves right). For a small error, `sin(mergeAngle) ~ -sideError / MERGE_DISTANCE`, so the sideways speed is
+`-speed * sideError / MERGE_DISTANCE`: proportional to the error. That is `d(sideError)/dt = -(speed / MERGE_DISTANCE) * sideError`, so the error shrinks
+exponentially, with time constant `MERGE_DISTANCE / speed` (0.5 s at `1 m/s`). Picture the path as a river and the robot as a boat: the closer to the path, the more it
+points along it. It merges **tangentially**, and ends up on the path moving along it. A "straight line to a point 1 m ahead" is a different
 idea: the robot would aim at a fixed target, cut corners on arcs, and the direction would jump as the target moves to
 the next segment. The merge law is a vector field defined everywhere, with no target to choose.
 
-**Low-speed correction (`:107`).** Since the correction rate is `speed / MERGE_DISTANCE`, a slow robot corrects slowly, and at `speed = 0.15` it
-barely does. So the sideways speed has a floor:
+**Worked example (the test `PathTest.mergesOntoLegAlongAGentleCurve`).** The robot starts `0.3 m` beside an `8 m` straight leg. Then
+`mergeAngle = -atan(0.3 / 0.5) = -31.0` degrees. Whatever the speed is, the sideways part is `0.515` of it and the along-path part is `0.857` of it, so the robot
+slides onto the leg in a gentle curve. In the test it crosses the leg by at most `1.4 mm`, with a `0.1 s` drivetrain lag in the simulation.
 
-`sidewaysSpeed = -signum(sideError) * max( |speed sin(mergeAngle)|, FINAL_KP * |sideError| )`, then `|sidewaysSpeed| <= MAX_VELOCITY` (`:108`).
+**Why not a sideways floor everywhere.** An earlier version raised the sideways speed to at least `FINAL_KP * |sideError|` everywhere. At the start the robot is slow (it
+accelerates from rest), and `FINAL_KP * 0.3 = 0.9 m/s` is much more than the sideways part of a slow robot. The sideways part dominated the along-path part, and the
+robot headed nearly straight at the line: an approach angle of `86.7` degrees instead of `31.0`. The rule that the angle follows only `sideError` fixes that.
 
-`FINAL_KP * |sideError|` is a rate of 3 per second, the same as the stop approach. Example: `speed = 1`, `sideError = 0.1`: `|speed sin mergeAngle| = 0.196`, so
-the floor `0.3` wins and `sidewaysSpeed = -0.3` (to the right).
+**Low-speed correction near a stop (`:117-119`).** The correction rate is `speed / MERGE_DISTANCE`, and a robot that is about to stop is slow
+(at `MIN_SPEED = 0.15` it barely corrects). So only when `|distanceToStop| < MERGE_DISTANCE`, the sideways speed is raised to at least a pull straight toward the path:
 
-The command is `velocity = lookAheadDirection * (speed cos mergeAngle) + normal * sidewaysSpeed` (`:109`). The along-path part uses the look-ahead direction,
+`sidewaysSpeed = -signum(sideError) * max( |speed sin(mergeAngle)|, FINAL_KP * |sideError| )`, then `|sidewaysSpeed| <= MAX_VELOCITY` (`:119`).
+
+`FINAL_KP * |sideError|` is a rate of 3 per second, the same as the stop approach, so the robot settles on the stop point and does not stay beside it.
+Example: `speed = 0.3` (the stop approach allows `3 * 0.1 = 0.3` at 0.1 m from the stop), `sideError = 0.1`: `|speed sin mergeAngle| = 0.3 * 0.196 = 0.059`, so
+the floor `3 * 0.1 = 0.3` wins and `sidewaysSpeed = -0.3` (to the right). Farther than `0.5 m` from a stop, with `speed = 1` and `sideError = 0.1`, the law
+alone applies: `sidewaysSpeed = 1 * sin(-11.3 degrees) = -0.196`, and the along-path part is `0.981`.
+
+The command is `velocity = lookAheadDirection * (speed cos mergeAngle) + normal * sidewaysSpeed` (`:120-121`). The along-path part uses the look-ahead direction,
 the sideways part uses the normal at `progress`.
 
-### 5.6 The 2-D acceleration limit (`:110-113`)
+### 5.6 The 2-D acceleration limit (`:122-126`)
 
 The speed law limited changes of `speed`, a number. But the direction can change too, and a sudden sideways
 change is also an acceleration. So the change of the **whole velocity vector** is capped:
@@ -513,7 +527,7 @@ change is also an acceleration. So the change of the **whole velocity vector** i
 That is a limit of `6 m/s^2` in any direction, which covers a start, a stop, a turn, a merge. (It is bigger than `MAX_ACCELERATION = 3`
 because a vector change can mix a speed change with a direction change.) Finally the length of `velocity` is clamped to `MAX_VELOCITY`.
 
-### 5.7 Heading and turnRate (`:115`, `:132`)
+### 5.7 Heading and turnRate (`:128-129`, `:149`)
 
 **Heading plan.** `anchors` are `(distance, angle)` pairs: each point with `withAngle`. If the path has no angle at `distance = 0`, the
 constructor adds an anchor at 0 with the robot's starting heading (`:33-34`). Between two anchors `before` and `after`, the
@@ -526,7 +540,7 @@ heading is held. If two anchors have the same `distance` (within `1e-9`), the he
 
 **Command.**
 
-`turnRate = targetHeadingPerMeter * speed + HEADING_KP * headingError`, clamped to `+-MAX_OMEGA` (`:115`).
+`turnRate = targetHeadingPerMeter * speed + HEADING_KP * headingError`, clamped to `+-MAX_OMEGA` (`:128-129`).
 
 - `targetHeadingPerMeter * speed` is a **feedforward**: heading changes `targetHeadingPerMeter` radians per meter, the robot moves `speed` meters per second,
   so the heading must change at `targetHeadingPerMeter * speed` rad/s. The units multiply out to rad/s. This makes the heading follow the plan without lag.
@@ -536,11 +550,11 @@ heading is held. If two anchors have the same `distance` (within `1e-9`), the he
 Because the plan is in path distance, not time, the heading automatically goes with the speed: slow down, turn
 slower; stop, the heading holds.
 
-Last line (`:116-120`): if any output is NaN, return zero, else store `previousSpeed = speed`, `previousVelocity = velocity`, and return `(velocity.x, velocity.y, turnRate)`.
+Last line (`:130-134`): if any output is NaN, return zero, else store `previousSpeed = speed`, `previousVelocity = velocity`, and return `(velocity.x, velocity.y, turnRate)`.
 
 ## 6. FollowPathCommand
 
-**Alliance flip (`initialize`, `:36-39`).** Paths are written for blue. If the Driver Station says red, the command
+**Alliance flip (`initialize`, `:36-38`).** Paths are written for blue. If the Driver Station says red, the command
 uses `path.flipped()` (`Path.java:138`), which flips every point (`Point.flipped`, `Point.java:50`) and rebuilds the path.
 If the alliance is unknown it defaults to blue. Two ways, chosen by `PathConstants.MIRRORED_FIELD` (default `false`):
 
@@ -557,7 +571,7 @@ mirror: a left turn becomes a right turn, and a counter-clockwise spin becomes c
 rebuilds from the flipped **points** and recomputes the turn signs from the new geometry, instead of copying the old
 arcs. Pick the setting that matches how your field is laid out.
 
-**Start check (`:40-47`).** It compares the robot with the path start. If the distance is more than `START_TOLERANCE` (0.5 m),
+**Start check (`:39-47`).** It compares the robot with the path start. If the distance is more than `START_TOLERANCE` (0.5 m),
 it reports an error to the Driver Station and sets `follower = null`. Then `isFinished()` is true at once (`:55`) and the
 command ends without moving. Only position is checked, not heading. This guards against running an auto from the wrong
 place on the field. Otherwise it creates `new PathFollower(active, start)` with the starting pose, whose heading is
@@ -588,7 +602,7 @@ All in `PathConstants.java`. Values are starting points.
 | `MAX_VECTOR_ACCELERATION` (13) | 6.0 | m/s^2 | Cap on the change of the velocity vector per second | Allows jerky direction changes | Sluggish merge, can not follow tight arcs, error grows |
 | `MAX_OMEGA` (14) | 6.28 | rad/s | Top turn rate | Faster than the drive can turn | Heading lags the plan |
 | `HEADING_KP` (15) | 4.0 | rad/s per rad | P gain on heading error | Oscillates, hunts | Heading error stays |
-| `FINAL_KP` (17) | 3.0 | 1/s | Gain on distance to stop and on cross-track error | Aggressive, overshoot, twitchy | Slow settle, weak merge at low speed |
+| `FINAL_KP` (17) | 3.0 | 1/s | Gain on distance to stop, and on cross-track error within `MERGE_DISTANCE` of a stop | Aggressive, overshoot, twitchy | Slow settle at a stop |
 | `MERGE_DISTANCE` (19) | 0.5 | m | Cross-track distance giving a 45 degree merge | Slow, lazy return to the path | Hard snap, near 90 degrees for small errors, may oscillate |
 | `LAG_TIME` (21) | 0.05 | s | Drivetrain delay the look-ahead covers | Steers for a point too far ahead, cuts arcs | Does not compensate, trails the path |
 | `POSITION_TOLERANCE` (22) | 0.03 | m | "At the stop/end" distance (and half of it ends the creep) | Finishes sloppy | May never finish if the robot cannot get that close |
