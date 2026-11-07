@@ -32,9 +32,6 @@ import frc.robot.Kinematics.KinematicsConfig;
 import frc.robot.Kinematics.SwerveAccelerationLimiter;
 import frc.robot.Path.FollowPathCommand;
 import frc.robot.Path.Path;
-import frc.robot.Path.PathFollowerConfig;
-import frc.robot.Path.PathDrivetrain;
-import frc.robot.Path.PathConstraints;
 import frc.robot.Path.Point;
 import frc.robot.RobotPose.RobotPose;
 import frc.robot.RobotPose.Estimation.DemaciaPoseEstimator.OdometryData;
@@ -71,7 +68,7 @@ import frc.robot.RobotPose.Vision.visionConfigs.QuestConfig;
  * modules all use the same index. A different order makes the robot fight itself when it turns
  * (the pose won't show it while driving straight).
  */
-public class ExampleSwerveWithPose extends SubsystemBase implements PathDrivetrain {
+public class ExampleSwerveWithPose extends SubsystemBase {
     /** The cameras (same as the RobotPose README). Measure the offsets on your robot. */
     public static final class VisionConstants {
         // Limelight hostname: "limelight-front". Robot center (on the floor) to lens [m, rad]: x forward, y left, z up
@@ -120,8 +117,6 @@ public class ExampleSwerveWithPose extends SubsystemBase implements PathDrivetra
     private final Translation2d[] moduleLocations;
     private final DemaciaKinematics kinematics;
     private final SwerveAccelerationLimiter limiter;
-    private final PathConstraints pathConstraints;
-    private final PathFollowerConfig followerConfig = PathFollowerConfig.defaults(); // gains, tolerances, red flip (ROTATE)
     private final Pigeon2 pigeon;
     private final StatusSignal<Angle> yaw; // main thread copy (refreshed here, not by the thread) [deg]
     private final StatusSignal<AngularVelocity> yawRate; // [deg/s]
@@ -148,12 +143,6 @@ public class ExampleSwerveWithPose extends SubsystemBase implements PathDrivetra
         }
         this.modules = modules;
         this.moduleLocations = moduleLocations;
-        // 90% of the limiter's limits; omega and alpha are placeholders, measure on the robot
-        double brake = Math.min(kinematicsConfig.maxSkidAccel,
-                Math.min(kinematicsConfig.maxTiltAccelFront, kinematicsConfig.maxTiltAccelSide));
-        this.pathConstraints = new PathConstraints(PathConstraints.PROFILE_MARGIN * kinematicsConfig.maxAllowedModuleVelocity,
-                PathConstraints.PROFILE_MARGIN * Math.min(kinematicsConfig.maxForwardAccel, brake), PathConstraints.PROFILE_MARGIN * brake, PathConstraints.PROFILE_MARGIN * brake,
-                2.0 * Math.PI, 4.0 * Math.PI);
         this.kinematics = new DemaciaKinematics(kinematicsConfig, moduleLocations);
         this.limiter = new SwerveAccelerationLimiter(kinematicsConfig);
         this.pigeon = pigeon;
@@ -278,7 +267,6 @@ public class ExampleSwerveWithPose extends SubsystemBase implements PathDrivetra
     }
 
     /** The fused field pose (blue-alliance origin), as of the last {@code RobotPose.periodic()}. */
-    @Override
     public Pose2d getPose() {
         return RobotPose.getInstance().getEstimatedPose();
     }
@@ -319,7 +307,6 @@ public class ExampleSwerveWithPose extends SubsystemBase implements PathDrivetra
      *
      * @param wanted field-relative speeds (blue-alliance origin) [m/s, rad/s], omega CCW positive
      */
-    @Override
     public void driveFieldRelative(ChassisSpeeds wanted) {
         Rotation2d heading = heading();
         // desaturate before the limit, or the robot spins at full speed and drives much slower
@@ -349,7 +336,6 @@ public class ExampleSwerveWithPose extends SubsystemBase implements PathDrivetra
      *
      * @return measured speeds, blue-alliance origin [m/s, rad/s], omega CCW positive
      */
-    @Override
     public ChassisSpeeds getFieldSpeeds() {
         ChassisSpeeds measured = kinematics.toChassisSpeeds(getModuleStates(), getGyroRate());
         return ChassisSpeeds.fromRobotRelativeSpeeds(measured, heading());
@@ -359,14 +345,13 @@ public class ExampleSwerveWithPose extends SubsystemBase implements PathDrivetra
     public static Path examplePath() {
         return new Path(
                 new Point(1, 2),
-                new Point(3, 4).withVelocity(1.5), // slow to at most 1.5 m/s at this corner
-                new Point(5, 2).stop(1.0))         // stop here for 1 s
-                .withName("example");
+                new Point(3, 4).withRadius(0.5),   // round this corner with a 0.5 m radius
+                new Point(5, 2).stop(1.0));        // stop here for 1 s
     }
 
     /**
      * A fresh path-following command: on red it drives the flipped path, and the start pose is set
-     * (flipped too) first. Call it again for every autonomous run: a command can be used in one
+     * (flipped too, keeping the current heading) first. Call it again for every autonomous run: a command can be used in one
      * composition only, e.g. {@code chassis.follow(examplePath())}. Pass the blue path; the command flips it.
      *
      * <p>To run a mechanism part way along the path, keep the command and use its progress (0 to 1):
@@ -380,26 +365,21 @@ public class ExampleSwerveWithPose extends SubsystemBase implements PathDrivetra
      */
     public Command follow(Path path) {
         return Commands.defer(() -> {
-            Path active = isRedAlliance() ? path.flipped(followerConfig) : path; // red: the flipped path (start pose)
-            Pose2d start = new Pose2d(active.startPoint(), active.startHeading().orElse(getPose().getRotation()));
+            Path active = isRedAlliance() ? path.flipped() : path; // red: the flipped path (start pose)
+            Pose2d start = new Pose2d(active.start(), getPose().getRotation());
             return Commands.runOnce(() -> setStartPose(start)).andThen(followCommand(path));
         }, Set.of(this));
     }
 
     /**
-     * The follower alone (no start pose reset), with this robot's constraints. The command flips the
+     * The follower alone (no start pose reset). The command flips the
      * path itself on red.
      *
      * @param path the path, written for the blue alliance
      * @return a new command that requires this chassis
      */
     public FollowPathCommand followCommand(Path path) {
-        return new FollowPathCommand(this, path).withConfig(followerConfig);
-    }
-
-    @Override
-    public PathConstraints getPathConstraints() {
-        return pathConstraints;
+        return new FollowPathCommand(path, this::getPose, this::getFieldSpeeds, this::driveFieldRelative, this);
     }
 
     /**

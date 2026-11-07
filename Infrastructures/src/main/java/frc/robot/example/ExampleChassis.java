@@ -1,5 +1,6 @@
 package frc.robot.example;
 
+import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Translation2d;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
@@ -8,6 +9,8 @@ import edu.wpi.first.wpilibj2.command.SubsystemBase;
 import frc.robot.Kinematics.DemaciaKinematics;
 import frc.robot.Kinematics.KinematicsConfig;
 import frc.robot.Kinematics.SwerveAccelerationLimiter;
+import frc.robot.Path.FollowPathCommand;
+import frc.robot.Path.Path;
 
 /**
  * Example swerve chassis that uses {@link DemaciaKinematics}, with the optional acceleration limit
@@ -76,6 +79,9 @@ public abstract class ExampleChassis extends SubsystemBase {
 
     /** Gyro yaw rate [rad/s], CCW positive. */
     protected abstract double getGyroRate();
+
+    /** Field pose (blue-alliance origin), e.g. from RobotPose. */
+    public abstract Pose2d getPose();
 
     /** Writes the yaw to the gyro hardware. */
     protected abstract void setGyroYaw(Rotation2d yaw);
@@ -149,5 +155,15 @@ public abstract class ExampleChassis extends SubsystemBase {
         Translation2d velocity = new Translation2d(lastFieldSpeeds.vxMetersPerSecond,
                 lastFieldSpeeds.vyMetersPerSecond).rotateBy(turn);
         lastFieldSpeeds = new ChassisSpeeds(velocity.getX(), velocity.getY(), lastFieldSpeeds.omegaRadiansPerSecond);
+    }
+
+    /** Follows the path (written for the blue alliance), driving this chassis field-relative. */
+    public FollowPathCommand followCommand(Path path) {
+        return new FollowPathCommand(path, this::getPose, this::getFieldSpeeds, this::driveFieldRelative, this);
+    }
+
+    private ChassisSpeeds getFieldSpeeds() {
+        return ChassisSpeeds.fromRobotRelativeSpeeds(
+                kinematics.toChassisSpeeds(getModuleStates(), getGyroRate()), heading());
     }
 }

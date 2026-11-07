@@ -1,230 +1,181 @@
 package frc.robot.Path;
 
+import static frc.robot.Path.PathConstants.MAX_ARC_TURN;
+import static frc.robot.Path.PathConstants.RADIUS;
+
+import edu.wpi.first.math.MathUtil;
+import edu.wpi.first.math.geometry.Rotation2d;
+import edu.wpi.first.math.geometry.Translation2d;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.Objects;
-import java.util.Optional;
-import java.util.concurrent.atomic.AtomicInteger;
-
-import edu.wpi.first.math.geometry.Pose2d;
-import edu.wpi.first.math.geometry.Rotation2d;
-import edu.wpi.first.math.geometry.Translation2d;
-import edu.wpi.first.wpilibj.DriverStation;
-import frc.robot.Path.PathFollowerConfig.FlipMode;
 
 /**
- * Points and constraints of one path, with the built geometry (blue frame, or the flipped frame
- * for a flipped copy) (design doc section 9.4). Immutable: each {@code withX} returns a new Path
- * that shares the geometry. Build warnings are kept in {@link #warnings()} and printed once to the
- * Driver Station when the path is built.
+ * Lines joined by corner arcs through the waypoints, in field coordinates [m]. Each interior
+ * waypoint becomes a circle through it (tangent legs between circles), a sharp stop corner, or is
+ * dropped when the path runs straight through it. The end is always a stop.
  */
 public final class Path {
+    record Stop(double s, double dwell) {}
 
-    private static final AtomicInteger COUNTER = new AtomicInteger();
+    record Anchor(double s, Rotation2d angle) {}
 
-    private final List<Point> points;
-    private final PathGeometry geometry;
-    private final PathConstraints constraints;   // null = resolved when the command starts
-    private final String name;
-    private final List<String> warnings;
+    private final Point[] points;
+    private final List<Segment> segments = new ArrayList<>();
+    private final List<Double> starts = new ArrayList<>();
+    private final List<Stop> stops = new ArrayList<>();
+    private final List<Anchor> anchors = new ArrayList<>();
+    private double length;
 
-    /**
-     * Builds the geometry. Throws on bad input (V1, V3, V6, V30), warns for repairs.
-     *
-     * @param points two or more points
-     */
+    /** @param points at least 2 waypoints, consecutive ones more than 1 cm apart */
     public Path(Point... points) {
-        this(null, checkPoints(points));
-    }
-
-    /**
-     * @param constraints per-path constraints
-     * @param points      two or more points
-     */
-    public Path(PathConstraints constraints, Point... points) {
-        this(Objects.requireNonNull(constraints, Point.nullMessage("new Path", "the constraints", "a PathConstraints (for example PathConstraints.defaults())")),
-                checkPoints(points));
-    }
-
-    /** Builds from a checked list and reports the build warnings once. */
-    private Path(PathConstraints constraints, List<Point> points) {
-        this.points = points;
-        this.name = "path" + COUNTER.incrementAndGet();
-        List<String> w = new ArrayList<>();
-        this.geometry = PathGeometry.build(points, name, w);
-        this.warnings = Collections.unmodifiableList(w);
-        this.constraints = constraints;
-        for (String text : warnings) {
-            DriverStation.reportWarning(text, false);
+        if (points == null || points.length < 2) throw new IllegalArgumentException("Path needs at least 2 points");
+        for (int i = 0; i < points.length; i++) {
+            if (points[i] == null) throw new IllegalArgumentException("Path point " + i + " is null");
+            if (i > 0 && pos(points, i).getDistance(pos(points, i - 1)) <= 0.01)
+                throw new IllegalArgumentException("Path points " + (i - 1) + " and " + i + " are within 1 cm");
         }
-    }
-
-    /** Copy constructor: shares the geometry. */
-    private Path(List<Point> points, PathGeometry geometry, PathConstraints constraints, String name,
-                 List<String> warnings) {
-        this.points = points;
-        this.geometry = geometry;
-        this.constraints = constraints;
-        this.name = name;
-        this.warnings = warnings;
-    }
-
-    /** @return a path through the points */
-    public static Path of(List<Point> points) {
-        Objects.requireNonNull(points, Point.nullMessage("Path.of", "the points list", "a list of Points (for example List.of(new Point(1, 2), new Point(3, 4)))"));
-        return new Path(points.toArray(new Point[0]));
-    }
-
-    /**
-     * The name is used in the command name and in run messages; warning texts keep the automatic
-     * name the path had when it was built ({@code Path "path3", ...}).
-     *
-     * @return a copy with a name
-     */
-    public Path withName(String name) {
-        Objects.requireNonNull(name, Point.nullMessage("withName", "the name", "a text (for example withName(\"drive to reef\"))"));
-        return new Path(points, geometry, constraints, name, warnings);
-    }
-
-    /** @return a copy with per-path constraints */
-    public Path withConstraints(PathConstraints constraints) {
-        Objects.requireNonNull(constraints, Point.nullMessage("withConstraints", "the constraints", "a PathConstraints (for example PathConstraints.defaults())"));
-        return new Path(points, geometry, constraints, name, warnings);
-    }
-
-    /**
-     * Mode NONE returns this. Pass the blue path: flipping a flipped path turns it back.
-     *
-     * @param mode        NONE, MIRROR or ROTATE
-     * @param fieldLength field length [m]
-     * @param fieldWidth  field width [m]
-     * @return the flipped path (a new object on every call)
-     */
-    public Path flipped(FlipMode mode, double fieldLength, double fieldWidth) {
-        Objects.requireNonNull(mode, Point.nullMessage("flipped", "the flip mode", "a FlipMode (for example FlipMode.ROTATE)"));
-        if (mode == FlipMode.NONE) {
-            return this;
-        }
-        List<Point> flippedPoints = new ArrayList<>(points.size());
-        for (Point p : points) {
-            Translation2d pos = PathGeometry.flip(p.position(), mode, fieldLength, fieldWidth);
-            Rotation2d angle = p.angle().map(a -> PathGeometry.flip(a, mode)).orElse(null);
-            flippedPoints.add(p.withPositionAndAngle(pos.getX(), pos.getY(), angle));
-        }
-        return new Path(Collections.unmodifiableList(flippedPoints),
-                geometry.flipped(mode, fieldLength, fieldWidth), constraints, name, warnings);
-    }
-
-    /** @return {@code flipped(config.flipMode(), config.fieldLength(), config.fieldWidth())} */
-    public Path flipped(PathFollowerConfig config) {
-        Objects.requireNonNull(config, Point.nullMessage("flipped", "the config", "a PathFollowerConfig (for example PathFollowerConfig.defaults())"));
-        return flipped(config.flipMode(), config.fieldLength(), config.fieldWidth());
-    }
-
-    /** @return the name, default "path" + a counter */
-    public String name() {
-        return name;
-    }
-
-    /** @return length L [m] */
-    public double length() {
-        return geometry.length();
-    }
-
-    /** @return number of points as given (before merging) */
-    public int pointCount() {
-        return points.size();
-    }
-
-    /** @return the points as given */
-    public List<Point> points() {
-        return points;
-    }
-
-    /**
-     * @param pointIndex index of the point as given, 0 = first
-     * @return s of that point (5.9.4); merged points map to the kept one. Use {@code s / length()}
-     *     with the command's {@code progress()} to act at a point.
-     */
-    public double sAtPoint(int pointIndex) {
-        if (pointIndex < 0 || pointIndex >= points.size()) {
-            throw new IllegalArgumentException("Point index " + pointIndex + " does not exist: the path has "
-                    + points.size() + " points, numbered 0 to " + (points.size() - 1)
-                    + ". Index 0 is the first point you passed to new Path(...). Use an index in that range, for example"
-                    + " sAtPoint(1).");
-        }
-        return geometry.waypointS(pointIndex);
-    }
-
-    /** @return the per-path constraints, empty = resolved when the command starts */
-    public Optional<PathConstraints> constraints() {
-        return Optional.ofNullable(constraints);
-    }
-
-    /** @return every warning reported at build time; the texts keep the automatic name given at construction */
-    public List<String> warnings() {
-        return warnings;
-    }
-
-    /** @return P_0 */
-    public Translation2d startPoint() {
-        return points.get(0).position();
-    }
-
-    /** @return P_{n-1}: the kept last point (later duplicates at s = L were merged into it) */
-    public Translation2d endPoint() {
-        double length = geometry.length();
-        int i = points.size() - 1;
-        while (i > 0 && geometry.waypointS(i - 1) == length) {
-            i--;
-        }
-        return points.get(i).position();
-    }
-
-    /** @return P_0's angle if set (P_0 and the points merged into it; the later angle wins, 5.8.2) */
-    public Optional<Rotation2d> startHeading() {
-        Optional<Rotation2d> angle = Optional.empty();
-        for (int i = 0; i < points.size() && geometry.waypointS(i) == 0.0; i++) {
-            if (points.get(i).angle().isPresent()) {
-                angle = points.get(i).angle();
+        this.points = points.clone();
+        int n = points.length;
+        Translation2d[] centers = new Translation2d[n];
+        double[] rho = new double[n]; // sigma * r; 0 = point node
+        double[] sOf = new double[n];
+        Arrays.fill(sOf, Double.NaN);
+        List<Integer> nodes = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            Translation2d v = pos(points, i);
+            centers[i] = v;
+            if (i == 0 || i == n - 1 || points[i].isStop()) {
+                nodes.add(i);
+                continue;
+            }
+            Translation2d uIn = unit(v.minus(pos(points, i - 1)));
+            Translation2d uOut = unit(pos(points, i + 1).minus(v));
+            double theta = Math.atan2(cross(uIn, uOut), uIn.dot(uOut));
+            if (Math.abs(theta) > MAX_ARC_TURN) {
+                nodes.add(i);
+            } else if (Math.abs(theta) >= 1e-3) {
+                double r = Double.isNaN(points[i].radius()) ? RADIUS : points[i].radius();
+                centers[i] = v.plus(unit(uOut.minus(uIn)).times(r));
+                rho[i] = Math.signum(theta) * r;
+                nodes.add(i);
             }
         }
-        return angle;
+        Translation2d[][] legs = new Translation2d[nodes.size() - 1][];
+        for (int j = 0; j < legs.length; j++) {
+            int a = nodes.get(j), b = nodes.get(j + 1);
+            legs[j] = tangent(centers[a], rho[a], centers[b], rho[b]);
+            if (legs[j] == null) throw arcError(rho[b] != 0 ? b : a);
+        }
+        for (int j = 0; j < nodes.size(); j++) {
+            int i = nodes.get(j);
+            if (rho[i] != 0) {
+                Translation2d c = centers[i];
+                int sigma = (int) Math.signum(rho[i]);
+                double a0 = polar(legs[j - 1][1].minus(c));
+                double sweep = mod2pi(sigma * (polar(legs[j][0].minus(c)) - a0));
+                double rel = mod2pi(sigma * (polar(pos(points, i).minus(c)) - a0));
+                if (!(sweep > 1e-9 && sweep < 2 * Math.PI - 1e-9 && rel <= sweep + 1e-9)) throw arcError(i);
+                Arc arc = new Arc(c, Math.abs(rho[i]), sigma, a0, sweep);
+                sOf[i] = length + Math.min(arc.length(), Math.abs(rho[i]) * rel);
+                add(arc);
+            } else {
+                sOf[i] = length;
+                if (i > 0) stops.add(new Stop(length, points[i].dwell()));
+            }
+            if (j < legs.length && legs[j][1].getDistance(legs[j][0]) > 1e-6) add(new Line(legs[j][0], legs[j][1]));
+        }
+        for (int i = 1; i < n; i++) if (Double.isNaN(sOf[i])) sOf[i] = locate(pos(points, i), sOf[i - 1]);
+        for (int i = 0; i < n; i++) if (points[i].angle() != null) anchors.add(new Anchor(sOf[i], points[i].angle()));
     }
 
-    /** @return poses along the path, rotation = direction of travel */
-    public List<Pose2d> polyline(double spacingMeters) {
-        if (!(spacingMeters > 0) || !Double.isFinite(spacingMeters)) {
-            throw new IllegalArgumentException("polyline(" + spacingMeters
-                    + "): the spacing must be a finite number more than 0 (meters), for example polyline(0.05).");
-        }
-        double length = geometry.length();
-        int count = (int) Math.ceil(length / spacingMeters);
-        List<Pose2d> poses = new ArrayList<>(count + 1);
-        for (int i = 0; i <= count; i++) {
-            PathGeometry.PathSample sample = geometry.evaluate(Math.min(length, i * spacingMeters));
-            poses.add(new Pose2d(sample.position(), sample.tangent()));
-        }
-        return Collections.unmodifiableList(poses);
+    /** This path for the red alliance, per {@link PathConstants#MIRRORED_FIELD}. */
+    public Path flipped() {
+        return new Path(Arrays.stream(points).map(Point::flipped).toArray(Point[]::new));
     }
 
-    /** Internal: the built geometry of this path (flipped for a flipped path). */
-    PathGeometry geometry() {
-        return geometry;
+    /** Total length [m]. */
+    public double length() { return length; }
+
+    public Translation2d start() { return points[0].position(); }
+
+    public Translation2d end() { return points[points.length - 1].position(); }
+
+    List<Segment> segments() { return Collections.unmodifiableList(segments); }
+
+    /** Path distance [m] at the start of segment k. */
+    double segmentStart(int k) { return starts.get(k); }
+
+    /** Stops in path order; the last one is the end. */
+    List<Stop> stops() { return Collections.unmodifiableList(stops); }
+
+    /** Heading anchors in path order. */
+    List<Anchor> anchors() { return Collections.unmodifiableList(anchors); }
+
+    /** Index of the segment containing path distance s [m]. */
+    int indexAt(double s) {
+        int k = segments.size() - 1;
+        while (k > 0 && starts.get(k) > s) k--;
+        return k;
     }
 
-    /** @return the points as an unmodifiable list; throws V3 for null, V1 for fewer than 2 */
-    private static List<Point> checkPoints(Point[] points) {
-        Objects.requireNonNull(points, Point.nullMessage("new Path", "the points array", "the points (for example new Path(new Point(1, 2), new Point(3, 4)))"));
-        for (int i = 0; i < points.length; i++) {
-            Objects.requireNonNull(points[i], Point.nullMessage("new Path", "point " + i, "a Point for every position (for example new Point(1, 2))"));
-        }
-        if (points.length < 2) {
-            throw new IllegalArgumentException("Path needs at least 2 points (a start and an end), but you gave "
-                    + points.length + ". Example: new Path(new Point(1, 2), new Point(3, 4)).");
-        }
-        return Collections.unmodifiableList(Arrays.asList(points.clone()));
+    Translation2d pointAt(double s) {
+        int k = indexAt(s);
+        return segments.get(k).pointAt(s - starts.get(k));
     }
+
+    Translation2d tangentAt(double s) {
+        int k = indexAt(s);
+        return segments.get(k).tangentAt(s - starts.get(k));
+    }
+
+    private void add(Segment segment) {
+        segments.add(segment);
+        starts.add(length);
+        length += segment.length();
+    }
+
+    /** Path distance [m] >= fromS of the path point closest to p. */
+    private double locate(Translation2d p, double fromS) {
+        double best = fromS, bestDistance = Double.POSITIVE_INFINITY;
+        for (int k = 0; k < segments.size(); k++) {
+            Segment seg = segments.get(k);
+            double s = Math.max(fromS, starts.get(k) + MathUtil.clamp(seg.project(p), 0, seg.length()));
+            if (s > starts.get(k) + seg.length()) continue;
+            double d = pointAt(s).getDistance(p);
+            if (d < bestDistance - 1e-9) {
+                best = s;
+                bestDistance = d;
+            }
+        }
+        return best;
+    }
+
+    /**
+     * Directed common tangent leaving circle 1 and reaching circle 2 (rho = sigma * r, 0 = point);
+     * returns {T1, T2}, or null when it does not exist.
+     */
+    private static Translation2d[] tangent(Translation2d c1, double rho1, Translation2d c2, double rho2) {
+        Translation2d delta = c2.minus(c1);
+        double d = delta.getNorm(), q = rho2 - rho1;
+        if (!(d > Math.abs(q) + 1e-9)) return null;
+        Translation2d m = unit(delta).rotateBy(new Rotation2d(Math.acos(q / d))); // left normal of the leg
+        return new Translation2d[] {c1.minus(m.times(rho1)), c2.minus(m.times(rho2))};
+    }
+
+    private static IllegalArgumentException arcError(int i) {
+        return new IllegalArgumentException(
+                "Path point " + i + ": corner arc does not fit; move the points apart or use a smaller radius");
+    }
+
+    private static Translation2d pos(Point[] points, int i) { return points[i].position(); }
+
+    private static Translation2d unit(Translation2d v) { return v.div(v.getNorm()); }
+
+    static double cross(Translation2d a, Translation2d b) { return a.getX() * b.getY() - a.getY() * b.getX(); }
+
+    private static double polar(Translation2d v) { return Math.atan2(v.getY(), v.getX()); }
+
+    private static double mod2pi(double a) { return MathUtil.inputModulus(a, 0, 2 * Math.PI); }
 }
