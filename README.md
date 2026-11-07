@@ -16,7 +16,8 @@ pose and field speeds from your own drivetrain.
 > [!NOTE]
 > The student guide (full API, headings, constants, troubleshooting) is
 > [Infrastructures/src/main/java/frc/robot/Path/README.md](Infrastructures/src/main/java/frc/robot/Path/README.md).
-> The math is in [docs/Path-design.md](docs/Path-design.md).
+> The math is in [docs/Path-design.md](docs/Path-design.md); a plain-language walk-through is in
+> [docs/Path-explained.md](docs/Path-explained.md).
 
 ## Contents
 
@@ -129,7 +130,8 @@ Each module is on its own branch and has its own README:
 .
 ├── README.md
 ├── docs/
-│   └── Path-design.md                 Design notes
+│   ├── Path-design.md                 Design notes
+│   └── Path-explained.md              Plain-language walk-through of the code
 └── Infrastructures/src/main/java/frc/robot/
     ├── Path/
     │   ├── README.md                  Student guide

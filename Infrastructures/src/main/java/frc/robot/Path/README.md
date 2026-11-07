@@ -15,6 +15,8 @@ supplier and a field-relative drive method. It needs no code from outside its ow
 > [!NOTE]
 > The math (corner circle, tangents, progress, speed and merge laws) is in
 > [Path-design.md](../../../../../../../docs/Path-design.md).
+> A plain-language walk-through of all the code, with worked numbers, is in
+> [Path-explained.md](../../../../../../../docs/Path-explained.md).
 
 ## Install
 
