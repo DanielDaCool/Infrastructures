@@ -27,11 +27,6 @@ public final class Arc extends Segment {
         this.sweep = sweep;
     }
 
-    public Translation2d center() { return center; }
-
-    /** Radius [m]. */
-    public double radius() { return radius; }
-
     /** +1 CCW, -1 CW. */
     public int sigma() { return sigma; }
 
