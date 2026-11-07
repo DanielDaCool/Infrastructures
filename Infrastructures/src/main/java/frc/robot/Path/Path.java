@@ -40,6 +40,7 @@ public final class Path {
         int n = points.length;
         Translation2d[] centers = new Translation2d[n];
         double[] rho = new double[n]; // sigma * r; 0 = point node
+        double[] turn = new double[n]; // |theta| of circle nodes
         double[] sOf = new double[n];
         Arrays.fill(sOf, Double.NaN);
         List<Integer> nodes = new ArrayList<>();
@@ -59,6 +60,7 @@ public final class Path {
                 double r = Double.isNaN(points[i].radius()) ? RADIUS : points[i].radius();
                 centers[i] = v.plus(unit(uOut.minus(uIn)).times(r));
                 rho[i] = Math.signum(theta) * r;
+                turn[i] = Math.abs(theta);
                 nodes.add(i);
             }
         }
@@ -76,7 +78,7 @@ public final class Path {
                 double a0 = polar(legs[j - 1][1].minus(c));
                 double sweep = mod2pi(sigma * (polar(legs[j][0].minus(c)) - a0));
                 double rel = mod2pi(sigma * (polar(pos(points, i).minus(c)) - a0));
-                if (!(sweep > 1e-9 && sweep < 2 * Math.PI - 1e-9 && rel <= sweep + 1e-9)) throw arcError(i);
+                if (!(sweep > 1e-9 && sweep <= turn[i] + Math.PI / 2 && rel <= sweep + 1e-9)) throw arcError(i);
                 Arc arc = new Arc(c, Math.abs(rho[i]), sigma, a0, sweep);
                 sOf[i] = length + Math.min(arc.length(), Math.abs(rho[i]) * rel);
                 add(arc);

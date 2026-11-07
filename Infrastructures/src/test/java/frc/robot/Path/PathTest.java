@@ -177,7 +177,8 @@ class PathTest {
         }
         assertTrue(firstZero > 0, "never commanded a stop");
         assertTrue(maxXBeforeStop <= 2.05, "overshoot, x " + maxXBeforeStop);
-        assertTrue(minSpeedNearStop < STOP_SPEED, "speed near stop " + minSpeedNearStop);
+        // braked from cruise down to the MIN_SPEED capture floor before the zero command at the stop
+        assertTrue(minSpeedNearStop <= MIN_SPEED + 1e-9, "speed near stop " + minSpeedNearStop);
         assertTrue(zeroLoops * DT >= 0.5, "dwell " + zeroLoops * DT);
         assertTrue(sim.positions.get(sim.positions.size() - 1).getX() > 3.9, "continues past the stop");
         assertFalse(Double.isNaN(sim.finishTime), "finished");

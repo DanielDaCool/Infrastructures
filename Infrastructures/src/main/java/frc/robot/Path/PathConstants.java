@@ -21,6 +21,8 @@ public final class PathConstants {
     public static final double LAG_TIME = 0.05;
     public static final double POSITION_TOLERANCE = 0.03; // m
     public static final double ANGLE_TOLERANCE = Math.toRadians(2);
+    /** Least along-track speed toward a stop until within POSITION_TOLERANCE / 2 [m/s]; beats a drive deadband. */
+    public static final double MIN_SPEED = 0.15;
     /** Measured speed below which a stop counts as reached [m/s]. */
     public static final double STOP_SPEED = 0.1;
     /** Max distance from the robot to the path start [m]. */

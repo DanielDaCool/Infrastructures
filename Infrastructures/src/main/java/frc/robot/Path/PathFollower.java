@@ -58,20 +58,25 @@ public final class PathFollower {
         heading(s);
         double headingError = MathUtil.angleModulus(thetaRef - theta);
 
-        boolean atStop = p.getDistance(path.pointAt(stop.s())) < POSITION_TOLERANCE
-                && Math.hypot(measuredFieldSpeeds.vxMetersPerSecond, measuredFieldSpeeds.vyMetersPerSecond) < STOP_SPEED;
+        double measured = Math.hypot(measuredFieldSpeeds.vxMetersPerSecond, measuredFieldSpeeds.vyMetersPerSecond);
+        if (!Double.isFinite(measured)) measured = vCmdPrev.getNorm();
+        double stopDistance = p.getDistance(path.pointAt(stop.s()));
+        boolean atStop = stopDistance < POSITION_TOLERANCE && measured < STOP_SPEED;
         if (stopIndex == stops.size() - 1) {
             if (atStop && Math.abs(MathUtil.angleModulus(thetaEnd - theta)) < ANGLE_TOLERANCE) {
                 finished = true;
                 return new ChassisSpeeds();
             }
-        } else if (waitLoops >= 0 || atStop) {
+        }
+        if (stopIndex < stops.size() - 1 && (waitLoops >= 0 || atStop)) {
             if (++waitLoops >= Math.round(stop.dwell() / DT)) {
                 stopIndex++;
                 waitLoops = -1;
                 s = stop.s(); // the robot may be up to POSITION_TOLERANCE short of the stop
                 k = path.indexAt(s);
             }
+        }
+        if (waitLoops >= 0 || stopDistance < POSITION_TOLERANCE / 2) {
             vPrev = 0;
             vCmdPrev = Translation2d.kZero;
             return new ChassisSpeeds(0, 0, MathUtil.clamp(HEADING_KP * headingError, -MAX_OMEGA, MAX_OMEGA));
@@ -87,8 +92,10 @@ public final class PathFollower {
             double cap = Math.sqrt(MAX_LATERAL_ACCELERATION / curvature);
             v = Math.min(v, Math.sqrt(cap * cap + 2 * MAX_DECELERATION * Math.max(0, path.segmentStart(j) - s)));
         }
-        v = Math.min(v, Math.min(Math.sqrt(2 * MAX_DECELERATION * Math.max(0, toStop)), FINAL_KP * toStop));
-        v = Math.max(v, Math.min(0, FINAL_KP * toStop)); // floor 0, or drive back when past the stop
+        double capture = Math.min(Math.sqrt(2 * MAX_DECELERATION * Math.max(0, toStop)), FINAL_KP * toStop);
+        capture = Math.copySign(Math.max(Math.abs(capture), MIN_SPEED), toStop); // beats a drive deadband
+        v = Math.min(v, capture);
+        v = Math.max(v, Math.min(0, capture)); // floor 0, or drive back when past the stop
 
         double local = s - path.segmentStart(k);
         Translation2d tangent = seg.tangentAt(local);
@@ -102,6 +109,7 @@ public final class PathFollower {
         Translation2d dv = cmd.minus(vCmdPrev);
         double maxDv = MAX_VECTOR_ACCELERATION * DT;
         if (dv.getNorm() > maxDv) cmd = vCmdPrev.plus(dv.times(maxDv / dv.getNorm()));
+        if (cmd.getNorm() > MAX_VELOCITY) cmd = cmd.times(MAX_VELOCITY / cmd.getNorm());
 
         double omega = MathUtil.clamp(dThetaRef * v + HEADING_KP * headingError, -MAX_OMEGA, MAX_OMEGA);
         if (!Double.isFinite(cmd.getX()) || !Double.isFinite(cmd.getY()) || !Double.isFinite(omega))
