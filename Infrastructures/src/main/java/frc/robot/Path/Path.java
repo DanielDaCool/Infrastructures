@@ -79,7 +79,7 @@ public final class Path {
                 double sweep = mod2pi(sigma * (polar(legs[j][0].minus(c)) - a0));
                 double rel = mod2pi(sigma * (polar(pos(points, i).minus(c)) - a0));
                 if (!(sweep > 1e-9 && sweep <= turn[i] + Math.PI / 2 && rel <= sweep + 1e-9)) throw arcError(i);
-                Arc arc = new Arc(c, Math.abs(rho[i]), sigma, a0, sweep);
+                Arc arc = new Arc(c, Math.abs(rho[i]), sigma > 0, a0, sweep);
                 sOf[i] = length + Math.min(arc.length(), Math.abs(rho[i]) * rel);
                 add(arc);
             } else {

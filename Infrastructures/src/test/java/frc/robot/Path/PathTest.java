@@ -108,10 +108,10 @@ class PathTest {
     @Test
     void arcsPassThroughWaypointsWithTurnDirectionSigma() {
         Object[][] cases = {
-            {left(), new Translation2d(2, 0), 1},
-            {right(), new Translation2d(2, 0), -1},
-            {sCurve(), new Translation2d(2, 0), 1},
-            {sCurve(), new Translation2d(2, 2), -1},
+            {left(), new Translation2d(2, 0), true},
+            {right(), new Translation2d(2, 0), false},
+            {sCurve(), new Translation2d(2, 0), true},
+            {sCurve(), new Translation2d(2, 2), false},
         };
         for (Object[] c : cases) {
             Path path = (Path) c[0];
@@ -128,7 +128,7 @@ class PathTest {
             }
             assertNotNull(best);
             assertEquals(0, bestDistance, 1e-6, "arc through " + wp);
-            assertEquals((int) c[2], best.sigma(), "sigma at " + wp);
+            assertEquals((boolean) c[2], best.isLeftTurn(), "turn direction at " + wp);
         }
     }
 
@@ -224,7 +224,7 @@ class PathTest {
             assertEquals(mirror ? 150 : 210, MathUtil.inputModulus(angle, 0, 360), 1e-9, "angle, mirror " + mirror);
 
             Arc arc = (Arc) left().flipped(mirror).segments().stream().filter(x -> x instanceof Arc).findFirst().orElseThrow();
-            assertEquals(mirror ? -1 : 1, arc.sigma(), "mirror turns a left turn into a right turn");
+            assertEquals(!mirror, arc.isLeftTurn(), "mirror turns a left turn into a right turn");
         }
         assertEquals(0, left().flipped().start().getDistance(left().flipped(MIRRORED_FIELD).start()), 1e-12);
     }
