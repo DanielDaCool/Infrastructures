@@ -524,6 +524,13 @@ change is also an acceleration. So the change of the **whole velocity vector** i
 
 `velocityChange = velocity - previousVelocity`. If `|velocityChange| > 2 * MAX_ACCELERATION * DT = 6 * 0.02 = 0.12 m/s`, scale `velocityChange` down to that length.
 
+Why 2 times `MAX_ACCELERATION`: the limit is an acceleration (m/s^2) times the loop time, which gives the largest
+velocity change allowed in one loop. On an arc the robot needs up to `MAX_ACCELERATION` along the path (speeding up
+or braking) and up to `MAX_ACCELERATION` toward the center (`speed^2 / radius`, capped by the arc speed limit) at the
+same time: `sqrt(A^2 + A^2)`, about `1.41 * A` in total. A limit of exactly `A` would clip normal arc following and
+make the robot run wide. The factor 2 is a margin above 1.41, chosen, not measured, so the limit only acts on sudden
+direction steps (a segment switch, a jump in the merge angle).
+
 That is a limit of `6 m/s^2` in any direction, which covers a start, a stop, a turn, a merge. (It is bigger than `MAX_ACCELERATION = 3`
 because a vector change can mix a speed change with a direction change.) Finally the length of `velocity` is clamped to `MAX_VELOCITY`.
 

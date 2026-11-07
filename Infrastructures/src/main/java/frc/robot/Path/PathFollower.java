@@ -170,7 +170,9 @@ public final class PathFollower {
         Translation2d velocity =
                 lookAheadDirection.times(speed * Math.cos(mergeAngle)).plus(normal.times(sidewaysSpeed));
         Translation2d velocityChange = velocity.minus(previousVelocity);
-        double maxVelocityChange = 2 * MAX_ACCELERATION * DT; // vector acceleration limit is twice MAX_ACCELERATION
+        // On an arc the robot needs up to MAX_ACCELERATION along the path and MAX_ACCELERATION toward the center,
+        // about 1.41x in total; 2x is a margin above that (not measured), so this only catches sudden direction steps.
+        double maxVelocityChange = 2 * MAX_ACCELERATION * DT;
         if (velocityChange.getNorm() > maxVelocityChange)
             velocity = previousVelocity.plus(velocityChange.times(maxVelocityChange / velocityChange.getNorm()));
         if (velocity.getNorm() > MAX_VELOCITY) velocity = velocity.times(MAX_VELOCITY / velocity.getNorm());
