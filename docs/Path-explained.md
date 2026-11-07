@@ -28,11 +28,11 @@ two jobs.
 
 **Job B, every 20 ms, while the robot drives (`PathFollower.calculate`):**
 
-1. Find out how far along the path the robot is (its **progress** `s`), using the pose.
+1. Find out how far along the path the robot is (its **progress** `progress`), using the pose.
 2. Pick a **speed**: as fast as the limits allow, but slow enough for the next arc and for the next stop.
 3. Pick a **direction**: along the path, bent gently back toward the path if the robot is off it.
 4. Pick a **turning rate** to follow the heading plan.
-5. Return field-relative speeds `(vx, vy, omega)`. `FollowPathCommand` hands them to the drivetrain.
+5. Return field-relative speeds `(vx, vy, turnRate)`. `FollowPathCommand` hands them to the drivetrain.
 
 A leg, an arc through a waypoint, and the next leg (the example used again in section 4):
 
@@ -61,7 +61,7 @@ lines `A-V` and `V-B`. It cuts the corner, and leg 1 even dips a little below `y
   **counter-clockwise** (CCW), the WPILib convention. Heading 0 means facing +x.
 - A "left turn" is CCW. A "right turn" is CW.
 - All speeds that the follower reads and writes are **field-relative**: `vx` is speed toward +x,
-  `vy` toward +y, `omega` is CCW spin. Not robot-relative.
+  `vy` toward +y, `turnRate` is CCW spin. Not robot-relative.
 - Waypoints are written for the **blue** side. On red, the whole path is flipped (section 6).
 
 Why this choice:
@@ -93,9 +93,9 @@ Used by: `Path` reads the points; `FollowPathCommand` never touches them directl
 
 ### Segment (`Segment.java`)
 
-An abstract piece of path. Every segment is parameterized by `t`, the **distance in meters from its start**.
-Five methods (`Segment.java:8-20`): `length()`, `pointAt(t)`, `tangentAt(t)` (unit direction of travel),
-`project(p)` (closest `t` to a point `p`, **not clamped**), and `curvature()` (signed, 1/m, positive
+An abstract piece of path. Every segment is parameterized by `distance`, the **distance in meters from its start**.
+Five methods (`Segment.java:8-20`): `length()`, `pointAt(distance)`, `tangentAt(distance)` (unit direction of travel),
+`project(point)` (closest `distance` to a point `point`, **not clamped**), and `curvature()` (signed, 1/m, positive
 means turning left, 0 for a line).
 
 Because `Line` and `Arc` share this shape, the follower never needs to know which one it is on.
@@ -103,21 +103,21 @@ Because `Line` and `Arc` share this shape, the follower never needs to know whic
 ### Line (`Line.java`)
 
 A straight segment. Stores the start and a unit direction. The constructor (`:11`) rejects a length of
-zero. `pointAt(t) = start + direction * t` (`:22`). The tangent is the constant direction (`:25`).
-`project(p) = dot(p - start, direction)` (`:28`). Curvature is 0 (`:31`).
+zero. `pointAt(distance) = start + direction * distance` (`:22`). The tangent is the constant direction (`:25`).
+`project(point) = dot(point - start, direction)` (`:28`). Curvature is 0 (`:31`).
 
 ### Arc (`Arc.java`)
 
-A piece of a circle: center, radius `r`, turn direction, `startAngle`, `sweep`. Constructor at `:22`.
+A piece of a circle: center, `radius`, turn direction, `startAngle`, `sweep`. Constructor at `:22`.
 It stores `turn = +1` for a left turn and `-1` for a right turn, and uses that sign in every formula.
 
-- `length() = r * sweep` (`:36`). Arc length is radius times angle in radians.
-- `pointAt(t)` (`:39`): the angle after moving `t` along the arc is `phi = startAngle + turn * t / r`,
-  and the point is `center + r * (cos phi, sin phi)`.
-- `tangentAt(t)` (`:45`): `turn * (-sin phi, cos phi)`. This is the derivative of the point with
+- `length() = radius * sweep` (`:36`). Arc length is radius times angle in radians.
+- `pointAt(distance)` (`:39`): the angle after moving `distance` along the arc is `angle = startAngle + turn * distance / radius`,
+  and the point is `center + radius * (cos angle, sin angle)`.
+- `tangentAt(distance)` (`:45`): `turn * (-sin angle, cos angle)`. This is the derivative of the point with
   respect to distance, so it has length 1.
-- `project(p)` (`:51`): see section 4.5.
-- `curvature() = turn / r` (`:58`). Curvature is 1/radius; a small circle is a sharp curve.
+- `project(point)` (`:51`): see section 4.5.
+- `curvature() = turn / radius` (`:58`). Curvature is 1/radius; a small circle is a sharp curve.
 
 ### Path (`Path.java`)
 
@@ -135,22 +135,22 @@ Key methods:
 | `cornerAt(i)` | 80 | Corner circle, stop or nothing for waypoint `i` |
 | `tangentLeg(from, to)` | 212 | The straight leg between two circles |
 | `cornerArc(...)` | 125 | The arc, with validity checks |
-| `locate(p, fromS)` | 188 | Closest path distance to `p`, not before `fromS` |
-| `indexAt(s)` | 165 | Which segment holds path distance `s` |
-| `pointAt(s)`, `tangentAt(s)` | 171, 176 | Position and direction at path distance `s` |
+| `locate(point, fromDistance)` | 188 | Closest path distance to `point`, not before `fromDistance` |
+| `indexAt(distance)` | 165 | Which segment holds path distance `distance` |
+| `pointAt(distance)`, `tangentAt(distance)` | 171, 176 | Position and direction at path distance `distance` |
 | `flipped()` | 138 | The red-side path |
 | `stops()`, `anchors()` | 159, 162 | Stops and heading anchors in path order |
 | `length()` | 147 | Total length |
 
-Path distance `s` is distance from the very start of the whole path. `starts.get(k)` is the `s` where
-segment `k` begins. Local `t = s - starts.get(k)`.
+Path distance `distance` is distance from the very start of the whole path. `segmentStarts.get(index)` is the path distance where
+segment `index` begins. Local `distanceOnSegment = distance - segmentStarts.get(index)`.
 
 ### PathFollower (`PathFollower.java`)
 
 The brain that runs every loop. `calculate(pose, measuredFieldSpeeds)` (`:44`) returns the speeds.
-It remembers: current segment `k`, next stop `stopIndex`, progress `s`, last commanded speed `vPrev`,
-last command vector `vCmdPrev`, dwell counter `waitLoops` and `finished`. Details in section 5.
-`heading(s)` (`:132`) computes the heading plan. `isFinished()` (`:124`) and `progress()` (`:127`)
+It remembers: current segment `segmentIndex`, next stop `stopIndex`, `progress`, last commanded speed `previousSpeed`,
+last command vector `previousVelocity`, dwell counter `waitLoops` and `finished`. Details in section 5.
+`updateTargetHeading(distance)` (`:132`) computes the heading plan. `isFinished()` (`:124`) and `progress()` (`:127`)
 are for the command.
 
 ### FollowPathCommand (`FollowPathCommand.java`)
@@ -176,46 +176,46 @@ Point[] --> Path --(builds)--> Segment list (Line, Arc, Line, ...) + stops + anc
 
 ## 4. The geometry, step by step
 
-Running example for sections 4.1 to 4.6: waypoints `A = (0, 0)`, `V = (2, 0)`, `B = (2, 2)`, radius `r = 0.25 m`.
+Running example for sections 4.1 to 4.6: waypoints `A = (0, 0)`, `V = (2, 0)`, `B = (2, 2)`, `radius = 0.25 m`.
 I computed every number in this section with a separate script that repeats the code's formulas.
 
 ### 4.1 The turn angle (cross and dot products)
 
 At an interior waypoint `V`, with the previous point `P` and the next point `N`:
 
-- `u_in = unit(V - P)`: the direction we arrive in. (`unit` means divide by length so the length is 1.)
-- `u_out = unit(N - V)`: the direction we leave in.
+- `directionIn = unitVector(V - P)`: the direction we arrive in. (`unit` means divide by length so the length is 1.)
+- `directionOut = unitVector(N - V)`: the direction we leave in.
 
 The signed turn angle is
 
-`theta = atan2( cross(u_in, u_out), dot(u_in, u_out) )` (`Path.java:87`)
+`turn = atan2( cross(directionIn, directionOut), dot(directionIn, directionOut) )` (`Path.java:87`)
 
 where `cross(a, b) = ax*by - ay*bx` and `dot(a, b) = ax*bx + ay*by`.
 
-Why it works: for two unit vectors with angle `theta` between them, `dot = cos(theta)` and
-`cross = sin(theta)`. The `cross` is positive when `u_out` is CCW from `u_in`. `atan2(sin, cos)` gives back
-`theta` with the right sign, in `(-180, 180]` degrees. Using `atan2` of both avoids the problems of
+Why it works: for two unit vectors with angle `turn` between them, `dot = cos(turn)` and
+`cross = sin(turn)`. The `cross` is positive when `directionOut` is CCW from `directionIn`. `atan2(sin, cos)` gives back
+`turn` with the right sign, in `(-180, 180]` degrees. Using `atan2` of both avoids the problems of
 `acos`, which cannot tell left from right and is inaccurate near 0 and 180 degrees.
 
-Example: `u_in = (1, 0)`, `u_out = (0, 1)`. `cross = 1*1 - 0*0 = 1`, `dot = 0`, so `theta = atan2(1, 0) = 90` degrees.
+Example: `directionIn = (1, 0)`, `directionOut = (0, 1)`. `cross = 1*1 - 0*0 = 1`, `dot = 0`, so `turn = atan2(1, 0) = 90` degrees.
 Positive, so it is a **left turn**.
 
-- `theta > 0`: left (CCW). `theta < 0`: right (CW).
-- `|theta| < 1e-3` rad (about 0.06 degrees): no turn, no corner (section 4.7).
-- `|theta| > MAX_ARC_TURN` (150 degrees): too sharp, becomes a stop (section 4.8).
+- `turn > 0`: left (CCW). `turn < 0`: right (CW).
+- `|turn| < 1e-3` rad (about 0.06 degrees): no turn, no corner (section 4.7).
+- `|turn| > MAX_ARC_TURN` (150 degrees): too sharp, becomes a stop (section 4.8).
 
 ### 4.2 Where the corner circle goes
 
 The center is placed at
 
-`C = V + r * unit(u_out - u_in)` (`Path.java:93`).
+`C = V + radius * unitVector(directionOut - directionIn)` (`Path.java:93`).
 
-Why this direction: `u_out - u_in` points to the inside of the turn (toward the side the path bends to; for a
+Why this direction: `directionOut - directionIn` points to the inside of the turn (toward the side the path bends to; for a
 left turn it points left of both legs). And the circle passes through `V`
-because `C` is exactly `r` from `V` (the added vector has length `r`). That is the whole trick: the
+because `C` is exactly `radius` from `V` (the added vector has length `radius`). That is the whole trick: the
 path goes **through** the waypoint instead of only near it, so the waypoint is a real point on the path.
 
-Example: `u_out - u_in = (-1, 1)`. Its unit vector is `(-0.7071, 0.7071)`. Times `0.25` gives
+Example: `directionOut - directionIn = (-1, 1)`. Its unit vector is `(-0.7071, 0.7071)`. Times `0.25` gives
 `(-0.1768, 0.1768)`. So `C = (2 - 0.1768, 0 + 0.1768) = (1.8232, 0.1768)`. Check: distance from `C` to `V` is
 `sqrt(0.1768^2 + 0.1768^2) = 0.25`. Good.
 
@@ -229,45 +229,45 @@ is a point where the line is tangent to the circle. The robot drives CCW around 
 around a right one, so the leg must leave in the direction of travel at that point.
 
 Rather than write one formula for each combination, `Path` uses **signed radii** (`Path.java:32`):
-`+r` for a left turn, `-r` for a right turn, and `0` for a plain point (start, end, stop). A plain point is
+`+radius` for a left turn, `-radius` for a right turn, and `0` for a plain point (start, end, stop). A plain point is
 just a circle of radius 0.
 
-For circles with centers `C1`, `C2` and signed radii `s1`, `s2` (`tangentLeg`, `Path.java:212`):
+For circles with centers `C1`, `C2` and signed radii `fromSignedRadius`, `toSignedRadius` (`tangentLeg`, `Path.java:212`):
 
-1. `d = |C2 - C1|` and `q = s2 - s1`.
-2. `m = unit(C2 - C1)` rotated CCW by `acos(q / d)`.
-3. Tangent points: `T1 = C1 - s1 * m` and `T2 = C2 - s2 * m`.
+1. `centerDistance = |C2 - C1|` and `radiusDifference = toSignedRadius - fromSignedRadius`.
+2. `legNormal = unitVector(C2 - C1)` rotated CCW by `acos(radiusDifference / centerDistance)`.
+3. Tangent points: `T1 = C1 - fromSignedRadius * legNormal` and `T2 = C2 - toSignedRadius * legNormal`.
 
-Here `m` is the unit normal to the leg, pointing to the left of the direction of travel. A point on the
-circle where the leg touches it lies `r` away from the center, along the normal. For a left-turn circle
+Here `legNormal` is the unit normal to the leg, pointing to the left of the direction of travel. A point on the
+circle where the leg touches it lies `radius` away from the center, along the normal. For a left-turn circle
 (the robot goes CCW, the center is on the robot's left) the center is on the left of the leg, so the
-touch point is **center minus r times the left normal**: `C - s * m` with `s = +r`. For a right-turn
-circle the center is on the right, so the touch point is center plus `r` times `m`, which is
-`C - s * m` with `s = -r`. The sign in `s` takes care of it.
+touch point is **center minus radius times the left normal**: `C - signedRadius * legNormal` with `signedRadius = +radius`. For a right-turn
+circle the center is on the right, so the touch point is center plus `radius` times `legNormal`, which is
+`C - signedRadius * legNormal` with `signedRadius = -radius`. The sign in `signedRadius` takes care of it.
 
-Why the angle is `acos(q / d)`: the leg is perpendicular to its normal `m`, so the two tangent points
-`T1 = C1 - s1 m` and `T2 = C2 - s2 m` must have the same position along `m`. That gives
-`dot(C2 - C1, m) = s2 - s1 = q`. The left side is `d * cos(angle between m and C2 - C1)`, so the angle is
-`acos(q / d)`. That one condition covers every case:
+Why the angle is `acos(radiusDifference / centerDistance)`: the leg is perpendicular to its normal `legNormal`, so the two tangent points
+`T1 = C1 - fromSignedRadius legNormal` and `T2 = C2 - toSignedRadius legNormal` must have the same position along `legNormal`. That gives
+`dot(C2 - C1, legNormal) = toSignedRadius - fromSignedRadius = radiusDifference`. The left side is `centerDistance * cos(angle between legNormal and C2 - C1)`, so the angle is
+`acos(radiusDifference / centerDistance)`. That one condition covers every case:
 
-| Case | `s1`, `s2` | `q` | Angle `acos(q/d)` |
+| Case | `fromSignedRadius`, `toSignedRadius` | `radiusDifference` | Angle `acos(radiusDifference/centerDistance)` |
 |---|---|---|---|
-| Point to circle | `0`, `+-r` | `+-r` | the leg aims at a tangent point on the circle |
-| Same direction (both left or both right) | `+r`, `+r` | `0` | exactly 90 degrees: the leg is parallel to the line between centers |
-| Opposite directions | `+r`, `-r` | `-2r` | more than 90 degrees: the leg crosses between the circles |
+| Point to circle | `0`, `+-radius` | `+-radius` | the leg aims at a tangent point on the circle |
+| Same direction (both left or both right) | `+radius`, `+radius` | `0` | exactly 90 degrees: the leg is parallel to the line between centers |
+| Opposite directions | `+radius`, `-radius` | `-2r` | more than 90 degrees: the leg crosses between the circles |
 
 Worked numbers (computed):
 
-- Same direction, centers `(0,0)` and `(2,0)`, both `+0.25`: `q = 0`, `acos(0) = 90` degrees. `m = (0, 1)`. Tangent
+- Same direction, centers `(0,0)` and `(2,0)`, both `+0.25`: `radiusDifference = 0`, `acos(0) = 90` degrees. `legNormal = (0, 1)`. Tangent
   points `(0, -0.25)` and `(2, -0.25)`. The leg runs along the bottom, parallel to the line between
   centers, going +x. A CCW circle moves toward +x at its bottom. Correct.
-- Opposite, same centers, `s1 = +0.25`, `s2 = -0.25`: `q = -0.5`, `acos(-0.5 / 2) = 104.5` degrees. Tangent points
+- Opposite, same centers, `fromSignedRadius = +0.25`, `toSignedRadius = -0.25`: `radiusDifference = -0.5`, `acos(-0.5 / 2) = 104.5` degrees. Tangent points
   `(0.0625, -0.242)` and `(1.9375, 0.242)`: a leg that crosses from the bottom of the first circle to the
   top of the second (an S-shape).
 - Point to circle, `(0,0)` to center `(2, 1)` with `+0.25`: tangent point `(2.086, 0.765)`.
 
-**When the leg does not exist.** The leg exists only when `d > |q|` (otherwise `acos` has no answer). For a
-point and a circle this means the point is outside the circle. For two same-direction circles (`q = 0`) it
+**When the leg does not exist.** The leg exists only when `centerDistance > |radiusDifference|` (otherwise `acos` has no answer). For a
+point and a circle this means the point is outside the circle. For two same-direction circles (`radiusDifference = 0`) it
 means the circles are not at the same place. For opposite directions it means the circles do not overlap. If
 the test fails, `tangentLeg` returns `null` and the path throws "corner arc does not fit"
 (`Path.java:103`, `:222`).
@@ -286,43 +286,43 @@ is normal for this method.
 Once the incoming leg ends at `entry` and the outgoing leg starts at `exit` (both on the circle), the arc
 runs between them (`cornerArc`, `Path.java:125`):
 
-- `startAngle = polar(entry - C)`, where `polar(v) = atan2(vy, vx)` is the angle of a vector.
-- `sweep = mod2pi( sign * (polar(exit - C) - startAngle) )`, where `sign = +1` for a left turn and `-1` for a
-  right turn, and `mod2pi` wraps into `[0, 2 pi)`.
+- `startAngle = angleOf(entry - C)`, where `angleOf(v) = atan2(vy, vx)` is the angle of a vector.
+- `sweep = wrapTo2Pi( sign * (angleOf(exit - C) - startAngle) )`, where `sign = +1` for a left turn and `-1` for a
+  right turn, and `wrapTo2Pi` wraps into `[0, 2 pi)`.
 
 Why the sign: a left arc turns CCW, so its angle grows. A right arc turns CW, so the angle shrinks;
-multiplying by `-1` makes the sweep positive. `mod2pi` makes "go the long way around" correct: a sweep
+multiplying by `-1` makes the sweep positive. `wrapTo2Pi` makes "go the long way around" correct: a sweep
 is always the CCW (or CW) angle from entry to exit, never negative.
 
 Example: `entry - C = (1.8132 - 1.8232, -0.0730 - 0.1768) = (-0.0100, -0.2498)`, which points almost straight
 down: `startAngle = -92.31` degrees. `exit - C = (0.2498, 0.0100)`, pointing almost along +x: angle `2.31`
 degrees. `sweep = 2.31 - (-92.31) = 94.61` degrees. This is the "near 94.6 degrees" in the task: more than the
 `90` degree turn, because the legs touch the circle away from where the straight lines would.
-Arc length is `r * sweep = 0.25 * 1.6513 rad = 0.4128 m`. Total path length: `1.8146 + 0.4128 + 1.8146 = 4.042 m`.
+Arc length is `radius * sweep = 0.25 * 1.6513 rad = 0.4128 m`. Total path length: `1.8146 + 0.4128 + 1.8146 = 4.042 m`.
 
-The waypoint `V` sits at angle `polar(V - C) = polar(0.1768, -0.1768) = -45` degrees, which is `47.3` degrees after
+The waypoint `V` sits at angle `angleOf(V - C) = angleOf(0.1768, -0.1768) = -45` degrees, which is `47.3` degrees after
 the start, inside the `94.6` degree sweep. So the arc really passes through `V`. This check (`toWaypoint`,
 `Path.java:129`) is part of the validity test (4.6).
 
 ### 4.5 Projection: how close am I, and where along?
 
-`project(p)` returns the `t` of the point on the segment nearest to `p`. It is **not clamped**: the follower needs
-to know when `p` is past the end (`t > length`) or before the start (`t < 0`).
+`project(point)` returns the `distance` of the point on the segment nearest to `point`. It is **not clamped**: the follower needs
+to know when `point` is past the end (`distance > length`) or before the start (`distance < 0`).
 
-- **Line**: `t = dot(p - start, direction)`. This is the length of the shadow of the vector `p - start` on the
-  line. Negative if `p` is behind the start. (`Line.java:28`)
-- **Arc**: take `phi`, the polar angle of `p` around the center, and use (`Arc.java:51`)
+- **Line**: `distance = dot(point - start, direction)`. This is the length of the shadow of the vector `point - start` on the
+  line. Negative if `point` is behind the start. (`Line.java:28`)
+- **Arc**: take `angle`, the polar angle of `point` around the center, and use (`Arc.java:51`)
 
-  `t = r * ( angleModulus( turn * (phi - startAngle) - sweep/2 ) + sweep/2 )`.
+  `distance = radius * ( angleModulus( turn * (angle - startAngle) - sweep/2 ) + sweep/2 )`.
 
-  Read it from the inside. `turn * (phi - startAngle)` is how far around the circle, in the direction of
+  Read it from the inside. `turn * (angle - startAngle)` is how far around the circle, in the direction of
   travel, the closest point is from the arc start. `angleModulus` wraps an angle into `(-pi, pi]`. If we
   wrapped the plain angle, a point just before the start would show up as about `2 pi`, not as a small negative
   number. Shifting by `sweep/2` first puts the middle of the arc at 0, so the wrap point is on the far
   side of the circle, away from the arc. Then we shift back. Result: points before the arc get a small
-  negative `t`, points after it get `t > r*sweep`, and points on it get the right distance.
+  negative `distance`, points after it get `distance > radius*sweep`, and points on it get the right distance.
 
-The radius of `p` from the center does not matter: only the **angle** is used. That is exactly "the nearest
+The radius of `point` from the center does not matter: only the **angle** is used. That is exactly "the nearest
 point on the circle, in the radial direction".
 
 ### 4.6 When a corner is rejected
@@ -330,7 +330,7 @@ point on the circle, in the radial direction".
 `cornerArc` (`Path.java:132`) accepts an arc only if all three hold:
 
 1. `sweep > 1e-9`: there is an arc at all.
-2. `sweep <= theta + 90 degrees` (`theta` is the absolute turn of the corner): a sweep much bigger than the turn
+2. `sweep <= turn + 90 degrees` (`turn` is the absolute turn of the corner): a sweep much bigger than the turn
    means the leg went around the circle the long way, a **loop**. This happens when corners are close
    together: the leg from the previous circle touches this one on the wrong side.
 3. `toWaypoint <= sweep`: the waypoint must lie on the arc. If it does not, the path would skip the
@@ -346,16 +346,16 @@ message names the waypoint index. Fix: move waypoints farther apart, or give tha
 
 ### 4.7 Dropped straight points
 
-If `|theta| < 1e-3` rad and the point is not a stop, `cornerAt` returns `null` (`Path.java:89`). No arc is made;
-the path just runs through. It would be pointless (and numerically bad: `unit(out - in)` is almost the zero
+If `|turn| < 1e-3` rad and the point is not a stop, `cornerAt` returns `null` (`Path.java:89`). No arc is made;
+the path just runs through. It would be pointless (and numerically bad: `unitVector(out - in)` is almost the zero
 vector) to put a circle there.
 
 The waypoint still needs a place on the path, for its heading. `locate` (`Path.java:188`) finds the nearest
-path distance to the point, never earlier than the previous waypoint (`fromS`), so the order of waypoints is kept.
+path distance to the point, never earlier than the previous waypoint (`fromDistance`), so the order of waypoints is kept.
 
 ### 4.8 Sharp corners become stops
 
-If `|theta| > 150` degrees (`MAX_ARC_TURN`), the path almost reverses. A circle for such a turn would be a
+If `|turn| > 150` degrees (`MAX_ARC_TURN`), the path almost reverses. A circle for such a turn would be a
 near-circle loop and the robot would need to slow to a crawl anyway. So `cornerAt` returns a plain point
 (radius 0), the same as a stop (`Path.java:88`). The legs go exactly to `V`, and the follower treats it as a
 stop with dwell 0 (it brakes to a halt, then continues). An explicit `.stop()` does the same (`:82-83`).
@@ -372,39 +372,39 @@ false). Zero is the safe answer.
 
 ### 5.2 Progress and switching segments (`:49-57`)
 
-The follower knows the current segment `k`. It projects the robot onto it: `t = seg.project(p)`.
+The follower knows the current segment `segmentIndex`. It projects the robot onto it: `distanceOnSegment = segment.project(position)`.
 
-- If `t >= length` of the segment, the robot has passed its end, so move to the next one (`k++`) and project
+- If `distanceOnSegment >= length` of the segment, the robot has passed its end, so move to the next one (`segmentIndex++`) and project
   again. This is a `while` loop, so a big jump can skip a short segment.
-- It never moves past a segment that **ends at the next stop** (`:52`, the `segmentStart(k+1)` vs `stop.s()` test). The
+- It never moves past a segment that **ends at the next stop** (`:52`, the `segmentStart(segmentIndex+1)` vs `stop.distance()` test). The
   stop must be reached and released first. Otherwise a robot that overshoots would start the next leg without stopping.
-- Then `s = max(s, segmentStart(k) + clamp(t, 0, length))` (`:57`).
+- Then `progress = max(progress, segmentStart(segmentIndex) + clamp(distanceOnSegment, 0, length))` (`:57`).
 
 Why switch by projection and not by distance to the end point: the robot never hits an exact point. A distance
 threshold can fire early or never. Projection is a clean geometric question: "am I past the end of this segment?".
 
-Why `s` never goes backward (`max`): pose noise, a bump or a sideways shove could make the nearest point jump back a
-few centimeters. If `s` went back, the speed law would think a stop or arc is farther away than it is, the heading plan
-would turn back, and in a path that crosses itself the robot could lock onto the wrong crossing. A monotone `s` makes
+Why `progress` never goes backward (`max`): pose noise, a bump or a sideways shove could make the nearest point jump back a
+few centimeters. If `progress` went back, the speed law would think a stop or arc is farther away than it is, the heading plan
+would turn back, and in a path that crosses itself the robot could lock onto the wrong crossing. A monotone `progress` makes
 progress a one-way quantity. The cost: the robot cannot retreat along the path (see limits).
 
-Then `heading(s)` sets the heading plan (5.7) and `headingError = angleModulus(thetaRef - theta)`.
+Then `updateTargetHeading(distance)` sets the heading plan (5.7) and `headingError = angleModulus(targetHeading - heading)`.
 
 ### 5.3 Stops, dwell and finishing (`:61-83`)
 
-- `measured` is the measured speed `hypot(vx, vy)`. If it is NaN, fall back to the last command's length (`:62`).
+- `measuredSpeed` is the measured speed `hypot(vx, vy)`. If it is NaN, fall back to the last command's length (`:62`).
 - `stopDistance` is the straight distance from the robot to the next stop point.
-- `atStop = stopDistance < POSITION_TOLERANCE (3 cm) && measured < STOP_SPEED (0.1 m/s)`. Both: **close** and **slow**. Close
+- `atStop = stopDistance < POSITION_TOLERANCE (3 cm) && measuredSpeed < STOP_SPEED (0.1 m/s)`. Both: **close** and **slow**. Close
   alone could be a fly-by at speed.
 - **Last stop (the end):** finished when `atStop` and the heading error is under `ANGLE_TOLERANCE` (2 degrees), using
-  `Math.abs(angleModulus(thetaEnd - theta))` (`:66`). Then return zeros and set `finished`. The end dwell is not used.
+  `Math.abs(angleModulus(finalHeading - heading))` (`:66`). Then return zeros and set `finished`. The end dwell is not used.
 - **Middle stop:** when `atStop` (or when already waiting), count loops: `++waitLoops >= round(dwell / DT)` (`:72`).
-  When it reaches the count, release the stop: `stopIndex++`, `waitLoops = -1`, set `s = stop.s()` and re-find `k` with
-  `indexAt(s)`. Setting `s` exactly fixes the case where the robot was up to 3 cm short. A dwell of 0 releases
+  When it reaches the count, release the stop: `stopIndex++`, `waitLoops = -1`, set `progress = stop.distance()` and re-find `segmentIndex` with
+  `indexAt(progress)`. Setting `progress` exactly fixes the case where the robot was up to 3 cm short. A dwell of 0 releases
   on the first loop. A dwell of 1.0 s counts 50 loops.
 - While waiting, or when within `POSITION_TOLERANCE / 2` (1.5 cm) of the stop, return **zero translation** but keep turning
-  toward the heading plan with `clamp(HEADING_KP * headingError, +-MAX_OMEGA)` (`:79-83`), and reset `vPrev` and
-  `vCmdPrev` to zero, so the next leg starts from rest.
+  toward the heading plan with `clamp(HEADING_KP * headingError, +-MAX_OMEGA)` (`:79-83`), and reset `previousSpeed` and
+  `previousVelocity` to zero, so the next leg starts from rest.
 
 Why `Math.abs` and `angleModulus` on the angle: a heading error of `-1.5` degrees is a good result, but `-1.5 < 2` is true
 for any big negative error too, so the absolute value is required. And `358` degrees and `-2` degrees are the same
@@ -413,37 +413,37 @@ zero".
 
 ### 5.4 The speed law (`:85-98`)
 
-The speed `v` is the smallest of several limits. Each one has a physical reason.
+The speed `speed` is the smallest of several limits. Each one has a physical reason.
 
 **(a) Acceleration limit and top speed (`:88`).**
-`v = min(vPrev + MAX_ACCELERATION * DT, MAX_VELOCITY)`. In one loop, speed may rise by `3 * 0.02 = 0.06 m/s`. From rest to
-`2 m/s` takes `2 / 3 = 0.67 s` and `0.67 m`. The law builds on its own previous command `vPrev`, not on the measured
+`speed = min(previousSpeed + MAX_ACCELERATION * DT, MAX_VELOCITY)`. In one loop, speed may rise by `3 * 0.02 = 0.06 m/s`. From rest to
+`2 m/s` takes `2 / 3 = 0.67 s` and `0.67 m`. The law builds on its own previous command `previousSpeed`, not on the measured
 speed. Measured speed is noisy and lags, and would make the speed "jump".
 
-**(b) Arc speed cap (`:89-94`).** On a circle of radius `r`, a robot at speed `v` has centripetal acceleration `v^2 / r`
+**(b) Arc speed cap (`:89-94`).** On a circle of radius `radius`, a robot at speed `speed` has centripetal acceleration `speed^2 / radius`
 (the sideways acceleration needed to keep turning). Wheels can only give so much sideways force before slipping, so cap
 it at `MAX_LATERAL_ACCELERATION` (`a_lat = 3`):
 
-`v_arc = sqrt(a_lat * r)`, written in the code as `sqrt(a_lat / curvature)` with curvature `1/r`.
+`v_arc = sqrt(a_lat * radius)`, written in the code as `sqrt(a_lat / curvature)` with curvature `1/r`.
 
-For `r = 0.25`: `sqrt(3 * 0.25) = 0.87 m/s`. For `r = 0.5`: `1.22 m/s`. Bigger radius, faster corner.
+For `radius = 0.25`: `sqrt(3 * 0.25) = 0.87 m/s`. For `radius = 0.5`: `1.22 m/s`. Bigger radius, faster corner.
 
 The robot must already be that slow **when it arrives** at the arc. So for every later arc `j` before the next stop
 the code limits the speed now so it can still brake in time:
 
-`v <= sqrt(v_arc_j^2 + 2 * a_dec * d_j)`, with `d_j` the distance to the arc's start (`:93`).
+`speed <= sqrt(v_arc_j^2 + 2 * a_dec * d_j)`, with `d_j` the distance to the arc's start (`:93`).
 
 This is the braking formula `v^2 = v_j^2 + 2 a d` (constant deceleration: final speed squared = start speed squared plus
 twice acceleration times distance), turned around: the fastest we may go `d` meters before the arc and still be at
 `v_arc` when we get there, braking at `a_dec`. Example: from `2 m/s` down to `0.87 m/s` at `a_dec = 3` needs `d = (4 - 0.75) / 6 = 0.54 m`.
 On the arc itself `d = 0`, so the cap is just `v_arc`.
 
-**(c) Stop approach (`:85-87`, `:95-98`).** `toStop` is the path distance left to the next stop. Two laws, and `v` takes the
+**(c) Stop approach (`:85-87`, `:95-98`).** `distanceToStop` is the path distance left to the next stop. Two laws, and `speed` takes the
 smaller:
 
-- Constant braking: `v <= sqrt(2 * a_dec * toStop)`. This is the same formula with final speed 0. From `2 m/s` it begins at
+- Constant braking: `speed <= sqrt(2 * a_dec * distanceToStop)`. This is the same formula with final speed 0. From `2 m/s` it begins at
   `4 / 6 = 0.67 m` from the stop.
-- Proportional: `v <= FINAL_KP * toStop`, with `FINAL_KP = 3 1/s`. A speed proportional to the distance left is an exponential
+- Proportional: `speed <= FINAL_KP * distanceToStop`, with `FINAL_KP = 3 1/s`. A speed proportional to the distance left is an exponential
   approach with time constant `1/3 s`: smooth, no overshoot, no jerk at the end. The two laws are equal at `0.67 m`
   (both give `2 m/s`). Closer than that, the proportional law is lower.
 
@@ -453,90 +453,90 @@ ignores values near zero. The robot would stall short of the stop forever. So th
 `MIN_SPEED = 0.15 m/s` (the proportional law falls below it at about 5 cm). This floor stays until the robot is within
 1.5 cm (the `POSITION_TOLERANCE / 2` check in 5.3), where the command drops to zero and the stop is declared.
 
-The sign is kept from `toStop` (`copySign`). If the robot **passed** the stop, `toStop` is negative. For the segment that
-ends at the stop, `t` is not clamped (`:87`), so the overshoot is visible, `capture` is negative, and the final line
-`v = max(v, min(0, capture))` (`:98`) lets `v` go to `-0.15`: it drives back toward the stop slowly. Otherwise `v` is floored at 0.
+The sign is kept from `distanceToStop` (`copySign`). If the robot **passed** the stop, `distanceToStop` is negative. For the segment that
+ends at the stop, `distanceOnSegment` is not clamped (`:87`), so the overshoot is visible, `approachSpeed` is negative, and the final line
+`speed = max(speed, min(0, approachSpeed))` (`:98`) lets `speed` go to `-0.15`: it drives back toward the stop slowly. Otherwise `speed` is floored at 0.
 
 ### 5.5 Direction: the look-ahead and the smooth merge (`:100-113`)
 
-Now the follower has a speed `v` and needs a direction.
+Now the follower has a speed `speed` and needs a direction.
 
 **Look-ahead (`:104`).** The drivetrain does not respond instantly: commands pass through a CAN loop, motor controllers,
-and the wheel's inertia. Assume a lag of `LAG_TIME = 0.05 s`. In that time the robot moves `v * LAG_TIME`
-(`0.1 m` at `2 m/s`). So the direction is read from the path tangent not at `s`, but at `s + v * LAG_TIME`: we steer
+and the wheel's inertia. Assume a lag of `LAG_TIME = 0.05 s`. In that time the robot moves `speed * LAG_TIME`
+(`0.1 m` at `2 m/s`). So the direction is read from the path tangent not at `progress`, but at `progress + speed * LAG_TIME`: we steer
 for where the robot will be when the command takes effect. The look point is held just before the stop
-(`stop.s() - 1e-9`), so near a stop the direction does not read from the next leg.
+(`stop.distance() - 1e-9`), so near a stop the direction does not read from the next leg.
 
-**Normal error (`:105`).** `tangent` is the unit direction of the path at `s`. `normal = (-ty, tx)` is the tangent rotated 90 degrees
+**Normal error (`:105`).** `tangent` is the unit direction of the path at `progress`. `normal = (-ty, tx)` is the tangent rotated 90 degrees
 CCW: it points to the **left** of the path. The cross-track error
 
-`eN = cross(tangent, p - pathPoint(s))`
+`sideError = cross(tangent, position - pathPoint(progress))`
 
-is the signed distance of the robot to the left of the path (the shadow of `p - pathPoint` on the normal). `eN > 0` means the robot is left of
-the path, `eN < 0` means right.
+is the signed distance of the robot to the left of the path (the shadow of `position - pathPoint` on the normal). `sideError` (eN) `> 0` means the robot is left of
+the path, `sideError < 0` means right.
 
 **The merge angle (`:106`).** Let `L = MERGE_DISTANCE = 0.5 m`. Then
 
-`psi = -atan(eN / L)`.
+`mergeAngle = -atan(sideError / MERGE_DISTANCE)`.
 
-`psi` is how much to tilt the velocity away from the path direction, toward the path. The minus sign: if the robot is
-left (`eN > 0`) we tilt right (`psi < 0`). The numbers: `eN = 0.1 m` gives `-11.3` degrees; `0.5 m` gives `-45` degrees; `1 m` gives
+`mergeAngle` is how much to tilt the velocity away from the path direction, toward the path. The minus sign: if the robot is
+left (`sideError > 0`) we tilt right (`mergeAngle < 0`). The numbers: `sideError = 0.1 m` gives `-11.3` degrees; `0.5 m` gives `-45` degrees; `1 m` gives
 `-63` degrees; far away it tends to `-90` degrees (drive straight at the path). `atan` is the key: it is smooth,
 and it saturates, so the angle never exceeds 90 degrees and never flips.
 
-**Why this makes a curve and not a straight line to a point.** The velocity along the path is `v cos(psi)` and sideways
-is `v sin(psi)`. For a small error, `sin(psi) ~ -eN / L`, so the sideways speed is `-v * eN / L`: proportional to
-the error. That is `d(eN)/dt = -(v / L) * eN`, so the error shrinks exponentially, with time constant `L / v`. Picture the
+**Why this makes a curve and not a straight line to a point.** The velocity along the path is `speed cos(mergeAngle)` and sideways
+is `speed sin(mergeAngle)`. For a small error, `sin(mergeAngle) ~ -sideError / MERGE_DISTANCE`, so the sideways speed is `-speed * sideError / MERGE_DISTANCE`: proportional to
+the error. That is `d(sideError)/dt = -(speed / MERGE_DISTANCE) * sideError`, so the error shrinks exponentially, with time constant `MERGE_DISTANCE / speed`. Picture the
 path as a river and the robot as a boat: the closer to the path, the more it points along it. It merges
 **tangentially**, and ends up on the path moving along it. A "straight line to a point 1 m ahead" is a different
 idea: the robot would aim at a fixed target, cut corners on arcs, and the direction would jump as the target moves to
 the next segment. The merge law is a vector field defined everywhere, with no target to choose.
 
-**Low-speed correction (`:107`).** Since the correction rate is `v / L`, a slow robot corrects slowly, and at `v = 0.15` it
+**Low-speed correction (`:107`).** Since the correction rate is `speed / MERGE_DISTANCE`, a slow robot corrects slowly, and at `speed = 0.15` it
 barely does. So the sideways speed has a floor:
 
-`vN = -signum(eN) * max( |v sin(psi)|, FINAL_KP * |eN| )`, then `|vN| <= MAX_VELOCITY` (`:108`).
+`sidewaysSpeed = -signum(sideError) * max( |speed sin(mergeAngle)|, FINAL_KP * |sideError| )`, then `|sidewaysSpeed| <= MAX_VELOCITY` (`:108`).
 
-`FINAL_KP * |eN|` is a rate of 3 per second, the same as the stop approach. Example: `v = 1`, `eN = 0.1`: `|v sin psi| = 0.196`, so
-the floor `0.3` wins and `vN = -0.3` (to the right).
+`FINAL_KP * |sideError|` is a rate of 3 per second, the same as the stop approach. Example: `speed = 1`, `sideError = 0.1`: `|speed sin mergeAngle| = 0.196`, so
+the floor `0.3` wins and `sidewaysSpeed = -0.3` (to the right).
 
-The command is `cmd = look * (v cos psi) + normal * vN` (`:109`). The along-path part uses the look-ahead direction,
-the sideways part uses the normal at `s`.
+The command is `velocity = lookAheadDirection * (speed cos mergeAngle) + normal * sidewaysSpeed` (`:109`). The along-path part uses the look-ahead direction,
+the sideways part uses the normal at `progress`.
 
 ### 5.6 The 2-D acceleration limit (`:110-113`)
 
-The speed law limited changes of `v`, a number. But the direction can change too, and a sudden sideways
+The speed law limited changes of `speed`, a number. But the direction can change too, and a sudden sideways
 change is also an acceleration. So the change of the **whole velocity vector** is capped:
 
-`dv = cmd - vCmdPrev`. If `|dv| > MAX_VECTOR_ACCELERATION * DT = 6 * 0.02 = 0.12 m/s`, scale `dv` down to that length.
+`velocityChange = velocity - previousVelocity`. If `|velocityChange| > MAX_VECTOR_ACCELERATION * DT = 6 * 0.02 = 0.12 m/s`, scale `velocityChange` down to that length.
 
 That is a limit of `6 m/s^2` in any direction, which covers a start, a stop, a turn, a merge. (It is bigger than `MAX_ACCELERATION = 3`
-because a vector change can mix a speed change with a direction change.) Finally the length of `cmd` is clamped to `MAX_VELOCITY`.
+because a vector change can mix a speed change with a direction change.) Finally the length of `velocity` is clamped to `MAX_VELOCITY`.
 
-### 5.7 Heading and omega (`:115`, `:132`)
+### 5.7 Heading and turnRate (`:115`, `:132`)
 
-**Heading plan.** `anchors` are `(s, angle)` pairs: each point with `withAngle`. If the path has no angle at `s = 0`, the
-constructor adds an anchor at 0 with the robot's starting heading (`:33-34`). Between two anchors `a` and `b`, the
+**Heading plan.** `anchors` are `(distance, angle)` pairs: each point with `withAngle`. If the path has no angle at `distance = 0`, the
+constructor adds an anchor at 0 with the robot's starting heading (`:33-34`). Between two anchors `before` and `after`, the
 reference heading changes **linearly with path distance**:
 
-`dThetaRef = angleModulus(angle_b - angle_a) / (s_b - s_a)` [rad/m], `thetaRef = angle_a + dThetaRef * (s - s_a)`.
+`targetHeadingPerMeter = angleModulus(angle_after - angle_before) / (distance_after - distance_before)` [rad/m], `targetHeading = angle_before + targetHeadingPerMeter * (distance - distance_before)`.
 
 `angleModulus` picks the shortest way around: from 350 to 10 degrees is `+20`, not `-340`. After the last anchor the
-heading is held. If two anchors have the same `s` (within `1e-9`), the heading is held and `dThetaRef` is 0, which avoids division by zero.
+heading is held. If two anchors have the same `distance` (within `1e-9`), the heading is held and `targetHeadingPerMeter` is 0, which avoids division by zero.
 
 **Command.**
 
-`omega = dThetaRef * v + HEADING_KP * headingError`, clamped to `+-MAX_OMEGA` (`:115`).
+`turnRate = targetHeadingPerMeter * speed + HEADING_KP * headingError`, clamped to `+-MAX_OMEGA` (`:115`).
 
-- `dThetaRef * v` is a **feedforward**: heading changes `dThetaRef` radians per meter, the robot moves `v` meters per second,
-  so the heading must change at `dThetaRef * v` rad/s. The units multiply out to rad/s. This makes the heading follow the plan without lag.
+- `targetHeadingPerMeter * speed` is a **feedforward**: heading changes `targetHeadingPerMeter` radians per meter, the robot moves `speed` meters per second,
+  so the heading must change at `targetHeadingPerMeter * speed` rad/s. The units multiply out to rad/s. This makes the heading follow the plan without lag.
 - `HEADING_KP * headingError` is a **P term**: a push of `4 rad/s` per radian of error to fix what the feedforward
   and the drivetrain miss.
 
 Because the plan is in path distance, not time, the heading automatically goes with the speed: slow down, turn
 slower; stop, the heading holds.
 
-Last line (`:116-120`): if any output is NaN, return zero, else store `vPrev = v`, `vCmdPrev = cmd`, and return `(cmd.x, cmd.y, omega)`.
+Last line (`:116-120`): if any output is NaN, return zero, else store `previousSpeed = speed`, `previousVelocity = velocity`, and return `(velocity.x, velocity.y, turnRate)`.
 
 ## 6. FollowPathCommand
 

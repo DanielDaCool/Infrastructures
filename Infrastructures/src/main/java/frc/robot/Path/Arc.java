@@ -14,15 +14,15 @@ public final class Arc extends Segment {
 
     /**
      * @param center circle center [m]
-     * @param r radius [m], > 0
+     * @param radius radius [m], > 0
      * @param isLeftTurn true for a left (CCW) turn, false for a right (CW) turn
      * @param startAngle polar angle of the start point around the center [rad]
      * @param sweep turned angle [rad], > 0
      */
-    public Arc(Translation2d center, double r, boolean isLeftTurn, double startAngle, double sweep) {
-        if (!(r > 0) || !(sweep > 0)) throw new IllegalArgumentException("Bad arc");
+    public Arc(Translation2d center, double radius, boolean isLeftTurn, double startAngle, double sweep) {
+        if (!(radius > 0) || !(sweep > 0)) throw new IllegalArgumentException("Bad arc");
         this.center = center;
-        this.radius = r;
+        this.radius = radius;
         this.isLeftTurn = isLeftTurn;
         this.turn = isLeftTurn ? 1 : -1;
         this.startAngle = startAngle;
@@ -36,22 +36,22 @@ public final class Arc extends Segment {
     public double length() { return radius * sweep; }
 
     @Override
-    public Translation2d pointAt(double t) {
-        double phi = startAngle + turn * t / radius;
-        return center.plus(new Translation2d(radius * Math.cos(phi), radius * Math.sin(phi)));
+    public Translation2d pointAt(double distance) {
+        double angle = startAngle + turn * distance / radius;
+        return center.plus(new Translation2d(radius * Math.cos(angle), radius * Math.sin(angle)));
     }
 
     @Override
-    public Translation2d tangentAt(double t) {
-        double phi = startAngle + turn * t / radius;
-        return new Translation2d(-turn * Math.sin(phi), turn * Math.cos(phi));
+    public Translation2d tangentAt(double distance) {
+        double angle = startAngle + turn * distance / radius;
+        return new Translation2d(-turn * Math.sin(angle), turn * Math.cos(angle));
     }
 
     @Override
-    public double project(Translation2d p) {
-        Translation2d rel = p.minus(center);
-        double phi = Math.atan2(rel.getY(), rel.getX());
-        return radius * (MathUtil.angleModulus(turn * (phi - startAngle) - sweep / 2) + sweep / 2);
+    public double project(Translation2d point) {
+        Translation2d offset = point.minus(center);
+        double angle = Math.atan2(offset.getY(), offset.getX());
+        return radius * (MathUtil.angleModulus(turn * (angle - startAngle) - sweep / 2) + sweep / 2);
     }
 
     @Override

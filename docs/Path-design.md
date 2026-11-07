@@ -7,83 +7,96 @@ Units are m, s, rad. `perp(x, y) = (-y, x)`. Constants are in `PathConstants`.
 
 ## Corner circle
 
-For an interior point `V`, `u_in = unit(V - V_prev)`, `u_out = unit(V_next - V)`,
-`theta = atan2(cross(u_in, u_out), dot(u_in, u_out))`.
+For an interior waypoint, `directionIn = unitVector(waypoint - previousWaypoint)`,
+`directionOut = unitVector(nextWaypoint - waypoint)`,
+`turn = atan2(cross(directionIn, directionOut), dot(directionIn, directionOut))`.
 
-- Stop point or `|theta| > MAX_ARC_TURN`: sharp corner, a point node at `V` with speed 0.
-- `|theta| < 1e-3` and not a stop: no arc; the heading anchor is placed by projecting `V` onto the path.
-- Otherwise: `sigma = sign(theta)` (+1 counter-clockwise), radius `r`, center `C = V + r * unit(u_out - u_in)`.
-  The circle passes through `V`.
+- Stop point or `|turn| > MAX_ARC_TURN`: sharp corner, a point node at the waypoint with speed 0.
+- `|turn| < 1e-3` and not a stop: no arc; the heading anchor is placed by projecting the waypoint onto the path.
+- Otherwise: `isLeftTurn = turn > 0` (counter-clockwise), `radius`, `center = waypoint + radius * unitVector(directionOut - directionIn)`.
+  The circle passes through the waypoint.
 
 ## Tangent legs
 
-A leg is a common tangent between two nodes. At a tangent point `T` on a circle with center `C`, the travel
-direction must be `d = sigma * perp(T - C) / r`.
+A leg is a common tangent between two nodes. At a tangent point on a circle, the travel direction must be
+`turnSign * perp(tangentPoint - center) / radius`, with `turnSign` +1 for a left turn and -1 for a right turn.
 
-The code (`Path.tangentLeg`) uses one formula for every case. Give each node a signed radius `s`
-(`+r` left turn, `-r` right turn, `0` for a point; radii may differ per corner). With `u = unit(C2 - C1)`,
-`d = |C2 - C1|` and `q = s2 - s1`: the leg exists only if `d > |q|`; then `m = rotate(u, acos(q / d))` is the
-unit normal on the leg's left, and `T1 = C1 - s1 m`, `T2 = C2 - s2 m`. This covers point-to-circle,
-circle-to-point, same-direction and opposite-direction legs.
+The code (`Path.tangentLeg`) uses one formula for every case. Give each node a signed radius
+(`+radius` left turn, `-radius` right turn, `0` for a point; radii may differ per corner). With
+`centerToCenter = to.center - from.center`, `centerDistance = |centerToCenter|` and
+`radiusDifference = to.signedRadius - from.signedRadius`: the leg exists only if
+`centerDistance > |radiusDifference|`; then `legNormal = rotate(unitVector(centerToCenter), acos(radiusDifference / centerDistance))`
+is the unit normal on the leg's left, and the tangent points are `from.center - from.signedRadius * legNormal`
+and `to.center - to.signedRadius * legNormal`. This covers point-to-circle, circle-to-point, same-direction and
+opposite-direction legs.
 
 The arc sweep is
-`mod2pi(sigma * (angle(T_out - C) - angle(T_in - C)))`; it must be in `(0, 2 pi)` and contain the polar angle
-of `V`, and it must not exceed `|theta| + 90 deg` (close same-direction corners would otherwise loop). If any check fails the path throws `IllegalArgumentException` ("corner arc does not fit").
+`wrapTo2Pi(turnSign * (angleOf(exit - center) - angleOf(entry - center)))`; it must be in `(0, 2 pi)` and contain the
+polar angle of the waypoint, and it must not exceed `|turn| + 90 deg` (close same-direction corners would otherwise
+loop). If any check fails the path throws `IllegalArgumentException` ("corner arc does not fit").
 
 ## Arc projection
 
-For a point `p` with polar angle `phi_p` around the center, and arc start angle `phi0`, sweep `w`:
+For a point with polar angle `pointAngle` around the center, arc start angle `startAngle`, and `sweep`:
 
-`rel = angleModulus(sigma * (phi_p - phi0) - w / 2) + w / 2`, `t = r * rel`.
+`offset = angleModulus(turnSign * (pointAngle - startAngle) - sweep / 2) + sweep / 2`, `distance = radius * offset`.
 
-`t` is not clamped: it is negative before the arc start and greater than `r * w` after the end.
-For a line, `t = dot(p - start, unit)`.
+`distance` is not clamped: it is negative before the arc start and greater than `radius * sweep` after the end.
+For a line, `distance = dot(point - start, direction)`.
 
 ## Progress and segment switching
 
-With current segment `k`, `t = seg_k.project(p)`. While `t >= length_k`, `k` is not the last segment and the
-boundary is not an unreleased stop: `k++` and project again. Then
+With current segment `segmentIndex`, `distanceOnSegment = segment.project(position)`. While
+`distanceOnSegment >= segment.length()`, `segmentIndex` is not the last segment and the boundary is not an
+unreleased stop: `segmentIndex++` and project again. Then
 
-`s = max(s_prev, segmentStart(k) + clamp(t, 0, length_k))`.
+`progress = max(progress, segmentStart(segmentIndex) + clamp(distanceOnSegment, 0, segment.length()))`.
 
-Segments switch by projection, never by a distance threshold, and `s` never decreases.
+Segments switch by projection, never by a distance threshold, and `progress` never decreases.
 
 ## Speed law
 
-`vPrev` is the previous commanded speed (0 after a stop). With `s_j` and `v_j` the distance and speed cap of each
-later arc or stop, and `s_stop` the next stop:
+`previousSpeed` is the previous commanded speed (0 after a stop). With `segmentStart_j` and `arcSpeedLimit_j` the
+distance and speed cap of each later arc, and `stop.distance` the path distance of the next stop:
 
-`v = max(0, min(vPrev + MAX_ACCELERATION * DT, MAX_VELOCITY, arcCap, sqrt(v_j^2 + 2 * MAX_DECELERATION * (s_j - s)), FINAL_KP * (s_stop - s)))`
+`speed = max(0, min(previousSpeed + MAX_ACCELERATION * DT, MAX_VELOCITY, sqrt(arcSpeedLimit_j^2 + 2 * MAX_DECELERATION * (segmentStart_j - progress)), approachSpeed))`
 
-Near a stop the capture speed uses the signed along-track error `d` (negative past the stop, so an overshoot drives
-back) with magnitude at least `MIN_SPEED` until the robot is within `POSITION_TOLERANCE / 2`, then zero. The final
-command vector is clamped to `MAX_VELOCITY`.
+Near a stop `approachSpeed = min(sqrt(2 * MAX_DECELERATION * distanceToStop), FINAL_KP * distanceToStop)` uses the
+signed along-track error `distanceToStop` (negative past the stop, so an overshoot drives back) with magnitude at
+least `MIN_SPEED` until the robot is within `POSITION_TOLERANCE / 2`, then zero. The final command vector is clamped
+to `MAX_VELOCITY`.
 
-`arcCap = sqrt(MAX_LATERAL_ACCELERATION * r)`, applied from the start of the arc. The law uses its own previous
-command, not the measured speed. A 2-D limit follows: `|vCmd - vCmdPrev| <= MAX_VECTOR_ACCELERATION * DT`.
+`arcSpeedLimit = sqrt(MAX_LATERAL_ACCELERATION / |curvature|)`, i.e. `sqrt(MAX_LATERAL_ACCELERATION * radius)`,
+applied from the start of the arc. The law uses its own previous command, not the measured speed. A 2-D limit
+follows: `|velocity - previousVelocity| <= MAX_VECTOR_ACCELERATION * DT`.
 
 ## Merge law
 
-Lookahead: `s_look = min(s + v * LAG_TIME, s_stop - 1e-9)` (just before the stop, so it stays on the arriving leg); `T` is the tangent at `s_look`, `T_s` the tangent at `s`.
-Normal error (left positive): `eN = cross(T_s, p - point(s))`. With `L = MERGE_DISTANCE`:
+Lookahead: `lookAheadDistance = min(progress + speed * LAG_TIME, stop.distance - 1e-9)` (just before the stop, so it
+stays on the arriving leg); `lookAheadDirection` is the tangent at `lookAheadDistance`, `tangent` the tangent at
+`progress`. Side error (`sideError`, signed distance from the path, left positive):
+`sideError = cross(tangent, position - pointAt(progress))`. With `MERGE_DISTANCE`:
 
-`psi = -atan(eN / L)`, `vT = v cos(psi)` along `T`, `vN = v sin(psi)` along `N = perp(T_s)`.
+`mergeAngle = -atan(sideError / MERGE_DISTANCE)`, along-path part `speed * cos(mergeAngle)` along `lookAheadDirection`,
+`sidewaysSpeed = speed * sin(mergeAngle)` along `normal = perp(tangent)`.
 
-At low speed the normal part is raised: `vN = -signum(eN) * max(|vN|, FINAL_KP * |eN|)`, then `|vN| <= MAX_VELOCITY`.
+At low speed the sideways part is raised:
+`sidewaysSpeed = -signum(sideError) * max(|sidewaysSpeed|, FINAL_KP * |sideError|)`, then `|sidewaysSpeed| <= MAX_VELOCITY`.
 The path is approached asymptotically, never by a straight line to a point.
 
 ## Heading interpolation
 
-Anchors: `(0, start heading)` unless point 0 has an angle, then `(s_i, angle_i)` for each angled point.
-Between anchors `thetaRef(s)` is linear in `s` along the shortest wrap; after the last anchor it holds.
+Anchors: `(0, start heading)` unless point 0 has an angle, then `(distance, angle)` for each angled point.
+Between anchors `targetHeading(distance)` is linear in `distance` along the shortest wrap; after the last anchor it
+holds. `targetHeadingPerMeter` is the slope, `angleModulus(after.angle - before.angle) / anchorSpacing`.
 
-`omega = (dThetaRef / ds) * v + HEADING_KP * angleModulus(thetaRef(s) - theta)`, `|omega| <= MAX_OMEGA`.
+`turnRate = targetHeadingPerMeter * speed + HEADING_KP * angleModulus(targetHeading - heading)`, `|turnRate| <= MAX_OMEGA`.
 
 ## Finish check
 
 At the end stop the command is finished when
 
-`|p - end| < POSITION_TOLERANCE` and `|angleModulus(theta_end - theta)| < ANGLE_TOLERANCE`.
+`|position - end| < POSITION_TOLERANCE` and `|angleModulus(finalHeading - heading)| < ANGLE_TOLERANCE`.
 
-An intermediate stop is reached when `|p - point(s_j)| < POSITION_TOLERANCE` and the measured speed is under
-`STOP_SPEED`; then the dwell counts `dwell / DT` loops and the stop is released.
+An intermediate stop is reached when `|position - pointAt(stop.distance)| < POSITION_TOLERANCE` and the measured
+speed (`measuredSpeed`) is under `STOP_SPEED`; then the dwell counts `dwell / DT` loops and the stop is released.

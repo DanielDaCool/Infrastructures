@@ -79,7 +79,7 @@ Each middle point is a corner. The robot drives along a circle that passes throu
 
 - The speed is a profile along the path, not a clock. It accelerates with `MAX_ACCELERATION` and brakes with
   `MAX_DECELERATION` by the distance left along the path to the next stop or the end.
-- An arc of radius `r` is capped at `sqrt(MAX_LATERAL_ACCELERATION * r)`. The robot brakes before the arc.
+- An arc of radius `radius` is capped at `sqrt(MAX_LATERAL_ACCELERATION * radius)`. The robot brakes before the arc.
 - Progress follows the robot's projection onto the path. It never decreases, and segments switch by that
   projection, not by a distance threshold.
 - If the robot is off the path, it returns on a smooth curve (merge over `MERGE_DISTANCE`), not a straight line.

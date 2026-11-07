@@ -17,9 +17,9 @@ import java.util.List;
  * dropped when the path runs straight through it. The end is always a stop.
  */
 public final class Path {
-    record Stop(double s, double dwell) {}
+    record Stop(double distance, double dwell) {}
 
-    record Anchor(double s, Rotation2d angle) {}
+    record Anchor(double distance, Rotation2d angle) {}
 
     /**
      * A waypoint the path is built around. radius 0: the path goes exactly through the point
@@ -34,7 +34,7 @@ public final class Path {
 
     private final Point[] points;
     private final List<Segment> segments = new ArrayList<>();
-    private final List<Double> starts = new ArrayList<>();
+    private final List<Double> segmentStarts = new ArrayList<>();
     private final List<Stop> stops = new ArrayList<>();
     private final List<Anchor> anchors = new ArrayList<>();
     private double length;
@@ -55,15 +55,15 @@ public final class Path {
             if (corner != null) corners.add(corner);
         }
 
-        double[] waypointS = new double[points.length]; // path distance of each waypoint
-        Arrays.fill(waypointS, Double.NaN);
-        buildSegments(corners, waypointS);
+        double[] waypointDistance = new double[points.length]; // path distance of each waypoint
+        Arrays.fill(waypointDistance, Double.NaN);
+        buildSegments(corners, waypointDistance);
 
         for (int i = 1; i < points.length; i++) { // waypoints dropped as straight: closest path point
-            if (Double.isNaN(waypointS[i])) waypointS[i] = locate(pos(i), waypointS[i - 1]);
+            if (Double.isNaN(waypointDistance[i])) waypointDistance[i] = locate(waypointPosition(i), waypointDistance[i - 1]);
         }
         for (int i = 0; i < points.length; i++) {
-            if (points[i].angle() != null) anchors.add(new Anchor(waypointS[i], points[i].angle()));
+            if (points[i].angle() != null) anchors.add(new Anchor(waypointDistance[i], points[i].angle()));
         }
     }
 
@@ -76,26 +76,26 @@ public final class Path {
         }
     }
 
-    /** The corner for waypoint i, or null when the path runs straight through it (no turn). */
-    private Corner cornerAt(int i) {
-        Translation2d v = pos(i);
-        boolean endOrStop = i == 0 || i == points.length - 1 || points[i].isStop();
-        if (endOrStop) return new Corner(i, v, 0, false, 0);
+    /** The corner for waypoint index, or null when the path runs straight through it (no turn). */
+    private Corner cornerAt(int index) {
+        Translation2d waypoint = waypointPosition(index);
+        boolean endOrStop = index == 0 || index == points.length - 1 || points[index].isStop();
+        if (endOrStop) return new Corner(index, waypoint, 0, false, 0);
 
-        Translation2d in = unit(v.minus(pos(i - 1)));
-        Translation2d out = unit(pos(i + 1).minus(v));
-        double turn = Math.atan2(cross(in, out), in.dot(out)); // + left, - right
-        if (Math.abs(turn) > MAX_ARC_TURN) return new Corner(i, v, 0, false, 0); // too sharp: stop here
+        Translation2d directionIn = unitVector(waypoint.minus(waypointPosition(index - 1)));
+        Translation2d directionOut = unitVector(waypointPosition(index + 1).minus(waypoint));
+        double turn = Math.atan2(cross(directionIn, directionOut), directionIn.dot(directionOut)); // + left, - right
+        if (Math.abs(turn) > MAX_ARC_TURN) return new Corner(index, waypoint, 0, false, 0); // too sharp: stop here
         if (Math.abs(turn) < 1e-3) return null;
 
-        double r = Double.isNaN(points[i].radius()) ? RADIUS : points[i].radius();
-        // The center is on the inside of the corner, r from the waypoint, so the circle passes through it.
-        Translation2d center = v.plus(unit(out.minus(in)).times(r));
-        return new Corner(i, center, r, turn > 0, Math.abs(turn));
+        double radius = Double.isNaN(points[index].radius()) ? RADIUS : points[index].radius();
+        // The center is on the inside of the corner, radius from the waypoint, so the circle passes through it.
+        Translation2d center = waypoint.plus(unitVector(directionOut.minus(directionIn)).times(radius));
+        return new Corner(index, center, radius, turn > 0, Math.abs(turn));
     }
 
     /** Adds the lines and arcs between the corners, the stops, and the path distance of each corner. */
-    private void buildSegments(List<Corner> corners, double[] waypointS) {
+    private void buildSegments(List<Corner> corners, double[] waypointDistance) {
         List<Translation2d[]> legs = new ArrayList<>(); // legs.get(j) joins corner j to corner j + 1
         for (int j = 0; j + 1 < corners.size(); j++) {
             Corner from = corners.get(j), to = corners.get(j + 1);
@@ -107,11 +107,11 @@ public final class Path {
         for (int j = 0; j < corners.size(); j++) {
             Corner corner = corners.get(j);
             if (corner.isPoint()) {
-                waypointS[corner.index()] = length;
+                waypointDistance[corner.index()] = length;
                 if (j > 0) stops.add(new Stop(length, points[corner.index()].dwell()));
             } else {
                 Arc arc = cornerArc(corner, legs.get(j - 1)[1], legs.get(j)[0]);
-                waypointS[corner.index()] = length + MathUtil.clamp(arc.project(pos(corner.index())), 0, arc.length());
+                waypointDistance[corner.index()] = length + MathUtil.clamp(arc.project(waypointPosition(corner.index())), 0, arc.length());
                 add(arc);
             }
             if (j < legs.size()) {
@@ -124,9 +124,9 @@ public final class Path {
     /** The arc of a corner circle from the incoming leg's end to the outgoing leg's start. */
     private Arc cornerArc(Corner corner, Translation2d entry, Translation2d exit) {
         double sign = corner.isLeftTurn() ? 1 : -1;
-        double startAngle = polar(entry.minus(corner.center()));
-        double sweep = mod2pi(sign * (polar(exit.minus(corner.center())) - startAngle));
-        double toWaypoint = mod2pi(sign * (polar(pos(corner.index()).minus(corner.center())) - startAngle));
+        double startAngle = angleOf(entry.minus(corner.center()));
+        double sweep = wrapTo2Pi(sign * (angleOf(exit.minus(corner.center())) - startAngle));
+        double toWaypoint = wrapTo2Pi(sign * (angleOf(waypointPosition(corner.index()).minus(corner.center())) - startAngle));
         // A valid arc turns a little more than the corner and passes its waypoint; anything else
         // (no arc, a loop around the circle, waypoint outside the arc) means the corners are too close.
         boolean valid = sweep > 1e-9 && sweep <= corner.turn() + Math.PI / 2 && toWaypoint <= sweep + 1e-9;
@@ -140,7 +140,7 @@ public final class Path {
     }
 
     Path flipped(boolean mirror) {
-        return new Path(Arrays.stream(points).map(p -> p.flipped(mirror)).toArray(Point[]::new));
+        return new Path(Arrays.stream(points).map(point -> point.flipped(mirror)).toArray(Point[]::new));
     }
 
     /** Total length [m]. */
@@ -152,8 +152,8 @@ public final class Path {
 
     List<Segment> segments() { return Collections.unmodifiableList(segments); }
 
-    /** Path distance [m] at the start of segment k. */
-    double segmentStart(int k) { return starts.get(k); }
+    /** Path distance [m] at the start of segment index. */
+    double segmentStart(int index) { return segmentStarts.get(index); }
 
     /** Stops in path order; the last one is the end. */
     List<Stop> stops() { return Collections.unmodifiableList(stops); }
@@ -161,40 +161,41 @@ public final class Path {
     /** Heading anchors in path order. */
     List<Anchor> anchors() { return Collections.unmodifiableList(anchors); }
 
-    /** Index of the segment containing path distance s [m]. */
-    int indexAt(double s) {
-        int k = segments.size() - 1;
-        while (k > 0 && starts.get(k) > s) k--;
-        return k;
+    /** Index of the segment containing path distance [m]. */
+    int indexAt(double distance) {
+        int index = segments.size() - 1;
+        while (index > 0 && segmentStarts.get(index) > distance) index--;
+        return index;
     }
 
-    Translation2d pointAt(double s) {
-        int k = indexAt(s);
-        return segments.get(k).pointAt(s - starts.get(k));
+    Translation2d pointAt(double distance) {
+        int index = indexAt(distance);
+        return segments.get(index).pointAt(distance - segmentStarts.get(index));
     }
 
-    Translation2d tangentAt(double s) {
-        int k = indexAt(s);
-        return segments.get(k).tangentAt(s - starts.get(k));
+    Translation2d tangentAt(double distance) {
+        int index = indexAt(distance);
+        return segments.get(index).tangentAt(distance - segmentStarts.get(index));
     }
 
     private void add(Segment segment) {
         segments.add(segment);
-        starts.add(length);
+        segmentStarts.add(length);
         length += segment.length();
     }
 
-    /** Path distance [m] >= fromS of the path point closest to p. */
-    private double locate(Translation2d p, double fromS) {
-        double best = fromS, bestDistance = Double.POSITIVE_INFINITY;
-        for (int k = 0; k < segments.size(); k++) {
-            Segment seg = segments.get(k);
-            double s = Math.max(fromS, starts.get(k) + MathUtil.clamp(seg.project(p), 0, seg.length()));
-            if (s > starts.get(k) + seg.length()) continue;
-            double d = pointAt(s).getDistance(p);
-            if (d < bestDistance - 1e-9) {
-                best = s;
-                bestDistance = d;
+    /** Path distance [m] >= fromDistance of the path point closest to point. */
+    private double locate(Translation2d point, double fromDistance) {
+        double best = fromDistance, bestDistance = Double.POSITIVE_INFINITY;
+        for (int index = 0; index < segments.size(); index++) {
+            Segment segment = segments.get(index);
+            double distance = Math.max(fromDistance,
+                    segmentStarts.get(index) + MathUtil.clamp(segment.project(point), 0, segment.length()));
+            if (distance > segmentStarts.get(index) + segment.length()) continue;
+            double gap = pointAt(distance).getDistance(point);
+            if (gap < bestDistance - 1e-9) {
+                best = distance;
+                bestDistance = gap;
             }
         }
         return best;
@@ -205,32 +206,34 @@ public final class Path {
      * (a point is a circle of radius 0). Returns {start, end}, or null when the circles are too
      * close for such a leg.
      *
-     * <p>With signed radii (+ left turn, - right turn), one formula covers all cases: m is the unit
-     * normal on the leg's left, at angle acos((r2 - r1) / d) from the center-to-center direction, and
-     * each tangent point is center - r * m.
+     * <p>With signed radii (+ left turn, - right turn), one formula covers all cases: legNormal is the unit
+     * normal on the leg's left, at angle acos(radiusDifference / centerDistance) from the center-to-center direction, and
+     * each tangent point is center - radius * legNormal.
      */
     private static Translation2d[] tangentLeg(Corner from, Corner to) {
-        Translation2d delta = to.center().minus(from.center());
-        double d = delta.getNorm(), q = to.signedRadius() - from.signedRadius();
-        if (!(d > Math.abs(q) + 1e-9)) return null;
-        Translation2d m = unit(delta).rotateBy(new Rotation2d(Math.acos(q / d)));
+        Translation2d centerToCenter = to.center().minus(from.center());
+        double centerDistance = centerToCenter.getNorm();
+        double radiusDifference = to.signedRadius() - from.signedRadius();
+        if (!(centerDistance > Math.abs(radiusDifference) + 1e-9)) return null;
+        Translation2d legNormal =
+                unitVector(centerToCenter).rotateBy(new Rotation2d(Math.acos(radiusDifference / centerDistance)));
         return new Translation2d[] {
-            from.center().minus(m.times(from.signedRadius())), to.center().minus(m.times(to.signedRadius()))
+            from.center().minus(legNormal.times(from.signedRadius())), to.center().minus(legNormal.times(to.signedRadius()))
         };
     }
 
-    private static IllegalArgumentException arcError(int i) {
+    private static IllegalArgumentException arcError(int pointIndex) {
         return new IllegalArgumentException(
-                "Path point " + i + ": corner arc does not fit; move the points apart or use a smaller radius");
+                "Path point " + pointIndex + ": corner arc does not fit; move the points apart or use a smaller radius");
     }
 
-    private Translation2d pos(int i) { return points[i].position(); }
+    private Translation2d waypointPosition(int index) { return points[index].position(); }
 
-    private static Translation2d unit(Translation2d v) { return v.div(v.getNorm()); }
+    private static Translation2d unitVector(Translation2d vector) { return vector.div(vector.getNorm()); }
 
     static double cross(Translation2d a, Translation2d b) { return a.getX() * b.getY() - a.getY() * b.getX(); }
 
-    private static double polar(Translation2d v) { return Math.atan2(v.getY(), v.getX()); }
+    private static double angleOf(Translation2d vector) { return Math.atan2(vector.getY(), vector.getX()); }
 
-    private static double mod2pi(double a) { return MathUtil.inputModulus(a, 0, 2 * Math.PI); }
+    private static double wrapTo2Pi(double angle) { return MathUtil.inputModulus(angle, 0, 2 * Math.PI); }
 }

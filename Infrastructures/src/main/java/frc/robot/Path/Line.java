@@ -19,13 +19,13 @@ public final class Line extends Segment {
     public double length() { return length; }
 
     @Override
-    public Translation2d pointAt(double t) { return start.plus(direction.times(t)); }
+    public Translation2d pointAt(double distance) { return start.plus(direction.times(distance)); }
 
     @Override
-    public Translation2d tangentAt(double t) { return direction; }
+    public Translation2d tangentAt(double distance) { return direction; }
 
     @Override
-    public double project(Translation2d p) { return p.minus(start).dot(direction); }
+    public double project(Translation2d point) { return point.minus(start).dot(direction); }
 
     @Override
     public double curvature() { return 0; }

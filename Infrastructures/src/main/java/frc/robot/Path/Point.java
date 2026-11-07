@@ -50,12 +50,12 @@ public final class Point {
     Point flipped(boolean mirror) {
         double x = PathConstants.FIELD_LENGTH - position.getX();
         double y = mirror ? position.getY() : PathConstants.FIELD_WIDTH - position.getY();
-        Rotation2d a = angle == null ? null : mirror ? Rotation2d.kPi.minus(angle) : angle.plus(Rotation2d.kPi);
-        return new Point(new Translation2d(x, y), a, stop, dwell, radius);
+        Rotation2d flippedAngle = angle == null ? null : mirror ? Rotation2d.kPi.minus(angle) : angle.plus(Rotation2d.kPi);
+        return new Point(new Translation2d(x, y), flippedAngle, stop, dwell, radius);
     }
 
-    private static double check(double v, String name) {
-        if (!Double.isFinite(v)) throw new IllegalArgumentException("Point " + name + " is not finite");
-        return v;
+    private static double check(double value, String name) {
+        if (!Double.isFinite(value)) throw new IllegalArgumentException("Point " + name + " is not finite");
+        return value;
     }
 }

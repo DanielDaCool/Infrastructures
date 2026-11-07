@@ -15,25 +15,25 @@ public final class PathFollower {
     private final List<Segment> segments;
     private final List<Path.Stop> stops;
     private final List<Path.Anchor> anchors = new ArrayList<>();
-    private int k = 0;
+    private int segmentIndex = 0;
     private int stopIndex = 0;
     private int waitLoops = -1; // -1 = not waiting at a stop
-    private double s = 0;
-    private double vPrev = 0;
-    private Translation2d vCmdPrev = Translation2d.kZero;
+    private double progress = 0;
+    private double previousSpeed = 0;
+    private Translation2d previousVelocity = Translation2d.kZero;
     private boolean finished = false;
-    private final double thetaEnd;
-    private double thetaRef, dThetaRef; // set by heading(s)
+    private final double finalHeading;
+    private double targetHeading, targetHeadingPerMeter; // set by updateTargetHeading(distance)
 
     /** @param startPose robot pose at the start; its heading is used until the first point angle */
     public PathFollower(Path path, Pose2d startPose) {
         this.path = path;
         this.segments = path.segments();
         this.stops = path.stops();
-        if (path.anchors().isEmpty() || path.anchors().get(0).s() > 0)
+        if (path.anchors().isEmpty() || path.anchors().get(0).distance() > 0)
             anchors.add(new Path.Anchor(0, startPose.getRotation()));
         anchors.addAll(path.anchors());
-        thetaEnd = anchors.get(anchors.size() - 1).angle().getRadians();
+        finalHeading = anchors.get(anchors.size() - 1).angle().getRadians();
     }
 
     /**
@@ -42,28 +42,30 @@ public final class PathFollower {
      * @return field-relative speed command [m/s, rad/s]
      */
     public ChassisSpeeds calculate(Pose2d pose, ChassisSpeeds measuredFieldSpeeds) {
-        Translation2d p = pose.getTranslation();
-        double theta = pose.getRotation().getRadians();
-        if (finished || !Double.isFinite(p.getX()) || !Double.isFinite(p.getY()) || !Double.isFinite(theta))
+        Translation2d position = pose.getTranslation();
+        double heading = pose.getRotation().getRadians();
+        if (finished || !Double.isFinite(position.getX()) || !Double.isFinite(position.getY())
+                || !Double.isFinite(heading))
             return new ChassisSpeeds();
         Path.Stop stop = stops.get(stopIndex);
-        double t = segments.get(k).project(p);
-        while (t >= segments.get(k).length() && k < segments.size() - 1
-                && Math.abs(path.segmentStart(k + 1) - stop.s()) > 1e-9) {
-            k++;
-            t = segments.get(k).project(p);
+        double distanceOnSegment = segments.get(segmentIndex).project(position);
+        while (distanceOnSegment >= segments.get(segmentIndex).length() && segmentIndex < segments.size() - 1
+                && Math.abs(path.segmentStart(segmentIndex + 1) - stop.distance()) > 1e-9) {
+            segmentIndex++;
+            distanceOnSegment = segments.get(segmentIndex).project(position);
         }
-        Segment seg = segments.get(k);
-        s = Math.max(s, path.segmentStart(k) + MathUtil.clamp(t, 0, seg.length()));
-        heading(s);
-        double headingError = MathUtil.angleModulus(thetaRef - theta);
+        Segment segment = segments.get(segmentIndex);
+        progress = Math.max(progress,
+                path.segmentStart(segmentIndex) + MathUtil.clamp(distanceOnSegment, 0, segment.length()));
+        updateTargetHeading(progress);
+        double headingError = MathUtil.angleModulus(targetHeading - heading);
 
-        double measured = Math.hypot(measuredFieldSpeeds.vxMetersPerSecond, measuredFieldSpeeds.vyMetersPerSecond);
-        if (!Double.isFinite(measured)) measured = vCmdPrev.getNorm();
-        double stopDistance = p.getDistance(path.pointAt(stop.s()));
-        boolean atStop = stopDistance < POSITION_TOLERANCE && measured < STOP_SPEED;
+        double measuredSpeed = Math.hypot(measuredFieldSpeeds.vxMetersPerSecond, measuredFieldSpeeds.vyMetersPerSecond);
+        if (!Double.isFinite(measuredSpeed)) measuredSpeed = previousVelocity.getNorm();
+        double stopDistance = position.getDistance(path.pointAt(stop.distance()));
+        boolean atStop = stopDistance < POSITION_TOLERANCE && measuredSpeed < STOP_SPEED;
         if (stopIndex == stops.size() - 1) {
-            if (atStop && Math.abs(MathUtil.angleModulus(thetaEnd - theta)) < ANGLE_TOLERANCE) {
+            if (atStop && Math.abs(MathUtil.angleModulus(finalHeading - heading)) < ANGLE_TOLERANCE) {
                 finished = true;
                 return new ChassisSpeeds();
             }
@@ -72,74 +74,86 @@ public final class PathFollower {
             if (++waitLoops >= Math.round(stop.dwell() / DT)) {
                 stopIndex++;
                 waitLoops = -1;
-                s = stop.s(); // the robot may be up to POSITION_TOLERANCE short of the stop
-                k = path.indexAt(s);
+                progress = stop.distance(); // the robot may be up to POSITION_TOLERANCE short of the stop
+                segmentIndex = path.indexAt(progress);
             }
         }
         if (waitLoops >= 0 || stopDistance < POSITION_TOLERANCE / 2) {
-            vPrev = 0;
-            vCmdPrev = Translation2d.kZero;
+            previousSpeed = 0;
+            previousVelocity = Translation2d.kZero;
             return new ChassisSpeeds(0, 0, MathUtil.clamp(HEADING_KP * headingError, -MAX_OMEGA, MAX_OMEGA));
         }
 
-        double toStop = stop.s() - s;
-        double segEnd = path.segmentStart(k) + seg.length();
-        if (Math.abs(segEnd - stop.s()) < 1e-9) toStop = stop.s() - (path.segmentStart(k) + t); // < 0 past the stop
-        double v = Math.min(vPrev + MAX_ACCELERATION * DT, MAX_VELOCITY);
-        for (int j = k; j < segments.size() && path.segmentStart(j) < stop.s(); j++) {
+        double distanceToStop = stop.distance() - progress;
+        double segmentEnd = path.segmentStart(segmentIndex) + segment.length();
+        if (Math.abs(segmentEnd - stop.distance()) < 1e-9)
+            distanceToStop = stop.distance() - (path.segmentStart(segmentIndex) + distanceOnSegment); // < 0 past the stop
+        double speed = Math.min(previousSpeed + MAX_ACCELERATION * DT, MAX_VELOCITY);
+        for (int j = segmentIndex; j < segments.size() && path.segmentStart(j) < stop.distance(); j++) {
             double curvature = Math.abs(segments.get(j).curvature());
             if (curvature == 0) continue;
-            double cap = Math.sqrt(MAX_LATERAL_ACCELERATION / curvature);
-            v = Math.min(v, Math.sqrt(cap * cap + 2 * MAX_DECELERATION * Math.max(0, path.segmentStart(j) - s)));
+            double arcSpeedLimit = Math.sqrt(MAX_LATERAL_ACCELERATION / curvature);
+            speed = Math.min(speed, Math.sqrt(arcSpeedLimit * arcSpeedLimit
+                    + 2 * MAX_DECELERATION * Math.max(0, path.segmentStart(j) - progress)));
         }
-        double capture = Math.min(Math.sqrt(2 * MAX_DECELERATION * Math.max(0, toStop)), FINAL_KP * toStop);
-        capture = Math.copySign(Math.max(Math.abs(capture), MIN_SPEED), toStop); // beats a drive deadband
-        v = Math.min(v, capture);
-        v = Math.max(v, Math.min(0, capture)); // floor 0, or drive back when past the stop
+        double approachSpeed = Math.min(Math.sqrt(2 * MAX_DECELERATION * Math.max(0, distanceToStop)),
+                FINAL_KP * distanceToStop);
+        approachSpeed = Math.copySign(Math.max(Math.abs(approachSpeed), MIN_SPEED), distanceToStop); // beats a drive deadband
+        speed = Math.min(speed, approachSpeed);
+        speed = Math.max(speed, Math.min(0, approachSpeed)); // floor 0, or drive back when past the stop
 
-        double local = s - path.segmentStart(k);
-        Translation2d tangent = seg.tangentAt(local);
+        double progressOnSegment = progress - path.segmentStart(segmentIndex);
+        Translation2d tangent = segment.tangentAt(progressOnSegment);
         Translation2d normal = new Translation2d(-tangent.getY(), tangent.getX());
         // just before the stop, so the look-ahead stays on the leg arriving at it, not the next one
-        Translation2d look = path.tangentAt(Math.min(s + v * LAG_TIME, stop.s() - 1e-9));
-        double eN = Path.cross(tangent, p.minus(seg.pointAt(local)));
-        double psi = -Math.atan(eN / MERGE_DISTANCE);
-        double vN = -Math.signum(eN) * Math.max(Math.abs(v * Math.sin(psi)), FINAL_KP * Math.abs(eN));
-        vN = MathUtil.clamp(vN, -MAX_VELOCITY, MAX_VELOCITY);
-        Translation2d cmd = look.times(v * Math.cos(psi)).plus(normal.times(vN));
-        Translation2d dv = cmd.minus(vCmdPrev);
-        double maxDv = MAX_VECTOR_ACCELERATION * DT;
-        if (dv.getNorm() > maxDv) cmd = vCmdPrev.plus(dv.times(maxDv / dv.getNorm()));
-        if (cmd.getNorm() > MAX_VELOCITY) cmd = cmd.times(MAX_VELOCITY / cmd.getNorm());
+        Translation2d lookAheadDirection =
+                path.tangentAt(Math.min(progress + speed * LAG_TIME, stop.distance() - 1e-9));
+        // signed distance from the path, left of the path positive
+        double sideError = Path.cross(tangent, position.minus(segment.pointAt(progressOnSegment)));
+        double mergeAngle = -Math.atan(sideError / MERGE_DISTANCE);
+        double sidewaysSpeed = -Math.signum(sideError)
+                * Math.max(Math.abs(speed * Math.sin(mergeAngle)), FINAL_KP * Math.abs(sideError));
+        sidewaysSpeed = MathUtil.clamp(sidewaysSpeed, -MAX_VELOCITY, MAX_VELOCITY);
+        Translation2d velocity =
+                lookAheadDirection.times(speed * Math.cos(mergeAngle)).plus(normal.times(sidewaysSpeed));
+        Translation2d velocityChange = velocity.minus(previousVelocity);
+        double maxVelocityChange = MAX_VECTOR_ACCELERATION * DT;
+        if (velocityChange.getNorm() > maxVelocityChange)
+            velocity = previousVelocity.plus(velocityChange.times(maxVelocityChange / velocityChange.getNorm()));
+        if (velocity.getNorm() > MAX_VELOCITY) velocity = velocity.times(MAX_VELOCITY / velocity.getNorm());
 
-        double omega = MathUtil.clamp(dThetaRef * v + HEADING_KP * headingError, -MAX_OMEGA, MAX_OMEGA);
-        if (!Double.isFinite(cmd.getX()) || !Double.isFinite(cmd.getY()) || !Double.isFinite(omega))
+        double turnRate = MathUtil.clamp(
+                targetHeadingPerMeter * speed + HEADING_KP * headingError, -MAX_OMEGA, MAX_OMEGA);
+        if (!Double.isFinite(velocity.getX()) || !Double.isFinite(velocity.getY()) || !Double.isFinite(turnRate))
             return new ChassisSpeeds();
-        vPrev = v;
-        vCmdPrev = cmd;
-        return new ChassisSpeeds(cmd.getX(), cmd.getY(), omega);
+        previousSpeed = speed;
+        previousVelocity = velocity;
+        return new ChassisSpeeds(velocity.getX(), velocity.getY(), turnRate);
     }
 
     /** True once the robot is at the end within tolerance, position and heading. */
     public boolean isFinished() { return finished; }
 
     /** Distance travelled along the path [m]; never decreases. */
-    public double progress() { return s; }
+    public double progress() { return progress; }
 
-    int segmentIndex() { return k; }
+    int segmentIndex() { return segmentIndex; }
 
-    /** Sets thetaRef [rad] and dThetaRef [rad/m]: linear between anchors along the shortest wrap. */
-    private void heading(double sAt) {
+    /**
+     * Sets targetHeading [rad] and targetHeadingPerMeter [rad/m] at the path distance [m]: linear
+     * between anchors along the shortest wrap.
+     */
+    private void updateTargetHeading(double distance) {
         int i = anchors.size() - 1;
-        while (i > 0 && anchors.get(i).s() > sAt) i--;
-        Path.Anchor a = anchors.get(i);
-        thetaRef = a.angle().getRadians();
-        dThetaRef = 0;
+        while (i > 0 && anchors.get(i).distance() > distance) i--;
+        Path.Anchor before = anchors.get(i);
+        targetHeading = before.angle().getRadians();
+        targetHeadingPerMeter = 0;
         if (i == anchors.size() - 1) return;
-        Path.Anchor b = anchors.get(i + 1);
-        double ds = b.s() - a.s();
-        if (ds < 1e-9) return;
-        dThetaRef = MathUtil.angleModulus(b.angle().getRadians() - thetaRef) / ds;
-        thetaRef += dThetaRef * (sAt - a.s());
+        Path.Anchor after = anchors.get(i + 1);
+        double anchorSpacing = after.distance() - before.distance();
+        if (anchorSpacing < 1e-9) return;
+        targetHeadingPerMeter = MathUtil.angleModulus(after.angle().getRadians() - targetHeading) / anchorSpacing;
+        targetHeading += targetHeadingPerMeter * (distance - before.distance());
     }
 }
