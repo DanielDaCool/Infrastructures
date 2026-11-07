@@ -13,11 +13,17 @@ date | task type | model used | signal | better model
 2026-11-02 | FRC Java implementation from a finished design (geometry/profile/follower) | opus (medium) | compiled and passed its tests first try; reviewer found 1-2 Major per phase | opus medium (right)
 2026-11-02 | stub skeleton from API doc | sonnet (medium) | compiled first try, no review findings | sonnet (right)
 2026-11-02 | example wiring + doc sync to real API | sonnet (medium) | approved, minors only | sonnet (right)
+2026-11-07 | FRC path module from a decided spec (geometry/speed/follower) | opus (medium) | compiled first try; reviewer found 2 Major (looping corner arcs, deadband stall) | opus medium (right)
+2026-11-07 | module README + design note from a spec, before code existed | sonnet (medium) | every name matched the code at review | sonnet (right)
+2026-11-07 | JUnit tests from a spec | sonnet (medium) | 8/8 passed first try; one bound needed updating after an approved behavior change | sonnet (right)
+2026-11-07 | example wiring to a new API | sonnet (medium) | built first try, no review findings | sonnet (haiku may suffice)
 
 ## Rules
 - User preference: never use Opus for simple tasks (README edits, doc wording, mechanical edits, scaffolding): use haiku or sonnet. This also applies to new cloud sessions (pass `model`).
 - User preference: run subagents at effort "medium", not "high" (token cost). Escalate to high only with the user's OK.
 - design-math editing and fix application (geometry/physics/control docs): opus; always re-review fixes, they introduced issues twice.
+- FRC Java from a finished design or spec (geometry/profile/follower): opus at medium; always follow with an opus review (Majors every time).
+- Example wiring and module docs from a fixed API or spec: sonnet.
 
 ## Notes
 - Parallel design chapters drift apart; define notation and decisions in one shared brief first, and plan an integration pass.
