@@ -46,12 +46,11 @@ public final class Point {
     /** Wait at the stop [s]. */ public double dwell() { return dwell; }
     /** Corner radius [m], NaN = default. */ public double radius() { return radius; }
 
-    /** This point on the red side, per {@link PathConstants#MIRRORED_FIELD}. */
-    Point flipped() {
+    /** This point on the red side: mirrored across x = FIELD_LENGTH / 2, or rotated 180 deg about the center. */
+    Point flipped(boolean mirror) {
         double x = PathConstants.FIELD_LENGTH - position.getX();
-        double y = PathConstants.MIRRORED_FIELD ? position.getY() : PathConstants.FIELD_WIDTH - position.getY();
-        Rotation2d a = angle == null ? null
-                : PathConstants.MIRRORED_FIELD ? Rotation2d.kPi.minus(angle) : angle.plus(Rotation2d.kPi);
+        double y = mirror ? position.getY() : PathConstants.FIELD_WIDTH - position.getY();
+        Rotation2d a = angle == null ? null : mirror ? Rotation2d.kPi.minus(angle) : angle.plus(Rotation2d.kPi);
         return new Point(new Translation2d(x, y), a, stop, dwell, radius);
     }
 

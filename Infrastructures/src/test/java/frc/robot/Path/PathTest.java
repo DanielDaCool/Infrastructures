@@ -44,10 +44,16 @@ class PathTest {
         boolean progressMonotonic = true;
         final List<Translation2d> positions = new ArrayList<>();
         final List<Double> cmdSpeeds = new ArrayList<>();
+        final List<Double> arcSpeeds = new ArrayList<>();
 
-        Sim(Path path, double lag, double maxTime) {
-            PathFollower follower = new PathFollower(path, pose(path.start().getX(), path.start().getY(), 0));
-            Translation2d pos = path.start(), v = Translation2d.kZero, prevCmd = null;
+        Sim(Path path, double lag, double maxTime) { this(path, lag, 0, 0, path.start(), maxTime); }
+
+        /** delayLoops: command latency in loops; deadband: |command| below it doesn't move the robot. */
+        Sim(Path path, double lag, int delayLoops, double deadband, Translation2d startPos, double maxTime) {
+            PathFollower follower = new PathFollower(path, pose(startPos.getX(), startPos.getY(), 0));
+            Translation2d pos = startPos, v = Translation2d.kZero, prevCmd = null;
+            java.util.ArrayDeque<Translation2d> pipe = new java.util.ArrayDeque<>();
+            for (int j = 0; j < delayLoops; j++) pipe.add(Translation2d.kZero);
             double theta = 0;
             for (int i = 0; i * DT < maxTime && !follower.isFinished(); i++) {
                 ChassisSpeeds c = follower.calculate(new Pose2d(pos, new Rotation2d(theta)), vel(v.getX(), v.getY()));
@@ -60,7 +66,14 @@ class PathTest {
                 if (prevCmd != null && prevCmd.getNorm() > 0.2 && cmd.getNorm() > 0.2)
                     maxJumpDeg = Math.max(maxJumpDeg, Math.toDegrees(angleBetween(prevCmd, cmd)));
                 prevCmd = cmd;
-                v = lag == 0 ? cmd : v.plus(cmd.minus(v).times(DT / lag));
+                if (path.segments().get(follower.segmentIndex()) instanceof Arc arc) { // speed along the path
+                    Translation2d tan = arc.tangentAt(MathUtil.clamp(arc.project(pos), 0, arc.length()));
+                    arcSpeeds.add(cmd.getX() * tan.getX() + cmd.getY() * tan.getY());
+                }
+                pipe.add(cmd);
+                Translation2d applied = pipe.poll();
+                if (applied.getNorm() < deadband) applied = Translation2d.kZero;
+                v = lag == 0 ? applied : v.plus(applied.minus(v).times(DT / lag));
                 pos = pos.plus(v.times(DT));
                 theta += c.omegaRadiansPerSecond * DT;
                 if (follower.isFinished()) finishTime = (i + 1) * DT;
@@ -197,19 +210,63 @@ class PathTest {
     }
 
     @Test
-    void flippedPathFollowsAllianceConstant() {
+    void flippedPathRotateAndMirror() {
         double L = FIELD_LENGTH, W = FIELD_WIDTH;
-        Path flipped = new Path(new Point(1, 1), new Point(3, 2).withAngle(Rotation2d.fromDegrees(30))).flipped();
-        Translation2d start = MIRRORED_FIELD ? new Translation2d(L - 1, 1) : new Translation2d(L - 1, W - 1);
-        Translation2d end = MIRRORED_FIELD ? new Translation2d(L - 3, 2) : new Translation2d(L - 3, W - 2);
-        assertEquals(0, flipped.start().getDistance(start), 1e-9);
-        assertEquals(0, flipped.end().getDistance(end), 1e-9);
-        Translation2d expected = end.minus(start);
-        assertEquals(0, flipped.segments().get(0).tangentAt(0).getDistance(expected.div(expected.getNorm())), 1e-9);
-        double angle = flipped.anchors().get(flipped.anchors().size() - 1).angle().getDegrees();
-        assertEquals(MIRRORED_FIELD ? 150 : 210, MathUtil.inputModulus(angle, 0, 360), 1e-9);
+        for (boolean mirror : new boolean[] {false, true}) {
+            Path flipped = new Path(new Point(1, 1), new Point(3, 2).withAngle(Rotation2d.fromDegrees(30))).flipped(mirror);
+            Translation2d start = mirror ? new Translation2d(L - 1, 1) : new Translation2d(L - 1, W - 1);
+            Translation2d end = mirror ? new Translation2d(L - 3, 2) : new Translation2d(L - 3, W - 2);
+            assertEquals(0, flipped.start().getDistance(start), 1e-9, "start, mirror " + mirror);
+            assertEquals(0, flipped.end().getDistance(end), 1e-9, "end, mirror " + mirror);
+            Translation2d expected = end.minus(start);
+            assertEquals(0, flipped.segments().get(0).tangentAt(0).getDistance(expected.div(expected.getNorm())), 1e-9);
+            double angle = flipped.anchors().get(flipped.anchors().size() - 1).angle().getDegrees();
+            assertEquals(mirror ? 150 : 210, MathUtil.inputModulus(angle, 0, 360), 1e-9, "angle, mirror " + mirror);
 
-        Arc arc = (Arc) left().flipped().segments().stream().filter(s -> s instanceof Arc).findFirst().orElseThrow();
-        assertEquals(MIRRORED_FIELD ? -1 : 1, arc.sigma());
+            Arc arc = (Arc) left().flipped(mirror).segments().stream().filter(x -> x instanceof Arc).findFirst().orElseThrow();
+            assertEquals(mirror ? -1 : 1, arc.sigma(), "mirror turns a left turn into a right turn");
+        }
+        assertEquals(0, left().flipped().start().getDistance(left().flipped(MIRRORED_FIELD).start()), 1e-12);
+    }
+
+    @Test
+    void closeSameDirectionCornersAreRejected() {
+        assertThrows(IllegalArgumentException.class,
+                () -> new Path(new Point(0, 0), new Point(2, 0), new Point(2.05, 0.05), new Point(2.05, 2)));
+    }
+
+    @Test
+    void stopsAndEndFinishWithDriveDeadband() {
+        Path path = new Path(new Point(0, 0), new Point(2, 0).stop(), new Point(2, 2));
+        for (double lag : new double[] {0, 0.1}) {
+            Sim sim = new Sim(path, lag, 0, 0.1, path.start(), 15);
+            assertFalse(Double.isNaN(sim.finishTime), "finished, lag " + lag);
+            assertTrue(sim.positions.get(sim.positions.size() - 1).getDistance(path.end()) < POSITION_TOLERANCE);
+        }
+    }
+
+    @Test
+    void stopOvershootUnderHeavyLagSettles() {
+        Path path = new Path(new Point(0, 0), new Point(3, 0).stop(), new Point(3, 3));
+        Sim sim = new Sim(path, 0.1, 10, 0, path.start(), 20); // 200 ms latency + 0.1 s lag
+        assertFalse(Double.isNaN(sim.finishTime), "finished");
+    }
+
+    @Test
+    void startPastTheEndDrivesBack() {
+        Path path = new Path(new Point(0, 0), new Point(2, 0));
+        Sim sim = new Sim(path, 0.1, 0, 0, new Translation2d(2.1, 0), 5);
+        assertFalse(Double.isNaN(sim.finishTime), "finished");
+        assertTrue(sim.positions.get(sim.positions.size() - 1).getDistance(path.end()) < POSITION_TOLERANCE);
+    }
+
+    @Test
+    void arcSpeedRespectsLateralAccelerationLimit() {
+        Path path = new Path(new Point(0, 0), new Point(6, 0), new Point(6, 6));
+        Sim sim = new Sim(path, 0, 15);
+        double cap = Math.sqrt(MAX_LATERAL_ACCELERATION * RADIUS);
+        assertTrue(cap < MAX_VELOCITY, "test needs a cap below MAX_VELOCITY");
+        assertFalse(sim.arcSpeeds.isEmpty(), "never on the arc");
+        for (double v : sim.arcSpeeds) assertTrue(v <= cap + 1e-6, "arc speed " + v + " > cap " + cap);
     }
 }

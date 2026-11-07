@@ -94,7 +94,11 @@ public final class Path {
 
     /** This path for the red alliance, per {@link PathConstants#MIRRORED_FIELD}. */
     public Path flipped() {
-        return new Path(Arrays.stream(points).map(Point::flipped).toArray(Point[]::new));
+        return flipped(PathConstants.MIRRORED_FIELD);
+    }
+
+    Path flipped(boolean mirror) {
+        return new Path(Arrays.stream(points).map(p -> p.flipped(mirror)).toArray(Point[]::new));
     }
 
     /** Total length [m]. */
