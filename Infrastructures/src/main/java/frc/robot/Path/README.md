@@ -64,6 +64,21 @@ not reset your pose. The trigger's command must not require the drivetrain, or i
 
 The last point is always a stop. A path needs at least 2 points.
 
+## Path files
+
+`PathLoader.load("name")` reads `src/main/deploy/paths/name.json` (written by the path designer app) and returns a `Path`.
+Load paths when the robot starts, not in auto: a bad file throws with the file name and point index.
+
+```json
+{ "version": 1,
+  "points": [ { "x": 1.0, "y": 2.0 },
+              { "x": 3.0, "y": 2.0, "angleDeg": 90, "radius": 0.4 },
+              { "x": 3.0, "y": 4.0, "stop": true, "dwell": 0.5 } ] }
+```
+
+`x`, `y` in meters (blue field), `angleDeg` in degrees, `radius` in meters, `dwell` in seconds. Only `x` and `y` are required.
+Unknown fields are an error, so a typo is not silently ignored.
+
 ## Corners
 
 Each middle point is a corner. The robot drives along a circle that passes through the point.
@@ -165,3 +180,4 @@ All in `frc.robot.Path`.
 | `Segment.java`, `Line.java`, `Arc.java` | One piece of the path: base class, straight line, circle arc |
 | `PathFollower.java` | Progress, speed, direction and heading per loop |
 | `FollowPathCommand.java` | The command |
+| `PathLoader.java` | Reads a path file from `deploy/paths` |
