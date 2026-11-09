@@ -1,6 +1,6 @@
 package frc.robot.Path;
 
-import static frc.robot.Path.PathConfig.RADIUS;
+import static frc.robot.Path.PathConfig.*;
 
 import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.math.geometry.Rotation2d;
@@ -35,6 +35,7 @@ public final class Path {
     }
 
     private final Point[] points;
+    private final double maxVelocity, maxAcceleration, maxOmega;
     private final List<Segment> segments = new ArrayList<>();
     private final List<Double> segmentStarts = new ArrayList<>();
     private final List<Stop> stops = new ArrayList<>();
@@ -48,8 +49,15 @@ public final class Path {
      * @param points at least 2 waypoints, consecutive ones more than 1 cm apart
      */
     public Path(Point... points) {
+        this(points, MAX_VELOCITY, MAX_ACCELERATION, MAX_OMEGA);
+    }
+
+    private Path(Point[] points, double maxVelocity, double maxAcceleration, double maxOmega) {
         checkPoints(points);
         this.points = points.clone();
+        this.maxVelocity = checkLimit(maxVelocity, "max velocity");
+        this.maxAcceleration = checkLimit(maxAcceleration, "max acceleration");
+        this.maxOmega = checkLimit(maxOmega, "max omega");
 
         List<Corner> corners = new ArrayList<>();
         for (int i = 0; i < points.length; i++) {
@@ -136,13 +144,32 @@ public final class Path {
         return new Arc(corner.center(), corner.radius(), corner.isLeftTurn(), startAngle, sweep);
     }
 
+    /**
+     * This path with its own limits instead of the PathConfig ones.
+     *
+     * @param maxVelocity [m/s] @param maxAcceleration [m/s^2] @param maxOmega [rad/s], each > 0
+     */
+    public Path withLimits(double maxVelocity, double maxAcceleration, double maxOmega) {
+        return new Path(points, maxVelocity, maxAcceleration, maxOmega);
+    }
+
+    /** Top speed along this path [m/s]. */ public double maxVelocity() { return maxVelocity; }
+    /** Acceleration along this path [m/s^2]. */ public double maxAcceleration() { return maxAcceleration; }
+    /** Top turn rate on this path [rad/s]. */ public double maxOmega() { return maxOmega; }
+
+    private static double checkLimit(double value, String name) {
+        if (!(Double.isFinite(value) && value > 0)) throw new IllegalArgumentException("Path " + name + " must be > 0");
+        return value;
+    }
+
     /** This path for the red alliance, per {@link PathConfig#MIRRORED_FIELD}. */
     public Path flipped() {
         return flipped(PathConfig.MIRRORED_FIELD);
     }
 
     Path flipped(boolean mirror) {
-        return new Path(Arrays.stream(points).map(point -> point.flipped(mirror)).toArray(Point[]::new));
+        return new Path(Arrays.stream(points).map(point -> point.flipped(mirror)).toArray(Point[]::new),
+                maxVelocity, maxAcceleration, maxOmega);
     }
 
     /** Total length [m]. */

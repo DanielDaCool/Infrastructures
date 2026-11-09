@@ -71,6 +71,7 @@ Load paths when the robot starts, not in auto: a bad file throws with the file n
 
 ```json
 { "version": 1,
+  "limits": { "maxVelocity": 1.5, "maxAcceleration": 2.0, "maxOmegaDeg": 270 },
   "points": [ { "x": 1.0, "y": 2.0 },
               { "x": 3.0, "y": 2.0, "angleDeg": 90, "radius": 0.4 },
               { "x": 3.0, "y": 4.0, "stop": true, "dwell": 0.5 } ] }
@@ -78,6 +79,10 @@ Load paths when the robot starts, not in auto: a bad file throws with the file n
 
 `x`, `y` in meters (blue field), `angleDeg` in degrees, `radius` in meters, `dwell` in seconds. Only `x` and `y` are required.
 Unknown fields are an error, so a typo is not silently ignored.
+
+`limits` is optional, and so is each value in it: a value left out uses the `PathConfig` constant. In code, the same
+is `path.withLimits(maxVelocity, maxAcceleration, maxOmega)` [m/s, m/s^2, rad/s]. Tolerances and the default radius
+stay global in `PathConfig`.
 
 ## Corners
 
@@ -125,7 +130,7 @@ Set these in `PathConfig.java` for your robot:
 
 | Constant | Default | Meaning |
 |---|---|---|
-| `MAX_VELOCITY` | 2.0 m/s | Speed limit |
+| `MAX_VELOCITY` | 2.0 m/s | Speed limit (default; a path can override it with `withLimits` or the file's `limits`) |
 | `MAX_ACCELERATION` | 3.0 m/s^2 | Speed-up and braking along the path, and the arc speed cap. The commanded velocity vector may change by `2 * MAX_ACCELERATION` |
 | `MAX_OMEGA` | 2 pi rad/s | Rotation speed limit |
 | `RADIUS` | 0.25 m | Default corner circle radius |

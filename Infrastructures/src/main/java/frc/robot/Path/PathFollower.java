@@ -26,6 +26,7 @@ public final class PathFollower {
     private static final double STOP_SPEED = 0.1;
 
     private final Path path;
+    private final double maxVelocity, maxAcceleration, maxOmega; // this path's limits
     private final List<Segment> segments;
     private final List<Path.Stop> stops;
     private final List<Path.Anchor> anchors = new ArrayList<>();
@@ -46,6 +47,9 @@ public final class PathFollower {
     /** @param startPose robot pose at the start; its heading is used until the first point angle */
     public PathFollower(Path path, Pose2d startPose) {
         this.path = path;
+        maxVelocity = path.maxVelocity();
+        maxAcceleration = path.maxAcceleration();
+        maxOmega = path.maxOmega();
         this.segments = path.segments();
         this.stops = path.stops();
         if (path.anchors().isEmpty() || path.anchors().get(0).distance() > 0)
@@ -124,7 +128,7 @@ public final class PathFollower {
         if (waitLoops >= 0 || stopDistance < POSITION_TOLERANCE / 2) {
             previousSpeed = 0;
             previousVelocity = Translation2d.kZero;
-            return new ChassisSpeeds(0, 0, MathUtil.clamp(HEADING_KP * headingError, -MAX_OMEGA, MAX_OMEGA));
+            return new ChassisSpeeds(0, 0, MathUtil.clamp(HEADING_KP * headingError, -maxOmega, maxOmega));
         }
         return null;
     }
@@ -135,15 +139,15 @@ public final class PathFollower {
         double segmentEnd = path.segmentStart(segmentIndex) + segment.length();
         if (Math.abs(segmentEnd - stop.distance()) < 1e-9)
             distanceToStop = stop.distance() - (path.segmentStart(segmentIndex) + distanceOnSegment); // < 0 past the stop
-        double speed = Math.min(previousSpeed + MAX_ACCELERATION * DT, MAX_VELOCITY);
+        double speed = Math.min(previousSpeed + maxAcceleration * DT, maxVelocity);
         for (int j = segmentIndex; j < segments.size() && path.segmentStart(j) < stop.distance(); j++) {
             double curvature = Math.abs(segments.get(j).curvature());
             if (curvature == 0) continue;
-            double arcSpeedLimit = Math.sqrt(MAX_ACCELERATION / curvature);
+            double arcSpeedLimit = Math.sqrt(maxAcceleration / curvature);
             speed = Math.min(speed, Math.sqrt(arcSpeedLimit * arcSpeedLimit
-                    + 2 * MAX_ACCELERATION * Math.max(0, path.segmentStart(j) - progress)));
+                    + 2 * maxAcceleration * Math.max(0, path.segmentStart(j) - progress)));
         }
-        double approachSpeed = Math.min(Math.sqrt(2 * MAX_ACCELERATION * Math.max(0, distanceToStop)),
+        double approachSpeed = Math.min(Math.sqrt(2 * maxAcceleration * Math.max(0, distanceToStop)),
                 FINAL_KP * distanceToStop);
         approachSpeed = Math.copySign(Math.max(Math.abs(approachSpeed), MIN_SPEED), distanceToStop); // beats a drive deadband
         speed = Math.min(speed, approachSpeed);
@@ -166,22 +170,22 @@ public final class PathFollower {
         double sidewaysSpeed = Math.abs(speed) * Math.sin(mergeAngle);
         if (Math.abs(distanceToStop) < MERGE_DISTANCE)
             sidewaysSpeed = -Math.signum(sideError) * Math.max(Math.abs(sidewaysSpeed), FINAL_KP * Math.abs(sideError));
-        sidewaysSpeed = MathUtil.clamp(sidewaysSpeed, -MAX_VELOCITY, MAX_VELOCITY);
+        sidewaysSpeed = MathUtil.clamp(sidewaysSpeed, -maxVelocity, maxVelocity);
         Translation2d velocity =
                 lookAheadDirection.times(speed * Math.cos(mergeAngle)).plus(normal.times(sidewaysSpeed));
         Translation2d velocityChange = velocity.minus(previousVelocity);
-        // On an arc the robot needs up to MAX_ACCELERATION along the path and MAX_ACCELERATION toward the center,
+        // On an arc the robot needs up to maxAcceleration along the path and maxAcceleration toward the center,
         // about 1.41x in total; 2x is a margin above that (not measured), so this only catches sudden direction steps.
-        double maxVelocityChange = 2 * MAX_ACCELERATION * DT;
+        double maxVelocityChange = 2 * maxAcceleration * DT;
         if (velocityChange.getNorm() > maxVelocityChange)
             velocity = previousVelocity.plus(velocityChange.times(maxVelocityChange / velocityChange.getNorm()));
-        if (velocity.getNorm() > MAX_VELOCITY) velocity = velocity.times(MAX_VELOCITY / velocity.getNorm());
+        if (velocity.getNorm() > maxVelocity) velocity = velocity.times(maxVelocity / velocity.getNorm());
         return velocity;
     }
 
     /** Turn rate: heading feed-forward along the path plus the heading error correction. */
     private double turnRate(double speed, double headingError) {
-        return MathUtil.clamp(targetHeadingPerMeter * speed + HEADING_KP * headingError, -MAX_OMEGA, MAX_OMEGA);
+        return MathUtil.clamp(targetHeadingPerMeter * speed + HEADING_KP * headingError, -maxOmega, maxOmega);
     }
 
     /** True once the robot is at the end within tolerance, position and heading. */

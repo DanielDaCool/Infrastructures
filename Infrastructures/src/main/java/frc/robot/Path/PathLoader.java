@@ -15,13 +15,16 @@ import java.util.Set;
  *
  * <pre>{@code
  * { "version": 1,
+ *   "limits": { "maxVelocity": 1.5 },
  *   "points": [ { "x": 1.0, "y": 2.0 },
  *               { "x": 3.0, "y": 2.0, "angleDeg": 90, "radius": 0.4 },
  *               { "x": 3.0, "y": 4.0, "stop": true, "dwell": 0.5 } ] }
  * }</pre>
  *
  * x, y [m] blue field coordinates; angleDeg robot heading [deg]; radius corner radius [m];
- * stop and dwell [s] as in {@link Point#stop(double)}. Optional fields may be left out.
+ * stop and dwell [s] as in {@link Point#stop(double)}. Optional "limits": {"maxVelocity" [m/s],
+ * "maxAcceleration" [m/s^2], "maxOmegaDeg" [deg/s]} replace the PathConfig values for this path only;
+ * each one left out keeps the PathConfig value. Optional fields may be left out.
  * Load in the constructor or robotInit, not in auto: a bad file throws.
  */
 public final class PathLoader {
@@ -29,6 +32,8 @@ public final class PathLoader {
 
     public static final int VERSION = 1;
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final Set<String> ROOT_FIELDS = Set.of("version", "points", "limits");
+    private static final Set<String> LIMIT_FIELDS = Set.of("maxVelocity", "maxAcceleration", "maxOmegaDeg");
     private static final Set<String> POINT_FIELDS = Set.of("x", "y", "angleDeg", "radius", "stop", "dwell");
 
     /** @param name file name in deploy/paths, without ".json" */
@@ -57,9 +62,34 @@ public final class PathLoader {
         JsonNode list = root.path("points");
         if (!list.isArray()) throw new IllegalArgumentException("missing \"points\" array");
 
+        for (Iterator<String> names = root.fieldNames(); names.hasNext(); ) {
+            String field = names.next();
+            if (!ROOT_FIELDS.contains(field)) throw new IllegalArgumentException("unknown field \"" + field + "\"");
+        }
+
         Point[] points = new Point[list.size()];
         for (int i = 0; i < points.length; i++) points[i] = point(list.get(i), i);
-        return new Path(points);
+        Path path = new Path(points);
+        JsonNode limits = root.path("limits");
+        if (limits.isMissingNode()) return path;
+        if (!limits.isObject()) throw new IllegalArgumentException("\"limits\" is not an object");
+        for (Iterator<String> names = limits.fieldNames(); names.hasNext(); ) {
+            String field = names.next();
+            if (!LIMIT_FIELDS.contains(field)) throw new IllegalArgumentException("limits: unknown field \"" + field + "\"");
+        }
+        return path.withLimits(
+                limit(limits, "maxVelocity", PathConfig.MAX_VELOCITY),
+                limit(limits, "maxAcceleration", PathConfig.MAX_ACCELERATION),
+                limits.has("maxOmegaDeg") ? Math.toRadians(limit(limits, "maxOmegaDeg", 0)) : PathConfig.MAX_OMEGA);
+    }
+
+    /** The limit [SI or deg/s] from the file, or fallback when left out. */
+    private static double limit(JsonNode limits, String field, double fallback) {
+        if (!limits.has(field)) return fallback;
+        JsonNode value = limits.get(field);
+        if (!value.isNumber() || !(value.asDouble() > 0))
+            throw new IllegalArgumentException("limits: \"" + field + "\" must be a number > 0");
+        return value.asDouble();
     }
 
     private static Point point(JsonNode node, int index) {
