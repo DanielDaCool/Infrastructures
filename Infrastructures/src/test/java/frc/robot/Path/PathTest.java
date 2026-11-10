@@ -153,7 +153,7 @@ class PathTest {
 
     @Test
     void switchesFromLegToArcAtEntryNotBefore() {
-        Path path = left();
+        Path path = new Path(new Point(0, 0), new Point(2, 0).withRadius(0.25), new Point(2, 2));
         PathFollower f = new PathFollower(path, pose(0, 0, 0));
         assertInstanceOf(Line.class, path.segments().get(0));
         assertInstanceOf(Arc.class, path.segments().get(1));
@@ -251,7 +251,8 @@ class PathTest {
     @Test
     void closeSameDirectionCornersAreRejected() {
         assertThrows(IllegalArgumentException.class,
-                () -> new Path(new Point(0, 0), new Point(2, 0), new Point(2.05, 0.05), new Point(2.05, 2)));
+                () -> new Path(new Point(0, 0), new Point(2, 0).withRadius(0.25), new Point(2.05, 0.05).withRadius(0.25),
+                        new Point(2.05, 2)));
     }
 
     @Test
@@ -281,9 +282,9 @@ class PathTest {
 
     @Test
     void arcSpeedRespectsLateralAccelerationLimit() {
-        Path path = new Path(new Point(0, 0), new Point(6, 0), new Point(6, 6));
+        Path path = new Path(new Point(0, 0), new Point(6, 0).withRadius(0.25), new Point(6, 6));
         Sim sim = new Sim(path, 0, 15);
-        double cap = Math.sqrt(MAX_ACCELERATION * RADIUS);
+        double cap = Math.sqrt(MAX_RADIAL_ACCELERATION * 0.25);
         assertTrue(cap < MAX_VELOCITY, "test needs a cap below MAX_VELOCITY");
         assertFalse(sim.arcSpeeds.isEmpty(), "never on the arc");
         for (double v : sim.arcSpeeds) assertTrue(v <= cap + 1e-6, "arc speed " + v + " > cap " + cap);
@@ -308,5 +309,49 @@ class PathTest {
             assertTrue(minY > -0.02, "crossed the leg by " + (-minY) + " m, lag " + lag);
             assertFalse(Double.isNaN(sim.finishTime), "finished, lag " + lag);
         }
+    }
+
+    private static final double AUTO_RADIUS = MAX_VELOCITY * MAX_VELOCITY / MAX_RADIAL_ACCELERATION;
+
+    @Test
+    void longLegCornerGetsFullAutoRadius() {
+        Path path = new Path(new Point(0, 0), new Point(6, 0), new Point(6, 6));
+        assertEquals(AUTO_RADIUS, path.cornerRadius(1), 0);
+        assertTrue(Double.isNaN(path.cornerRadius(0)) && Double.isNaN(path.cornerRadius(2)), "ends are not arcs");
+    }
+
+    @Test
+    void shortLegsAndBackToBackCornersShrinkAndBuild() {
+        Path shortLegs = new Path(new Point(0, 0), new Point(0.5, 0), new Point(0.5, 0.5));
+        assertTrue(shortLegs.cornerRadius(1) < AUTO_RADIUS, "short legs radius " + shortLegs.cornerRadius(1));
+        Path backToBack = new Path(new Point(0, 0), new Point(2, 0), new Point(2, 0.6), new Point(4, 0.6));
+        for (int i : new int[] {1, 2}) {
+            double radius = backToBack.cornerRadius(i);
+            assertTrue(radius < AUTO_RADIUS && radius > 0, "back-to-back radius " + i + ": " + radius);
+        }
+        assertEquals(1, shortLegs.segments().stream().filter(x -> x instanceof Arc).count(), "one arc per corner");
+        assertEquals(2, backToBack.segments().stream().filter(x -> x instanceof Arc).count(), "one arc per corner");
+    }
+
+    @Test
+    void explicitRadiusIsKept() {
+        Path path = new Path(new Point(0, 0), new Point(2, 0).withRadius(0.3), new Point(2, 0.6), new Point(4, 0.6));
+        assertEquals(0.3, path.cornerRadius(1), 0);
+        assertTrue(path.cornerRadius(2) < AUTO_RADIUS, "automatic neighbour shrinks");
+    }
+
+    @Test
+    void cornerThatCannotFitAtMinAutoRadiusThrows() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> new Path(new Point(0, 0), new Point(2, 0), new Point(2.02, 0.02), new Point(2.02, 2)));
+        assertEquals("Path point 1: corner arc does not fit; move the points apart or use a smaller radius", e.getMessage());
+    }
+
+    @Test
+    void limitsDoNotChangeTheGeometry() {
+        Path path = new Path(new Point(0, 0), new Point(2, 0), new Point(2, 0.6), new Point(4, 0.6));
+        Path slow = path.withLimits(0.5, MAX_ACCELERATION, MAX_OMEGA);
+        assertEquals(path.length(), slow.length(), 0);
+        for (int i = 0; i < 4; i++) assertEquals(path.cornerRadius(i), slow.cornerRadius(i), 0, "radius " + i);
     }
 }

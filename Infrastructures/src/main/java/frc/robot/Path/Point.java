@@ -10,7 +10,7 @@ public final class Point {
     private final Translation2d position;
     private final Rotation2d angle; // null = none
     private final boolean stop;
-    private final double dwell, radius; // radius NaN = PathConfig.RADIUS
+    private final double dwell, radius; // radius NaN = automatic (see Path)
 
     private Point(Translation2d position, Rotation2d angle, boolean stop, double dwell, double radius) {
         this.position = position; this.angle = angle; this.stop = stop; this.dwell = dwell; this.radius = radius;
@@ -46,7 +46,7 @@ public final class Point {
     /** Heading here, or null. */ public Rotation2d angle() { return angle; }
     public boolean isStop() { return stop; }
     /** Wait at the stop [s]. */ public double dwell() { return dwell; }
-    /** Corner radius [m], NaN = default. */ public double radius() { return radius; }
+    /** Corner radius [m], NaN = automatic. */ public double radius() { return radius; }
 
     /** This point on the red side: mirrored across x = field length / 2, or rotated 180 deg about the center. */
     Point flipped(boolean mirror) {

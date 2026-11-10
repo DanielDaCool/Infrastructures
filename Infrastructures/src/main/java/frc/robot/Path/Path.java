@@ -18,10 +18,17 @@ import java.util.List;
 public final class Path {
     /** Corners turning more than this become stops [rad]. */
     private static final double MAX_ARC_TURN = Math.toRadians(150);
+    /** Smallest radius an automatic corner shrinks to before the path is rejected [m]. */
+    private static final double MIN_AUTO_RADIUS = 0.05;
+    /** Factor an automatic corner radius shrinks by on each failed build. */
+    private static final double AUTO_RADIUS_SHRINK = 0.9;
 
     record Stop(double distance, double dwell) {}
 
     record Anchor(double distance, Rotation2d angle) {}
+
+    /** A failed build: corners first..last (corner-list positions) do not fit; pointIndex is named in the error. */
+    private record BuildFailure(int first, int last, int pointIndex) {}
 
     /**
      * A waypoint the path is built around. radius 0: the path goes exactly through the point
@@ -40,6 +47,7 @@ public final class Path {
     private final List<Double> segmentStarts = new ArrayList<>();
     private final List<Stop> stops = new ArrayList<>();
     private final List<Anchor> anchors = new ArrayList<>();
+    private final double[] cornerRadius; // radius used per waypoint, NaN when not an arc corner
     private double length;
 
     /**
@@ -59,15 +67,31 @@ public final class Path {
         this.maxAcceleration = checkLimit(maxAcceleration, "max acceleration");
         this.maxOmega = checkLimit(maxOmega, "max omega");
 
+        // Automatic corners start at the radius where MAX_VELOCITY needs MAX_RADIAL_ACCELERATION (global
+        // values, so withLimits never changes the shape), and shrink until the path fits.
+        double autoRadius = MAX_VELOCITY * MAX_VELOCITY / MAX_RADIAL_ACCELERATION;
         List<Corner> corners = new ArrayList<>();
         for (int i = 0; i < points.length; i++) {
-            Corner corner = cornerAt(i);
+            Corner corner = cornerAt(i, autoRadius);
             if (corner != null) corners.add(corner);
         }
 
         double[] waypointDistance = new double[points.length]; // path distance of each waypoint
-        Arrays.fill(waypointDistance, Double.NaN);
-        buildSegments(corners, waypointDistance);
+        while (true) {
+            Arrays.fill(waypointDistance, Double.NaN);
+            BuildFailure failure = buildSegments(corners, waypointDistance);
+            if (failure == null) break;
+            if (!shrinkAutoCorners(corners, failure)) throw arcError(failure.pointIndex());
+            segments.clear();
+            segmentStarts.clear();
+            stops.clear();
+            length = 0;
+        }
+        cornerRadius = new double[points.length];
+        Arrays.fill(cornerRadius, Double.NaN);
+        for (Corner corner : corners) {
+            if (!corner.isPoint()) cornerRadius[corner.index()] = corner.radius();
+        }
 
         for (int i = 1; i < points.length; i++) { // waypoints dropped as straight: closest path point
             if (Double.isNaN(waypointDistance[i])) waypointDistance[i] = locate(waypointPosition(i), waypointDistance[i - 1]);
@@ -86,8 +110,12 @@ public final class Path {
         }
     }
 
-    /** The corner for waypoint index, or null when the path runs straight through it (no turn). */
-    private Corner cornerAt(int index) {
+    /**
+     * The corner for waypoint index, or null when the path runs straight through it (no turn).
+     *
+     * @param autoRadius radius used when the point has none set [m]
+     */
+    private Corner cornerAt(int index, double autoRadius) {
         Translation2d waypoint = waypointPosition(index);
         boolean endOrStop = index == 0 || index == points.length - 1 || points[index].isStop();
         if (endOrStop) return new Corner(index, waypoint, 0, false, 0);
@@ -98,19 +126,39 @@ public final class Path {
         if (Math.abs(turn) > MAX_ARC_TURN) return new Corner(index, waypoint, 0, false, 0); // too sharp: stop here
         if (Math.abs(turn) < 1e-3) return null;
 
-        double radius = Double.isNaN(points[index].radius()) ? RADIUS : points[index].radius();
+        double radius = isAutomatic(index) ? autoRadius : points[index].radius();
         // The center is on the inside of the corner, radius from the waypoint, so the circle passes through it.
         Translation2d center = waypoint.plus(unitVector(directionOut.minus(directionIn)).times(radius));
         return new Corner(index, center, radius, turn > 0, Math.abs(turn));
     }
 
-    /** Adds the lines and arcs between the corners, the stops, and the path distance of each corner. */
-    private void buildSegments(List<Corner> corners, double[] waypointDistance) {
+    private boolean isAutomatic(int index) { return Double.isNaN(points[index].radius()); }
+
+    /**
+     * Shrinks the automatic corners at the failure and next to it, toward MIN_AUTO_RADIUS. Returns false
+     * when none of them could shrink.
+     */
+    private boolean shrinkAutoCorners(List<Corner> corners, BuildFailure failure) {
+        boolean shrunk = false;
+        for (int j = Math.max(0, failure.first() - 1); j <= Math.min(corners.size() - 1, failure.last() + 1); j++) {
+            Corner corner = corners.get(j);
+            if (corner.isPoint() || !isAutomatic(corner.index()) || !(corner.radius() > MIN_AUTO_RADIUS)) continue;
+            corners.set(j, cornerAt(corner.index(), Math.max(MIN_AUTO_RADIUS, corner.radius() * AUTO_RADIUS_SHRINK)));
+            shrunk = true;
+        }
+        return shrunk;
+    }
+
+    /**
+     * Adds the lines and arcs between the corners, the stops, and the path distance of each corner.
+     * Returns the first leg or arc that does not fit, or null when all fit.
+     */
+    private BuildFailure buildSegments(List<Corner> corners, double[] waypointDistance) {
         List<Translation2d[]> legs = new ArrayList<>(); // legs.get(j) joins corner j to corner j + 1
         for (int j = 0; j + 1 < corners.size(); j++) {
             Corner from = corners.get(j), to = corners.get(j + 1);
             Translation2d[] leg = tangentLeg(from, to);
-            if (leg == null) throw arcError(to.isPoint() ? from.index() : to.index());
+            if (leg == null) return new BuildFailure(j, j + 1, to.isPoint() ? from.index() : to.index());
             legs.add(leg);
         }
 
@@ -121,6 +169,7 @@ public final class Path {
                 if (j > 0) stops.add(new Stop(length, points[corner.index()].dwell()));
             } else {
                 Arc arc = cornerArc(corner, legs.get(j - 1)[1], legs.get(j)[0]);
+                if (arc == null) return new BuildFailure(j, j, corner.index());
                 waypointDistance[corner.index()] = length + MathUtil.clamp(arc.project(waypointPosition(corner.index())), 0, arc.length());
                 add(arc);
             }
@@ -129,9 +178,10 @@ public final class Path {
                 if (leg[0].getDistance(leg[1]) > 1e-6) add(new Line(leg[0], leg[1]));
             }
         }
+        return null;
     }
 
-    /** The arc of a corner circle from the incoming leg's end to the outgoing leg's start. */
+    /** The arc of a corner circle from the incoming leg's end to the outgoing leg's start, or null if it does not fit. */
     private Arc cornerArc(Corner corner, Translation2d entry, Translation2d exit) {
         double sign = corner.isLeftTurn() ? 1 : -1;
         double startAngle = angleOf(entry.minus(corner.center()));
@@ -140,7 +190,7 @@ public final class Path {
         // A valid arc turns a little more than the corner and passes its waypoint; anything else
         // (no arc, a loop around the circle, waypoint outside the arc) means the corners are too close.
         boolean valid = sweep > 1e-9 && sweep <= corner.turn() + Math.PI / 2 && toWaypoint <= sweep + 1e-9;
-        if (!valid) throw arcError(corner.index());
+        if (!valid) return null;
         return new Arc(corner.center(), corner.radius(), corner.isLeftTurn(), startAngle, sweep);
     }
 
@@ -171,6 +221,9 @@ public final class Path {
         return new Path(Arrays.stream(points).map(point -> point.flipped(mirror)).toArray(Point[]::new),
                 maxVelocity, maxAcceleration, maxOmega);
     }
+
+    /** Corner radius used at waypoint pointIndex [m], NaN when it is not an arc corner. */
+    double cornerRadius(int pointIndex) { return cornerRadius[pointIndex]; }
 
     /** Total length [m]. */
     public double length() { return length; }

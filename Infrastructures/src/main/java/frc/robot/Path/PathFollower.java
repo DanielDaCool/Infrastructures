@@ -146,7 +146,7 @@ public final class PathFollower {
         for (int j = segmentIndex; j < segments.size() && path.segmentStart(j) < stop.distance(); j++) {
             double curvature = Math.abs(segments.get(j).curvature());
             if (curvature == 0) continue;
-            double arcSpeedLimit = Math.sqrt(maxAcceleration / curvature);
+            double arcSpeedLimit = Math.sqrt(MAX_RADIAL_ACCELERATION / curvature);
             speed = Math.min(speed, Math.sqrt(arcSpeedLimit * arcSpeedLimit
                     + 2 * maxAcceleration * Math.max(0, path.segmentStart(j) - progress)));
         }
@@ -177,9 +177,10 @@ public final class PathFollower {
         Translation2d velocity =
                 lookAheadDirection.times(speed * Math.cos(mergeAngle)).plus(normal.times(sidewaysSpeed));
         Translation2d velocityChange = velocity.minus(previousVelocity);
-        // On an arc the robot needs up to maxAcceleration along the path and maxAcceleration toward the center,
-        // about 1.41x in total; 2x is a margin above that (not measured), so this only catches sudden direction steps.
-        double maxVelocityChange = 2 * maxAcceleration * DT;
+        // On an arc the robot needs up to maxAcceleration along the path and MAX_RADIAL_ACCELERATION toward the
+        // center; their sum is a margin above the combined vector (not measured), so this only catches sudden
+        // direction steps.
+        double maxVelocityChange = (maxAcceleration + MAX_RADIAL_ACCELERATION) * DT;
         if (velocityChange.getNorm() > maxVelocityChange)
             velocity = previousVelocity.plus(velocityChange.times(maxVelocityChange / velocityChange.getNorm()));
         if (velocity.getNorm() > maxVelocity) velocity = velocity.times(maxVelocity / velocity.getNorm());

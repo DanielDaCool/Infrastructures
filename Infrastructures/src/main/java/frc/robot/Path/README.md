@@ -60,7 +60,7 @@ not reset your pose. The trigger's command must not require the drivetrain, or i
 | `.withAngle(Rotation2d)` | The robot faces this way at this point; it turns smoothly between angle points |
 | `.stop()` | Stop exactly on this point |
 | `.stop(seconds)` | Stop, wait that many seconds, then continue |
-| `.withRadius(meters)` | Corner circle radius for this point (`>= 0`). Default is `PathConfig.RADIUS` |
+| `.withRadius(meters)` | Corner circle radius for this point (`> 0`), used as is. Without it the radius is automatic (see [Corners](#corners)) |
 
 The last point is always a stop. A path needs at least 2 points.
 
@@ -81,8 +81,9 @@ Load paths when the robot starts, not in auto: a bad file throws with the file n
 Unknown fields are an error, so a typo is not silently ignored.
 
 `limits` is optional, and so is each value in it: a value left out uses the `PathConfig` constant. In code, the same
-is `path.withLimits(maxVelocity, maxAcceleration, maxOmega)` [m/s, m/s^2, rad/s]. Tolerances and the default radius
-stay global in `PathConfig`.
+is `path.withLimits(maxVelocity, maxAcceleration, maxOmega)` [m/s, m/s^2, rad/s]. Tolerances and
+`MAX_RADIAL_ACCELERATION` stay global in `PathConfig`. The limits never change the path's shape: the automatic radius
+uses the global `PathConfig` values.
 
 `AutoLoader.load("name")` reads `src/main/deploy/autos/name.json` and returns the paths in order, each loaded with
 `PathLoader`. The file is `{ "version": 1, "paths": [ "StartToNote", "NoteToShoot" ] }`. Chain them yourself, with a
@@ -93,23 +94,29 @@ whose start is more than 0.5 m from the robot (`START_TOLERANCE` in `FollowPathC
 
 Each middle point is a corner. The robot drives along a circle that passes through the point.
 
-- **Circle through the point.** The radius is `RADIUS` unless the point has `withRadius`. Both turn directions work.
+- **Circle through the point.** Both turn directions work. A point with `withRadius` uses that radius unchanged.
+- **Automatic radius.** Without `withRadius` the radius is `r = v^2 / a_r` = `MAX_VELOCITY^2 / MAX_RADIAL_ACCELERATION`
+  (4/3 m by default), the tightest circle the robot can drive at full speed. When the points are too close for it
+  (short legs, corners back to back), the automatic corners at and next to the one that does not fit shrink by 10% at a
+  time, down to 5 cm (`MIN_AUTO_RADIUS`), until the path fits. This is done once, when the path is built.
 - **Turn over 150 degrees** (`MAX_ARC_TURN`) or a stop point: a sharp corner; the over-150 case is an automatic stop with no dwell.
 - **Points on a straight line** (turn about 0) make no arc; the point is only a pass marker (it still holds an angle).
 - **An arc that does not fit** (points too close for the radius, or an arc that would sweep more than the turn
-  plus 90 degrees, which happens with close same-direction corners) throws one short `IllegalArgumentException`
-  that names the point. Move the points apart or use a smaller radius.
+  plus 90 degrees, which happens with close same-direction corners), even with the automatic corners near it at
+  5 cm, throws one short `IllegalArgumentException` that names the point. Move the points apart or use a smaller
+  `withRadius`.
 
 ## Speed and following
 
 - The speed is a profile along the path, not a clock. It accelerates with `MAX_ACCELERATION` and brakes with
   `MAX_ACCELERATION` by the distance left along the path to the next stop or the end.
-- An arc of radius `radius` is capped at `sqrt(MAX_ACCELERATION * radius)`. The robot brakes before the arc.
+- An arc of radius `radius` is capped at `sqrt(MAX_RADIAL_ACCELERATION * radius)`. The robot brakes before the arc
+  with `MAX_ACCELERATION`. An automatic corner at full size is driven at `MAX_VELOCITY`.
 - Progress follows the robot's projection onto the path. It never decreases, and segments switch by that
   projection, not by a distance threshold.
 - If the robot is off the path, it returns on a smooth curve (merge over `MERGE_DISTANCE`, turning the travel direction toward the path at the same speed), not a straight line.
 - The direction looks ahead `LAG_TIME` seconds to cancel the command delay.
-- The commanded velocity vector changes by at most `2 * MAX_ACCELERATION * DT` per loop.
+- The commanded velocity vector changes by at most `(MAX_ACCELERATION + MAX_RADIAL_ACCELERATION) * DT` per loop.
 - A NaN pose gives zero speeds.
 
 ## Headings
@@ -136,9 +143,9 @@ Set these in `PathConfig.java` for your robot:
 | Constant | Default | Meaning |
 |---|---|---|
 | `MAX_VELOCITY` | 2.0 m/s | Speed limit (default; a path can override it with `withLimits` or the file's `limits`) |
-| `MAX_ACCELERATION` | 3.0 m/s^2 | Speed-up and braking along the path, and the arc speed cap. The commanded velocity vector may change by `2 * MAX_ACCELERATION` |
+| `MAX_ACCELERATION` | 3.0 m/s^2 | Speed-up and braking along the path. The commanded velocity vector may change by `MAX_ACCELERATION + MAX_RADIAL_ACCELERATION` per second |
 | `MAX_OMEGA` | 2 pi rad/s | Rotation speed limit |
-| `RADIUS` | 0.25 m | Default corner circle radius |
+| `MAX_RADIAL_ACCELERATION` | 3.0 m/s^2 | Acceleration toward a corner's center: sets the automatic radius `MAX_VELOCITY^2 / MAX_RADIAL_ACCELERATION` and the arc speed cap. It adds to the along-path acceleration, so keep it conservative and tune it on the robot |
 | `POSITION_TOLERANCE` | 0.03 m | Position tolerance at a stop and at the end |
 | `ANGLE_TOLERANCE` | 2 deg | Heading tolerance at the end |
 | `MIRRORED_FIELD` | false | Flip mode (see above) |
@@ -157,6 +164,8 @@ These are private constants in the class that uses them; change them only when t
 | `MIN_SPEED` (`PathFollower`) | 0.15 m/s | Lowest approach speed to a stop until within `POSITION_TOLERANCE / 2`, so a drive deadband can't stall it |
 | `START_TOLERANCE` (`FollowPathCommand`) | 0.5 m | Largest allowed distance from the first point at start |
 | `MAX_ARC_TURN` (`Path`) | 150 deg | Larger turns become an automatic stop |
+| `MIN_AUTO_RADIUS` (`Path`) | 0.05 m | Smallest automatic corner radius before the path is rejected |
+| `AUTO_RADIUS_SHRINK` (`Path`) | 0.9 | Factor an automatic radius shrinks by each time the path does not fit |
 
 ## Finish, stop and start rules
 
@@ -171,7 +180,7 @@ These are private constants in the class that uses them; change them only when t
 
 | Symptom | Cause |
 |---|---|
-| Throws "corner arc does not fit" | Points too close for the radius. Move them apart or use `withRadius` with a smaller value |
+| Throws "corner arc does not fit" | Points too close even with the automatic corners near it shrunk to 5 cm, or a `withRadius` too large. Move the points apart or use a smaller `withRadius` |
 | Command ends at once, error in the Driver Station | The robot is more than 0.5 m from the first point, or the pose is not set for this alliance |
 | Robot drives the mirrored path on Red | `MIRRORED_FIELD` is wrong for this field, or your pose is in red-origin coordinates |
 | Robot stops at a sharp corner | The turn is over 150 degrees. Add a point in between or accept the stop |
