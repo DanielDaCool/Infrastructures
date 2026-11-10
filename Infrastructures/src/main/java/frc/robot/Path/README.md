@@ -84,6 +84,11 @@ Unknown fields are an error, so a typo is not silently ignored.
 is `path.withLimits(maxVelocity, maxAcceleration, maxOmega)` [m/s, m/s^2, rad/s]. Tolerances and the default radius
 stay global in `PathConfig`.
 
+`AutoLoader.load("name")` reads `src/main/deploy/autos/name.json` and returns the paths in order, each loaded with
+`PathLoader`. The file is `{ "version": 1, "paths": [ "StartToNote", "NoteToShoot" ] }`. Chain them yourself, with a
+`FollowPathCommand` per path in a `SequentialCommandGroup`. Each path should start where the last one ends: a path
+whose start is more than 0.5 m from the robot (`START_TOLERANCE` in `FollowPathCommand`) ends at once.
+
 ## Corners
 
 Each middle point is a corner. The robot drives along a circle that passes through the point.
@@ -186,3 +191,4 @@ All in `frc.robot.Path`.
 | `PathFollower.java` | Progress, speed, direction and heading per loop |
 | `FollowPathCommand.java` | The command |
 | `PathLoader.java` | Reads a path file from `deploy/paths` |
+| `AutoLoader.java` | Reads an auto file (a list of path names) from `deploy/autos` |
