@@ -58,7 +58,7 @@ Path path = new Path(new Point(1, 2), new Point(3, 4), new Point(5, 2));
 |---|---|
 | `new Point(x, y)` | A point |
 | `.withAngle(Rotation2d)` | The robot faces this way at this point. The robot turns smoothly between angle points |
-| `.withRadius(r)` | Corner circle radius `r` m (default `PathConfig.RADIUS`) |
+| `.withRadius(r)` | Corner circle radius `r` m (default: automatic, `MAX_VELOCITY² / MAX_RADIAL_ACCELERATION`, shrunk to fit) |
 | `.stop()` | Stop exactly on this point |
 | `.stop(seconds)` | Stop, then wait that many seconds |
 

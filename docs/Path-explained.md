@@ -86,7 +86,7 @@ A waypoint. It is **immutable**: each `withX` returns a new object (`Point.java:
 - `withAngle(Rotation2d)` (`:25`): the robot heading wanted at this point.
 - `stop()` / `stop(seconds)` (`:31`, `:34`): stop here, wait the dwell time, continue. The dwell is
   ignored on the last point (the last point is always a stop).
-- `withRadius(m)` (`:40`): corner radius for this point only. Default is `PathConfig.RADIUS`.
+- `withRadius(m)` (`:40`): corner radius for this point only. Default is automatic: `MAX_VELOCITY² / MAX_RADIAL_ACCELERATION` (1.33 m), shrunk by 10% steps (down to 5 cm) until the corner fits. The worked examples below use a fixed 0.25 m.
 - `flipped(mirror)` (`:52`): the same point for the red side (section 6).
 
 Used by: `Path` reads the points; `FollowPathCommand` never touches them directly.
@@ -422,7 +422,7 @@ speed. Measured speed is noisy and lags, and would make the speed "jump".
 
 **(b) Arc speed cap (`:139-145`).** On a circle of radius `radius`, a robot at speed `speed` has centripetal acceleration `speed^2 / radius`
 (the sideways acceleration needed to keep turning). Wheels can only give so much sideways force before slipping, so cap
-it at `MAX_ACCELERATION` (`a_lat = 3`):
+it at `MAX_RADIAL_ACCELERATION` (`a_lat = 3`):
 
 `v_arc = sqrt(a_lat * radius)`, written in the code as `sqrt(a_lat / curvature)` with curvature `1/r`.
 
@@ -613,7 +613,7 @@ in `Point.Field`.
 | `MAX_VELOCITY` | 2.0 | m/s | Top speed | Wheels or pose estimate cannot keep up; harder to stop | Slow auto |
 | `MAX_ACCELERATION` | 3.0 | m/s^2 | Speed-up along the path; also braking, arc (lateral) acceleration, and half the vector limit | Wheel slip, tipping, brownout; late braking, arcs entered too fast | Slow starts, early braking, crawls through corners |
 | `MAX_OMEGA` | 6.28 | rad/s | Top turn rate | Faster than the drive can turn | Heading lags the plan |
-| `RADIUS` | 0.25 | m | Default corner circle radius | Wide, slow-cutting corners; more "does not fit" errors; path strays from the waypoint line | Sharp corners, low arc speed cap (`sqrt(a_lat r)`) |
+| `MAX_RADIAL_ACCELERATION` | 3.0 | m/s² | Sets the automatic corner radius (`MAX_VELOCITY² / a`) and the arc speed cap (`sqrt(a r)`) | Tighter automatic corners but faster arcs; can exceed traction, since it adds to the along-path acceleration | Wider automatic corners, slower arcs |
 | `POSITION_TOLERANCE` | 0.03 | m | "At the stop/end" distance (and half of it ends the creep) | Finishes sloppy | May never finish if the robot cannot get that close |
 | `ANGLE_TOLERANCE` | 2 deg | rad | Heading error allowed at the end | Finishes with a bad heading | May never finish |
 | `MIRRORED_FIELD` | false | none | false: rotate 180; true: mirror across the center line. Set per season | Wrong red path if mismatched | Wrong red path if mismatched |
