@@ -91,6 +91,18 @@ class PathTest {
     }
 
     @Test
+    void finishesWhenItStopsShortOfTheEndWhileStillTurning() {
+        // The robot held within POSITION_TOLERANCE / 2 of the end with the heading of the path there (3.5 deg from
+        // the final heading, which changes 63.5 deg over the last 0.25 m) and never finished.
+        Path path = new Path(new Point(4.845, 0.913).stop(0.26),
+                new Point(1.655, 1.956).withAngle(Rotation2d.fromDegrees(74)).withRadius(0.529),
+                new Point(4.681, 2.88).withAngle(Rotation2d.fromDegrees(-113.5)),
+                new Point(4.433, 2.907).withAngle(Rotation2d.fromDegrees(-177)));
+        Sim sim = new Sim(path, 0, 30);
+        assertTrue(sim.finishTime < 10, "finish time " + sim.finishTime);
+    }
+
+    @Test
     void legDirectionEqualsArcTangentAtEntryAndExit() {
         for (Path path : new Path[] {left(), right(), sCurve()}) {
             List<Segment> segs = path.segments();

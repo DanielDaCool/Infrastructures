@@ -70,7 +70,7 @@ public final class PathFollower {
         updateProgress(position);
         double headingError = MathUtil.angleModulus(targetHeading - heading);
 
-        ChassisSpeeds stopCommand = handleStop(position, heading, headingError, measuredFieldSpeeds);
+        ChassisSpeeds stopCommand = handleStop(position, heading, measuredFieldSpeeds);
         if (stopCommand != null) return stopCommand;
 
         double speed = speedAlongPath();
@@ -105,8 +105,7 @@ public final class PathFollower {
     }
 
     /** Finishes at the end, counts the dwell at a stop, and returns the hold command while stopped, else null. */
-    private ChassisSpeeds handleStop(Translation2d position, double heading, double headingError,
-            ChassisSpeeds measuredFieldSpeeds) {
+    private ChassisSpeeds handleStop(Translation2d position, double heading, ChassisSpeeds measuredFieldSpeeds) {
         double measuredSpeed = Math.hypot(measuredFieldSpeeds.vxMetersPerSecond, measuredFieldSpeeds.vyMetersPerSecond);
         if (!Double.isFinite(measuredSpeed)) measuredSpeed = previousVelocity.getNorm();
         double stopDistance = position.getDistance(path.pointAt(stop.distance()));
@@ -128,6 +127,10 @@ public final class PathFollower {
         if (waitLoops >= 0 || stopDistance < POSITION_TOLERANCE / 2) {
             previousSpeed = 0;
             previousVelocity = Translation2d.kZero;
+            // Hold the stop's own heading. The robot may hold up to POSITION_TOLERANCE / 2 short of the stop, where
+            // the heading along the path is not the stop's yet; at the end that never got within ANGLE_TOLERANCE.
+            updateTargetHeading(stop.distance());
+            double headingError = MathUtil.angleModulus(targetHeading - heading);
             return new ChassisSpeeds(0, 0, MathUtil.clamp(HEADING_KP * headingError, -maxOmega, maxOmega));
         }
         return null;
