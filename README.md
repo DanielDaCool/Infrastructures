@@ -106,6 +106,11 @@ new Trigger(() -> follow.progress() > 0.7).onTrue(intake.deployCommand());   // 
 
 The trigger's command must not require the drivetrain, or it cancels the path.
 
+### 5. Path files
+
+`PathLoader.load("name")` reads `src/main/deploy/paths/name.json` (written by the path designer app) and returns a
+`Path`. Load paths when the robot starts, not in auto: a bad file throws with the file name and point index. The file format is in the [student guide](Infrastructures/src/main/java/frc/robot/Path/README.md#path-files).
+
 ## Build
 
 Run these from the [`Infrastructures`](Infrastructures) directory:
@@ -140,7 +145,8 @@ Each module is on its own branch and has its own README:
     │   ├── Path.java                  The path: corners, stops, flipped()
     │   ├── Segment.java, Line.java, Arc.java  Path pieces
     │   ├── PathFollower.java          Progress, speed, direction, heading
-    │   └── FollowPathCommand.java     The command, progress()
+    │   ├── FollowPathCommand.java     The command, progress()
+    │   └── PathLoader.java            Reads deploy/paths/<name>.json
     └── example/
         └── ExampleSwerveWithPose.java Path example (also uses Kinematics and RobotPose)
 ```
