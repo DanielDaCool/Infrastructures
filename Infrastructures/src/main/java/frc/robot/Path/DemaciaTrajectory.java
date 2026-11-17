@@ -108,6 +108,13 @@ public class DemaciaTrajectory {
             for (int i = 0; i < size - 1; i++) {
                 List<Translation2d> leg = LegCalculator.tangentPoints(centers[i], signedRadius[i], centers[i + 1], signedRadius[i + 1]);
                 if (leg.isEmpty()) {
+                    // a point that loses its arc is a sharp corner, so the robot stops on it
+                    if (signedRadius[i] != 0) {
+                        velocities[i] = 0;
+                    }
+                    if (signedRadius[i + 1] != 0) {
+                        velocities[i + 1] = 0;
+                    }
                     centers[i] = points.get(i).getTranslation();
                     signedRadius[i] = 0;
                     centers[i + 1] = points.get(i + 1).getTranslation();
@@ -126,6 +133,7 @@ public class DemaciaTrajectory {
                     System.out.println("removed the arc of point " + i);
                     centers[i] = points.get(i).getTranslation();
                     signedRadius[i] = 0;
+                    velocities[i] = 0;
                     removedArc = true;
                 }
             }
@@ -187,9 +195,9 @@ public class DemaciaTrajectory {
         if (!segment.isFinished(position)) {
             return speeds;
         }
-        // a stop point is done only once the robot really stopped
+        // a stop point is done only once the robot really stopped, until then keep slowing down with the trapezoid
         if (segment.getEndVelocity() == 0 && currentVelocity > PathConstants.MAX_VELOCITY_TO_CONSIDER_STOPPED) {
-            return new ChassisSpeeds(0, 0, omega);
+            return speeds;
         }
         if (currentSegmentIndex < segments.size() - 1) {
             currentSegmentIndex++;
