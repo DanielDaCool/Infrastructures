@@ -161,7 +161,8 @@ These are private constants in the class that uses them; change them only when t
 ## Finish, stop and start rules
 
 - At a stop the robot reaches the point (within `POSITION_TOLERANCE`, measured speed under `STOP_SPEED`), waits
-  the dwell, then continues. During the wait it sends zero translation and keeps its heading.
+  the dwell, then continues. While stopped it sends zero translation and turns to the stop point's own heading
+  (the reference heading at the stop, not the one a few cm before it), so a stop or end reached while still turning finishes.
 - The command finishes at the end point within `POSITION_TOLERANCE` and `ANGLE_TOLERANCE`. When it ends,
   it sends zero speeds.
 - If the pose is farther than `START_TOLERANCE` from the first point at start, the command reports one error
