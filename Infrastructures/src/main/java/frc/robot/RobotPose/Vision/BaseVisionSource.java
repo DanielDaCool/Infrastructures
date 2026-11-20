@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 
+import edu.wpi.first.apriltag.AprilTagFieldLayout;
+import edu.wpi.first.apriltag.AprilTagFields;
 import edu.wpi.first.math.Matrix;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Transform3d;
@@ -54,6 +56,8 @@ public abstract class BaseVisionSource implements VisionSource, Sendable {
     private double lastUsedTimestampSeconds = Double.NaN;
     /** Distance between the last used measurement and the estimate at its capture time. */
     private double lastErrorMeters;
+    
+    private final AprilTagFieldLayout aprilTagFieldLayout = AprilTagFieldLayout.loadField(AprilTagFields.kDefaultField);
 
     /** Copies the config and registers this source on the dashboard ({@link Log}). */
     public BaseVisionSource(BaseVisionSourceConfig config) {
@@ -68,6 +72,9 @@ public abstract class BaseVisionSource implements VisionSource, Sendable {
         createdSources.add(this);
         onCreate.accept(this);
     }
+
+
+
 
     /**
      * Registers a callback that gets every vision source: the ones already created right away,
@@ -110,6 +117,10 @@ public abstract class BaseVisionSource implements VisionSource, Sendable {
     @Override
     public void periodic() {
         field.setRobotPose(pose);
+    }
+
+    public AprilTagFieldLayout getAprilTagFieldLayout() {
+        return aprilTagFieldLayout;
     }
 
     @Override

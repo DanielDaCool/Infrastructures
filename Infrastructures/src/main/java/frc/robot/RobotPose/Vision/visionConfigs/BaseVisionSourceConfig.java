@@ -10,6 +10,7 @@ import edu.wpi.first.math.numbers.N3;
 import frc.robot.RobotPose.Vision.VisionSource;
 import frc.robot.RobotPose.Vision.VisionTypes.LimelightTagCamera2d;
 import frc.robot.RobotPose.Vision.VisionTypes.LimelightTagCamera3d;
+import frc.robot.RobotPose.Vision.VisionTypes.PhotonVision;
 import frc.robot.RobotPose.Vision.VisionTypes.Quest;
 
 /**
@@ -44,6 +45,12 @@ public abstract class BaseVisionSourceConfig {
             @Override
             public VisionSource create(BaseVisionSourceConfig config) {
                 return new Quest((QuestConfig) config);
+            }
+        },
+        PhotonVision {
+            @Override
+            public VisionSource create(BaseVisionSourceConfig config) {
+                return new PhotonVision((PhotonVisionConfig) config);
             }
         };
 
