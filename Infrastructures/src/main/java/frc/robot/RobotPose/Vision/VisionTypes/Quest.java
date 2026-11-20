@@ -16,9 +16,10 @@ import edu.wpi.first.math.geometry.Translation2d;
 import edu.wpi.first.networktables.GenericSubscriber;
 import edu.wpi.first.networktables.NetworkTableInstance;
 import edu.wpi.first.util.sendable.SendableBuilder;
+import edu.wpi.first.wpilibj.Alert.AlertType;
 import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.wpilibj2.command.InstantCommand;
-import frc.demacia.utils.log.Log;
+import frc.robot.RobotPose.PoseLogger;
 import frc.robot.RobotPose.RobotPose;
 import frc.robot.RobotPose.Vision.BaseVisionSource;
 import frc.robot.RobotPose.Vision.TimestampedVisionMeasurement;
@@ -141,7 +142,7 @@ public class Quest extends BaseVisionSource {
     @Override
     protected void addLog() {
         super.addLog();
-        Log.putData("vision/" + getName() + "/Reset Quest Pose", new InstantCommand(
+        PoseLogger.get().putData("vision/" + getName() + "/Reset Quest Pose", new InstantCommand(
             ()->setPose(RobotPose.getInstance().getEstimatedPose())).ignoringDisable(true));
     }
 
@@ -213,8 +214,8 @@ public class Quest extends BaseVisionSource {
             hasUpdatedQuestIntialPose = false;
         }
 
-        Log.alert(lowBatteryText, isBatteryLow(isConnected(), deviceDataSubscriber.getLastChange() != 0,
-                questNav.getBatteryPercent()));
+        PoseLogger.get().alert(lowBatteryText, AlertType.kWarning, isBatteryLow(isConnected(),
+                deviceDataSubscriber.getLastChange() != 0, questNav.getBatteryPercent()));
     }
 
     /**
