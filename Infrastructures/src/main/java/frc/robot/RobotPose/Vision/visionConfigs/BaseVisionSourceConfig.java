@@ -90,6 +90,11 @@ public abstract class BaseVisionSourceConfig {
         return visionSourceType;
     }
 
+    public String getSourceName() {
+        return name;
+    }
+
+
     /**
      * The device's robot frame, as a matrix C that maps a WPILib robot-frame vector to the
      * device's frame. Identity (the device uses the WPILib frame) unless overridden.
