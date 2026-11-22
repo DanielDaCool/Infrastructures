@@ -23,12 +23,13 @@ has a placeholder setup (zero gyro and modules, no vision) so the project runs w
 | `Vision/TimestampedVisionMeasurement.java` | One measurement: pose, capture time, std devs. |
 | `Vision/VisionTypes/LimelightTagCamera2d.java` | Limelight in 2D mode (tx/ty to one tag). |
 | `Vision/VisionTypes/LimelightTagCamera3d.java` | Limelight using MegaTag2. |
+| `Vision/VisionTypes/PhotonVision.java` | PhotonVision camera: MultiTag, or the lowest-ambiguity single tag. |
 | `Vision/VisionTypes/Quest.java` | Meta Quest running QuestNav. |
 | `Vision/VisionTypes/QuestFrameFilter.java` | Which Quest frames are used: jump / lost tracking handling, re-alignment, 10 Hz thinning. |
 | `Vision/visionConfigs/*Config.java` | One config class per source type. |
 | `Vision/LimelightHelpers.java` | Limelight's official helper library. |
 
-Vendor dependencies: `questnavlib` (for the Quest), Phoenix 6 (for `PhoenixOdometryThread`)
+Vendor dependencies: `questnavlib` (for the Quest), `photonlib` (for PhotonVision), Phoenix 6 (for `PhoenixOdometryThread`)
 and WPILib New Commands.
 
 ## How it works
@@ -217,7 +218,7 @@ RobotPose.initialize(odometryThread::getNewSamples, ...);
 ### Choosing std devs
 
 Each vision frame moves the estimate by `K` of the way to the measurement, per axis, with
-`K = 1 / (1 + σ_vision / σ_odometry)`. The vision σ comes from the tag distance (Limelights) or
+`K = 1 / (1 + σ_vision / σ_odometry)`. The vision σ comes from the tag distance (Limelights, PhotonVision) or
 `QuestConfig.thinnedStd` (Quest), see the [README](../README.md), step 1. The odometry σ also sets the jump filter:
 a frame is rejected when its distance from the estimate is more than about
 `3.7 · sqrt(σ_odometry² + σ_vision²)` (0.2 m with 0.05 and 0.02). Examples with odometry σ = 0.1:
@@ -276,7 +277,23 @@ every loop.
   the heading in the frame (the one the Limelight used) differs from ours at its time by more
   than 3° (after a gyro reset, while spinning, or with a wrong camera yaw).
 - x/y std dev = hypot(0.008 · d² / √tags, 0.01 · d), d = average tag distance (the config std
-  devs are not used). The 2D Limelight uses the same formula with its tag distance and one tag.
+  devs are not used). The 2D Limelight and PhotonVision use the same formula (2D: its tag
+  distance and one tag).
+
+### `PhotonVision` – PhotonVision camera
+
+PhotonLib solves the pose from the frame's tags; the coprocessor does the multi-tag solve.
+
+- `name` must match the camera name in the PhotonVision web UI. Enable **MultiTag** there.
+- The offset is robot → camera in the WPILib robot frame and is passed to PhotonLib as is (no
+  `sourceFrame()` override, unlike the 3D Limelight).
+- Every unread frame is read (`getAllUnreadResults`), so each frame is used once, at its own
+  capture time.
+- Each frame uses the coprocessor's MultiTag pose; with one tag, the lowest-ambiguity
+  single-tag pose. Single-tag frames with ambiguity > 0.2 are dropped (counted on
+  `vision/<name>/frames rejected (ambiguity)`).
+- Only x and y are used (heading std dev infinite; the gyro owns the heading). x/y std dev: the
+  Limelight formula above, d = average tag distance; the config std devs are not used.
 
 ### `Quest` – Meta Quest / QuestNav
 

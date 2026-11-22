@@ -6,8 +6,8 @@
 [![QuestNav](https://img.shields.io/badge/QuestNav-2026--2.2.0-purple)](https://questnav.gg/)
 
 Field-relative pose estimation for FRC swerve robots. RobotPose combines swerve odometry and
-the gyro with Limelight cameras (MegaTag2 or 2D) and a Meta Quest running QuestNav, and
-returns one pose for autos, aiming and driving.
+the gyro with Limelight cameras (MegaTag2 or 2D), PhotonVision cameras and a Meta Quest
+running QuestNav, and returns one pose for autos, aiming and driving.
 
 No filter tuning is required: bad camera frames, a jumping Quest and a wrong starting pose
 are handled automatically.
@@ -34,8 +34,8 @@ are handled automatically.
 - **Jump filter with recovery.** Frames that disagree too much with the estimate are
   rejected. When most recent frames agree with each other but not with the estimate, the
   estimate is the one that is wrong, and the frames are used again.
-- **Multiple vision source types.** MegaTag2 Limelight, 2D Limelight (single tag, `tx`/`ty`)
-  and Meta Quest (QuestNav), configured through one `VisionConfig`.
+- **Multiple vision source types.** MegaTag2 Limelight, 2D Limelight (single tag, `tx`/`ty`),
+  PhotonVision (MultiTag) and Meta Quest (QuestNav), configured through one `VisionConfig`.
 - **Automatic Quest handling.** Anchoring at startup and on reconnect, re-alignment after a
   jump or lost tracking, and a cross-check against the MegaTag2 Limelight.
 - **Tilt trust.** Wheel motion counts less while the robot is tilted on a bump or ramp.
@@ -52,14 +52,15 @@ are handled automatically.
 | WPILib New Commands | 2026 | Core |
 | [CTRE Phoenix 6](https://v6.docs.ctr-electronics.com/) | 26.1.0 | `PhoenixOdometryThread` |
 | [QuestNavLib](https://questnav.gg/) | 2026-2.2.0 | `Quest` source |
+| [PhotonLib](https://docs.photonvision.org/) | v2026.3.4 | `PhotonVision` source |
 | [LimelightHelpers](https://github.com/LimelightVision/limelightlib-wpijava) | Bundled | Limelight sources |
 
 ## Installation
 
 1. Copy [`Infrastructures/src/main/java/frc/robot/RobotPose`](Infrastructures/src/main/java/frc/robot/RobotPose)
    into your robot project, keeping the same package path.
-2. Install the **Phoenix 6** and **QuestNav** vendor libraries (WPILib → Manage Vendor
-   Libraries). The vendordep files are in [`Infrastructures/vendordeps`](Infrastructures/vendordeps).
+2. Install the **Phoenix 6**, **QuestNav** and **PhotonLib** (PhotonVision cameras) vendor
+   libraries (WPILib → Manage Vendor Libraries). The vendordep files are in [`Infrastructures/vendordeps`](Infrastructures/vendordeps).
 3. Follow [Getting started](#getting-started).
 
 ## Getting started
@@ -77,12 +78,18 @@ public final class VisionConstants {
         new Transform3d(0.30, 0, 0.35, new Rotation3d(0, Math.toRadians(15), 0)),
         VecBuilder.fill(0.02, 0.02, Double.POSITIVE_INFINITY));
 
+    // Must match the camera name in the PhotonVision web UI; enable MultiTag there
+    public static final PhotonVisionConfig BACK = new PhotonVisionConfig(
+        "back",
+        new Transform3d(-0.30, 0, 0.30, new Rotation3d(0, Math.toRadians(15), Math.PI)),
+        VecBuilder.fill(0.02, 0.02, Double.POSITIVE_INFINITY));
+
     public static final QuestConfig QUEST = new QuestConfig(
         "quest",
         new Transform3d(0.10, 0, 0.50, new Rotation3d()),
         VecBuilder.fill(0.05, 0.05, Double.POSITIVE_INFINITY));
 
-    public static final VisionConfig VISION = new VisionConfig(FRONT, QUEST);
+    public static final VisionConfig VISION = new VisionConfig(FRONT, BACK, QUEST);
 }
 ```
 
@@ -180,7 +187,7 @@ Pose2d pose = RobotPose.getInstance().getEstimatedPose();
 | Pose turns the wrong way | The gyro must be counter-clockwise positive. |
 | Pose jumps around | A camera's trust is 0 (`VecBuilder.fill(0, ...)`); use a small number instead. |
 | Cameras are ignored for a long time | A camera offset is wrong, or the pose was reset to a wrong place. After a few seconds of cameras agreeing, it recovers on its own. |
-| Cameras never change the pose | Check `is Connected` and that the camera sees tags (Quest: `is tracking`). |
+| Cameras never change the pose | Check `is Connected` and that the camera sees tags (Quest: `is tracking`; PhotonVision: the config name matches the web UI, and `frames rejected (ambiguity)` is not climbing). |
 | One camera keeps pulling the pose | Its offset on the robot is wrong; see [calibration](docs/design.md#calibration-step-by-step). |
 | 2D camera is off by meters when turning | Wrong camera yaw, height or pitch. |
 | Quest pulls the pose to (0, 0) | Do not call `QuestNav.setPose` directly; use `resetPose` or the dashboard button. |
@@ -201,6 +208,7 @@ All paths are relative to `Infrastructures/src/main/java/frc/robot/RobotPose`.
 | `Vision/TimestampedVisionMeasurement.java` | A single measurement: pose, capture time, standard deviations. |
 | `Vision/VisionTypes/LimelightTagCamera2d.java` | Limelight in 2D mode (`tx`/`ty` to one tag). |
 | `Vision/VisionTypes/LimelightTagCamera3d.java` | Limelight using MegaTag2. |
+| `Vision/VisionTypes/PhotonVision.java` | PhotonVision camera (MultiTag, or lowest-ambiguity single tag). |
 | `Vision/VisionTypes/Quest.java` | Meta Quest running QuestNav. |
 | `Vision/VisionTypes/QuestFrameFilter.java` | Selects which Quest frames are used (jump and lost-tracking handling, re-alignment, 10 Hz thinning). |
 | `Vision/visionConfigs/*Config.java` | One config class per source type. |
