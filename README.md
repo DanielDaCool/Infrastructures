@@ -2,7 +2,7 @@
 
 [![WPILib](https://img.shields.io/badge/WPILib-2026.2.1-blue)](https://docs.wpilib.org/)
 [![Java](https://img.shields.io/badge/Java-17-orange)](https://adoptium.net/)
-[![Phoenix 6](https://img.shields.io/badge/Phoenix%206-26.1.0-green)](https://v6.docs.ctr-electronics.com/)
+[![Phoenix 6](https://img.shields.io/badge/Phoenix%206-26.3.0-green)](https://v6.docs.ctr-electronics.com/)
 [![QuestNav](https://img.shields.io/badge/QuestNav-2026--2.2.0-purple)](https://questnav.gg/)
 
 Field-relative pose estimation for FRC swerve robots. RobotPose combines swerve odometry and
@@ -50,9 +50,10 @@ are handled automatically.
 | [WPILib / GradleRIO](https://docs.wpilib.org/) | 2026.2.1 | Core |
 | Java | 17 | Core |
 | WPILib New Commands | 2026 | Core |
-| [CTRE Phoenix 6](https://v6.docs.ctr-electronics.com/) | 26.1.0 | `PhoenixOdometryThread` |
+| [CTRE Phoenix 6](https://v6.docs.ctr-electronics.com/) | 26.3.0 | `PhoenixOdometryThread` |
 | [QuestNavLib](https://questnav.gg/) | 2026-2.2.0 | `Quest` source |
 | [PhotonLib](https://docs.photonvision.org/) | v2026.3.4 | `PhotonVision` source |
+| [PathPlannerLib](https://pathplanner.dev/) | 2026.1.2 | In the project vendordeps; not used by `RobotPose` |
 | [LimelightHelpers](https://github.com/LimelightVision/limelightlib-wpijava) | Bundled | Limelight sources |
 
 ## Installation
